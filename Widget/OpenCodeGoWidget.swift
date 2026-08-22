@@ -303,15 +303,10 @@ struct CostMiniBar: View {
         }
     }
     func colorFor(_ k: String) -> Color {
-        // Match dashboard palette loosely: deepseek blue, mimo purple, glm orange, others gray
-        if k.contains("deepseek") { return Color(red: 0.2, green: 0.5, blue: 0.95) }
-        if k.contains("mimo") { return Color(red: 0.6, green: 0.35, blue: 0.95) }
-        if k.contains("glm") { return Color(red: 0.95, green: 0.55, blue: 0.2) }
-        if k.contains("gpt") || k.contains("luna") { return Color(red: 0.1, green: 0.7, blue: 0.4) }
-        let p: [Color] = [.blue, .purple, .orange, .gray]
-        return p[abs(k.hashValue) % p.count]
+        if k == "其他" { return Color.gray.opacity(0.6) }
+        return ModelPalette.color(for: k)
     }
-    func short(_ s: String) -> String { s.replacingOccurrences(of: " (go)", with: "").replacingOccurrences(of: "-go", with: "") }
+    func short(_ s: String) -> String { ModelPalette.shortName(s) }
 }
 
 @main

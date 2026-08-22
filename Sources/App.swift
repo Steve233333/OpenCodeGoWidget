@@ -207,13 +207,10 @@ struct CostBar: View {
         }
     }
     func colorFor(_ k: String) -> Color {
-        let palette: [Color] = [.blue, .purple, .orange, .gray]
-        let idx = abs(k.hashValue) % palette.count
-        return palette[idx]
+        if k == "其他" { return Color.gray.opacity(0.6) }
+        return ModelPalette.color(for: k)
     }
-    func short(_ s: String) -> String {
-        s.replacingOccurrences(of: " (go)", with: "").replacingOccurrences(of: "-go", with: "")
-    }
+    func short(_ s: String) -> String { ModelPalette.shortName(s) }
 }
 
 struct MonthChartView: View {
