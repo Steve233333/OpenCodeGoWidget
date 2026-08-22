@@ -2,10 +2,13 @@ import Foundation
 import Security
 
 enum KeychainStore {
+    static let sharedKeyKey = "zen_api_key"
     static let service = "com.steve233.opencodego.apikey"
     static let account = "ZEN_API_KEY"
 
+    static var sharedDefaults: UserDefaults? { UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego") }
     static func save(_ key: String) {
+        sharedDefaults?.set(key, forKey: sharedKeyKey)
         let data = Data(key.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -64,6 +67,7 @@ enum KeychainStore {
     }
 
     static func resolvedKey() -> String? {
-        load() ?? loadFromEnvFile()
+        if let k = sharedDefaults?.string(forKey: sharedKeyKey), !k.isEmpty { return k }
+        return load() ?? loadFromEnvFile()
     }
 }

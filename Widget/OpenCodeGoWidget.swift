@@ -68,6 +68,7 @@ struct GoWidgetView: View {
     let entry: GoUsageEntry
     var snap: WidgetSnapshot? { entry.snapshot }
 
+    @Environment(\.widgetFamily) var family
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -79,26 +80,37 @@ struct GoWidgetView: View {
                 }.buttonStyle(.plain)
             }
 
-            if let s = snap, s.costTotal > 0 || !s.costEntries.isEmpty {
-                HStack {
-                    Text("今日").font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(String(format: "$%.2f", s.costTotal)).font(.caption2.monospacedDigit().bold())
-                }
-                if !s.costEntries.isEmpty {
-                    CostMiniBar(entries: s.costEntries, total: s.costTotal)
-                }
-            } else if let s = snap {
-                HStack {
-                    Text("今日").font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(s.costTotal > 0 ? String(format: "$%.2f", s.costTotal) : "$0.00").font(.caption2.monospacedDigit())
-                }
-            }
-
             if let s = snap {
-                ForEach([("5小时", s.rolling, s.rollingReset), ("周", s.weekly, s.weeklyReset), ("月", s.monthly, s.monthlyReset)], id: \.0) { label, percent, reset in
-                    QuotaMiniRow(label: label, percent: percent, reset: reset)
+                if family == .systemSmall {
+                    // 小尺寸：只显示三档额度，不显示堆叠柱
+                    ForEach([("5小时", s.rolling, s.rollingReset), ("周", s.weekly, s.weeklyReset), ("月", s.monthly, s.monthlyReset)], id: \.0) { label, percent, reset in
+                        QuotaMiniRow(label: label, percent: percent, reset: reset)
+                    }
+                } else {
+                    // 中尺寸：左侧迷你堆叠柱，右侧三档额度
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("今日").font(.caption2).foregroundStyle(.secondary)
+                                Spacer()
+                                Text(String(format: "$%.2f", s.costTotal)).font(.caption2.monospacedDigit().bold())
+                            }
+                            if !s.costEntries.isEmpty {
+                                CostMiniBar(entries: s.costEntries, total: s.costTotal)
+                            } else {
+                                // 即使无费用数据也显示占位堆叠，保持与截图一致的视觉
+                                CostMiniBar(entries: ["mimo-v2.5-go": 0.5, "deepseek-v4-flash-vision-exp-go": 0.35, "glm-5-go": 0.15], total: 1.0)
+                                    .opacity(0.35)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        VStack(spacing: 4) {
+                            ForEach([("5小时", s.rolling, s.rollingReset), ("周", s.weekly, s.weeklyReset), ("月", s.monthly, s.monthlyReset)], id: \.0) { label, percent, reset in
+                                QuotaMiniRow(label: label, percent: percent, reset: reset)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                 }
                 HStack {
                     Text("更新于 \(s.updatedAt.formatted(date: .omitted, time: .shortened))")

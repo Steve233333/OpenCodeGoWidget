@@ -118,7 +118,7 @@ struct QuotaRow: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.1))
-                    Capsule().fill(color(percent)).frame(width: geo.size.width * CGFloat(100 - percent) / 100)
+                    Capsule().fill(color(percent)).frame(width: geo.size.width * CGFloat(percent) / 100)
                 }
             }.frame(height: 6)
         }
