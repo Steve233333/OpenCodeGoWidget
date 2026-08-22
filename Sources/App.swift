@@ -3,6 +3,7 @@ import AppKit
 import UniformTypeIdentifiers
 import WidgetKit
 import Charts
+import ServiceManagement
 
 @main
 struct OpenCodeGoWidgetApp: App {
@@ -22,6 +23,21 @@ struct OpenCodeGoWidgetApp: App {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // 默认开机启动：首次启动即注册，失败静默
+        if #available(macOS 13.0, *) {
+            let service = SMAppService.mainApp
+            if service.status != .enabled {
+                do {
+                    try service.register()
+                } catch {
+                    print("LoginItem register failed: \(error)")
+                }
+            }
+        }
+        // 非 SMAppService 回退（旧系统）由系统登录项手动添加
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) ?? NSApp.keyWindow ?? NSApp.windows.first {
@@ -324,6 +340,12 @@ struct SettingsView: View {
     @State private var workspaceID: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "workspaceID") ?? ""
     @State private var authCookie: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "authCookie") ?? ""
     @State private var harStatus: String = ""
+    @State private var launchAtLogin: Bool = {
+        if #available(macOS 13.0, *) {
+            return SMAppService.mainApp.status == .enabled
+        }
+        return false
+    }()
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("设置").font(.headline)
@@ -414,10 +436,32 @@ struct SettingsView: View {
             }
             Text("提示：柱状图需要 workspace 裸ID (wrk_...) 与 539B auth Cookie；粘贴 .har 路径或 https://.../workspace/wrk_.../usage 全链路时会在保存时即时解析为真实 Cookie 存入 App Group，无需手动复制。")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
+
+            Divider()
+            HStack {
+                Toggle("开机自动启动", isOn: $launchAtLogin)
+                    .toggleStyle(.switch)
+                    .onChange(of: launchAtLogin) { _, newValue in
+                        if #available(macOS 13.0, *) {
+                            do {
+                                if newValue {
+                                    try SMAppService.mainApp.register()
+                                } else {
+                                    try SMAppService.mainApp.unregister()
+                                }
+                            } catch {
+                                // 回滚 UI
+                                launchAtLogin = !newValue
+                            }
+                        }
+                    }
+                Spacer()
+                Text("可在系统设置 → 通用 → 登录项管理").font(.system(size: 9)).foregroundStyle(.secondary)
+            }
             Spacer()
         }
         .padding(20)
-        .frame(width: 520, height: 360)
+        .frame(width: 520, height: 400)
         .onAppear {
             draft = apiKey
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")

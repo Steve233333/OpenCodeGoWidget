@@ -107,8 +107,41 @@ ditto "build/${APP_NAME}.app" "/Applications/${APP_NAME}.app"
 codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_NAME}.app" 2>/dev/null || true
 
 echo "==> 注册"
-# 清理同名旧 build 产物
+# 生成可安装文件（DMG + ZIP）到 dist/，再清理 build 中间产物
+DIST_DIR="$(pwd)/dist"
+VERSION="$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "build/${APP_NAME}.app/Contents/Info.plist" 2>/dev/null || echo "1.0")"
+DMG_NAME="${APP_NAME}-${VERSION}.dmg"
+ZIP_NAME="${APP_NAME}-${VERSION}.zip"
+mkdir -p "$DIST_DIR"
+# 保留 build 供打包
+STAGING_DIR="build/staging"
+rm -rf "$STAGING_DIR"
+mkdir -p "$STAGING_DIR"
+ditto "build/${APP_NAME}.app" "$STAGING_DIR/${APP_NAME}.app"
+# 创建带 Applications 替身的 DMG（便于拖拽安装）
+DMG_TMP="$STAGING_DIR/dmg"
+rm -rf "$DMG_TMP"
+mkdir -p "$DMG_TMP"
+ditto "build/${APP_NAME}.app" "$DMG_TMP/${APP_NAME}.app"
+ln -s /Applications "$DMG_TMP/Applications" 2>/dev/null || true
+# 生成 DMG（UDZO 压缩，兼容性好）
+if hdiutil create -volname "${APP_NAME}" -srcfolder "$DMG_TMP" -ov -format UDZO "build/${DMG_NAME}" 2>&1 | tail -5; then
+  ditto "build/${DMG_NAME}" "$DIST_DIR/${DMG_NAME}"
+  echo "DMG 已生成: $DIST_DIR/${DMG_NAME}"
+else
+  echo "!! DMG 生成失败，回退为 ZIP"
+fi
+# 生成 ZIP（保留 Finder 拖拽安装可用）
+if ditto -c -k --sequesterRsrc --keepParent "build/${APP_NAME}.app" "build/${ZIP_NAME}" 2>&1 | tail -3; then
+  ditto "build/${ZIP_NAME}" "$DIST_DIR/${ZIP_NAME}"
+  echo "ZIP 已生成: $DIST_DIR/${ZIP_NAME}"
+fi
+# 也保留未压缩的 .app 到 dist 供直接分发
+ditto "build/${APP_NAME}.app" "$DIST_DIR/${APP_NAME}.app"
+echo "APP 已复制: $DIST_DIR/${APP_NAME}.app"
+# 清理 build 中间产物（保留 dist）
 rm -rf build
+# 注册系统服务
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/${APP_NAME}.app" 2>/dev/null || true
 killall pkd 2>/dev/null || true
 sleep 1
@@ -116,3 +149,5 @@ pluginkit -a "/Applications/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appe
 pluginkit -e use -p com.apple.widgetkit-extension -i "$WIDGET_BUNDLE_ID" 2>/dev/null || true
 
 echo "完成：open /Applications/${APP_NAME}.app 然后在通知中心添加小组件"
+echo "可安装文件位于 dist/:"
+ls -lh "$DIST_DIR" 2>&1 | tail -20
