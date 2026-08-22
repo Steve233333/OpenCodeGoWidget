@@ -41,7 +41,7 @@
 
 | 主 App（固定窗口） | 设置（HAR 一键导入） | 桌面小组件（中尺寸） |
 |---|---|---|
-| <img src="docs/images/app.png?v=20250822-4" width="320" alt="主 App 本月花费 31 天堆叠"> | <img src="docs/images/settings.png?v=20250822-4" width="320" alt="设置粘贴 API Key 与 workspace"> | <img src="docs/images/widget.png?v=20250822-4" width="320" alt="小组件 5小时周月+近7天"> |
+| <img src="docs/images/app.png?v=20250822-5" width="320" alt="主 App 本月花费 31 天堆叠"> | <img src="docs/images/settings.png?v=20250822-5" width="320" alt="设置粘贴 API Key 与 workspace"> | <img src="docs/images/widget.png?v=20250822-5" width="320" alt="小组件 5小时周月+近7天"> |
 
 > 图片为 `v1.0` 实机截图：本月 `$7.11 USD`、近 7 天 `$7.11 USD`、今日模型 `muse-spark 87%` 等与线上一致
 
