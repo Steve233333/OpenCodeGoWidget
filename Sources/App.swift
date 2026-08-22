@@ -24,8 +24,12 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 16) {
             HStack {
-                Label("OpenCode Go", systemImage: "chart.bar.fill")
-                    .font(.headline)
+                Label {
+                    Text("OpenCode Go")
+                } icon: {
+                    BrandIconView(size: 16)
+                }
+                .font(.headline)
                 Spacer()
                 Button { showSettings.toggle() } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.bordered)
@@ -104,6 +108,13 @@ struct ContentView: View {
         .frame(minWidth: 560, minHeight: 460)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
         .task { if snapshot == nil { await refresh() } }
+        .onOpenURL { url in
+            if url.scheme == "opencodego" {
+                NSApp.activate(ignoringOtherApps: true)
+                // 触发刷新以确保显示最新月图
+                Task { await refresh() }
+            }
+        }
     }
 
     private func refresh() async {
@@ -243,6 +254,14 @@ struct MonthChartView: View {
         return 0...capped
     }
 
+    private var xDomain: ClosedRange<Date> {
+        guard let first = monthDates.first, let last = monthDates.last else {
+            let now = Date()
+            return now...now
+        }
+        return first...last
+    }
+
     var body: some View {
         Chart(flat) { item in
             BarMark(
@@ -254,8 +273,10 @@ struct MonthChartView: View {
             .cornerRadius(1)
         }
         .chartForegroundStyleScale { (model: String) in
-            ModelPalette.color(for: model)
+            if model == "__empty__" { return Color.clear }
+            return ModelPalette.color(for: model)
         }
+        .chartXScale(domain: xDomain)
         .chartYScale(domain: yDomain)
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { val in

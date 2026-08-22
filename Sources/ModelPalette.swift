@@ -99,6 +99,28 @@ enum ChartFormatters {
     }()
 }
 
+// 品牌小图标（4 柱状，如截图）
+struct BrandIconView: View {
+    var size: CGFloat = 14
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 2) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.primary)
+                .frame(width: size * 0.18, height: size * 0.55)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.primary)
+                .frame(width: size * 0.18, height: size * 0.85)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.primary.opacity(0.55))
+                .frame(width: size * 0.18, height: size * 0.35)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.primary)
+                .frame(width: size * 0.18, height: size)
+        }
+        .frame(width: size, height: size, alignment: .bottom)
+    }
+}
+
 // 图例换行视图，供 App 与 Widget 共用
 struct WrappingLegendView: View {
     let models: [String]

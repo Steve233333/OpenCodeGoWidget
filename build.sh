@@ -37,6 +37,7 @@ cat > "build/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>LSUIElement</key><false/>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
+	<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.steve233.opencodego</string><key>CFBundleURLSchemes</key><array><string>opencodego</string></array></dict></array>
 </dict>
 </plist>
 PLIST

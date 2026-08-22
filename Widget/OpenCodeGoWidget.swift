@@ -82,12 +82,21 @@ struct GoWidgetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label("OpenCode Go", systemImage: "chart.bar.fill")
-                    .font(.caption2.weight(.semibold))
+                Label {
+                    Text("OpenCode Go")
+                } icon: {
+                    BrandIconView(size: 13)
+                }
+                .font(.caption2.weight(.semibold))
                 Spacer()
                 Button(intent: RefreshIntent()) {
-                    Image(systemName: "arrow.clockwise").font(.caption2)
-                }.buttonStyle(.plain)
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption2)
+                        .symbolEffect(.bounce, value: snap?.updatedAt)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .sensoryFeedback(.impact, trigger: snap?.updatedAt)
             }
 
             if let s = snap {
@@ -97,8 +106,14 @@ struct GoWidgetView: View {
                         QuotaMiniRow(label: label, percent: percent, reset: reset)
                     }
                 } else {
-                    // 中尺寸：左侧近7天堆叠柱，右侧三档额度
+                    // 中尺寸：左侧三档额度，右侧近7天堆叠（按用户要求对调）
                     HStack(alignment: .top, spacing: 8) {
+                        VStack(spacing: 4) {
+                            ForEach([("5小时", s.rolling, s.rollingReset), ("周", s.weekly, s.weeklyReset), ("月", s.monthly, s.monthlyReset)], id: \.0) { label, percent, reset in
+                                QuotaMiniRow(label: label, percent: percent, reset: reset)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
                         VStack(alignment: .leading, spacing: 4) {
                             let weekTotal = s.dailyCosts.suffix(7).reduce(0) { $0 + $1.total }
                             HStack {
@@ -107,19 +122,17 @@ struct GoWidgetView: View {
                                 Text(String(format: "$%.2f", weekTotal)).font(.caption2.monospacedDigit().bold())
                             }
                             if !s.dailyCosts.isEmpty {
-                                WeekChartView(dailyCosts: s.dailyCosts)
+                                // 点击柱状图打开 App 主图
+                                Link(destination: URL(string: "opencodego://month")!) {
+                                    WeekChartView(dailyCosts: s.dailyCosts)
+                                }
+                                .buttonStyle(.plain)
                             } else {
                                 Text("暂无近7天费用").font(.system(size: 8)).foregroundStyle(.secondary)
                                     .frame(height: 40)
                                     .frame(maxWidth: .infinity)
                                     .background(Color.primary.opacity(0.04))
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        VStack(spacing: 4) {
-                            ForEach([("5小时", s.rolling, s.rollingReset), ("周", s.weekly, s.weeklyReset), ("月", s.monthly, s.monthlyReset)], id: \.0) { label, percent, reset in
-                                QuotaMiniRow(label: label, percent: percent, reset: reset)
                             }
                         }
                         .frame(maxWidth: .infinity)
@@ -207,6 +220,14 @@ struct WeekChartView: View {
         return max(1.5, ceil(maxDaily * 1.2 * 10) / 10)
     }
 
+    private var xDomain: ClosedRange<Date> {
+        guard let first = last7Dates.first, let last = last7Dates.last else {
+            let now = Date()
+            return now...now
+        }
+        return first...last
+    }
+
     var body: some View {
         if dailyCosts.isEmpty {
             Text("暂无近7天费用").font(.system(size: 8)).foregroundStyle(.secondary)
@@ -220,7 +241,11 @@ struct WeekChartView: View {
                     .foregroundStyle(by: .value("Model", item.model))
                     .cornerRadius(1)
             }
-            .chartForegroundStyleScale { (model: String) in ModelPalette.color(for: model) }
+            .chartForegroundStyleScale { (model: String) in
+                if model == "__empty__" { return Color.clear }
+                return ModelPalette.color(for: model)
+            }
+            .chartXScale(domain: xDomain)
             .chartYScale(domain: 0...yMax)
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day)) { val in
