@@ -114,17 +114,14 @@ struct ContentView: View {
             }
 
             Button { Task { await refresh() } } label: {
-                Label(loading ? "正在刷新" : "刷新", systemImage: "arrow.clockwise")
-                    .rotationEffect(.degrees(loading ? 360 : 0))
-                    .animation(
-                        loading
-                            ? .linear(duration: 0.75).repeatForever(autoreverses: false)
-                            : .easeOut(duration: 0.16),
-                        value: loading
-                    )
+                if loading {
+                    ProgressView().scaleEffect(0.6)
+                } else {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
             }
             .disabled(loading)
-            .buttonStyle(RefreshButtonStyle())
+            .buttonStyle(.borderedProminent)
 
             if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
 
@@ -156,20 +153,6 @@ struct ContentView: View {
             if var s = snapshot { s.error = msg; WidgetDataStore.save(s); snapshot = s }
         }
         loading = false
-    }
-}
-
-struct RefreshButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.headline)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 10)
-            .background(Capsule().fill(Color.accentColor.gradient))
-            .shadow(color: Color.accentColor.opacity(configuration.isPressed ? 0.12 : 0.28), radius: configuration.isPressed ? 2 : 6, y: configuration.isPressed ? 1 : 3)
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .animation(.snappy(duration: 0.16, extraBounce: 0), value: configuration.isPressed)
     }
 }
 

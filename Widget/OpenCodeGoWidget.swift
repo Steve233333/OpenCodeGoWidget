@@ -1,7 +1,6 @@
 import SwiftUI
 import WidgetKit
 import AppIntents
-import Charts
 
 struct GoUsageEntry: TimelineEntry {
     let date: Date
@@ -91,8 +90,14 @@ struct GoWidgetView: View {
                 .font(.caption2.weight(.semibold))
                 Spacer()
                 Button(intent: RefreshIntent()) {
-                    Image(systemName: "arrow.clockwise").font(.caption2)
-                }.buttonStyle(.plain)
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .medium))
+                        // A completed refresh supplies a new timeline entry,
+                        // which gives the icon one lively bounce; the press
+                        // itself gives immediate scale and highlight feedback.
+                        .symbolEffect(.bounce, options: .speed(1.25), value: entry.date)
+                }
+                .buttonStyle(WidgetRefreshButtonStyle())
             }
 
             if let s = snap {
@@ -103,7 +108,7 @@ struct GoWidgetView: View {
                     }
                 } else {
                     // 中尺寸：左侧三档额度，右侧近7天堆叠（已对调）
-                    HStack(alignment: .top, spacing: 12) {
+                    HStack(alignment: .top, spacing: 14) {
                         VStack(spacing: 5) {
                             ForEach([("5小时", s.rolling, s.rollingReset), ("周", s.weekly, s.weeklyReset), ("月", s.monthly, s.monthlyReset)], id: \.0) { label, percent, reset in
                                 QuotaMiniRow(label: label, percent: percent, reset: reset)
@@ -122,6 +127,7 @@ struct GoWidgetView: View {
                                     WeekChartView(dailyCosts: s.dailyCosts)
                                 }
                                 .buttonStyle(.plain)
+                                .padding(.horizontal, 8)
                             } else {
                                 Text("暂无近7天费用").font(.system(size: 8)).foregroundStyle(.secondary)
                                     .frame(height: 48)
@@ -146,8 +152,9 @@ struct GoWidgetView: View {
                 Spacer()
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
     }
 }
 
@@ -192,29 +199,14 @@ struct WeekChartView: View {
         return (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: today) }
     }
 
-    private var flat: [DayModelCost] {
-        let map = Dictionary(uniqueKeysWithValues: dailyCosts.map { ($0.date, $0) })
-        var result: [DayModelCost] = []
-        for date in last7Dates {
-            let key = ChartFormatters.day.string(from: date)
-            if let dc = map[key] {
-                for (m, c) in dc.entries where c > 0 {
-                    result.append(DayModelCost(date: date, model: m, cost: c))
-                }
-            }
-        }
-        return result
-    }
-
     private var yMax: Double {
-        let maxDaily = dailyCosts.map { $0.total }.max() ?? 0
+        let maxDaily = last7Dates.map { dailyCost(for: $0).total }.max() ?? 0
         return max(1.5, ceil(maxDaily * 1.2 * 10) / 10)
     }
 
-    private var weekDomain: ClosedRange<Date> {
-        let start = last7Dates.first ?? Date()
-        let end = last7Dates.last ?? start.addingTimeInterval(6 * 86_400)
-        return start...end
+    private func dailyCost(for date: Date) -> DailyCost {
+        let key = ChartFormatters.day.string(from: date)
+        return dailyCosts.first(where: { $0.date == key }) ?? DailyCost(date: key, entries: [:])
     }
 
     var body: some View {
@@ -225,39 +217,79 @@ struct WeekChartView: View {
                 .background(Color.primary.opacity(0.04))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         } else {
-            Chart(flat) { item in
-                BarMark(
-                    x: .value("Date", item.date, unit: .day),
-                    y: .value("Cost", item.cost),
-                    stacking: .standard
-                )
-                .foregroundStyle(by: .value("Model", item.model))
-                .cornerRadius(1)
-            }
-            .chartForegroundStyleScale { (model: String) in
-                if model == "__empty__" { return Color.clear }
-                return ModelPalette.color(for: model)
-            }
-            .chartXScale(domain: weekDomain)
-            .chartXScale(range: .plotDimension(startPadding: 12, endPadding: 12))
-            .chartYScale(domain: 0...yMax)
-            .chartXAxis {
-                AxisMarks(values: last7Dates) { val in
-                    AxisGridLine(centered: true).foregroundStyle(Color.clear)
-                    AxisValueLabel(centered: true, anchor: .top) {
-                        if let date = val.as(Date.self) {
-                            Text(ChartFormatters.weekLabel.string(from: date))
-                                .font(.system(size: 6))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+            GeometryReader { geometry in
+                let columnWidth = geometry.size.width / CGFloat(last7Dates.count)
+                VStack(spacing: 3) {
+                    HStack(alignment: .bottom, spacing: 0) {
+                        ForEach(last7Dates, id: \.self) { date in
+                            WeekBarColumn(
+                                entries: dailyCost(for: date).entries,
+                                maximum: yMax
+                            )
+                            .frame(width: columnWidth, height: 42)
                         }
                     }
+                    HStack(spacing: 0) {
+                        ForEach(last7Dates, id: \.self) { date in
+                            Text(ChartFormatters.weekLabel.string(from: date))
+                                .font(.system(size: 7))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .frame(width: columnWidth)
+                        }
+                    }
+                    .frame(height: 11)
                 }
             }
-            .chartYAxis(.hidden)
-            .chartLegend(.hidden)
-            .frame(height: 52)
+            .frame(height: 56)
         }
+    }
+}
+
+struct WeekBarColumn: View {
+    let entries: [String: Double]
+    let maximum: Double
+
+    private var segments: [(model: String, cost: Double)] {
+        entries
+            .filter { $0.value > 0 }
+            .sorted { lhs, rhs in
+                let left = ModelPalette.ordered.firstIndex(of: lhs.key) ?? Int.max
+                let right = ModelPalette.ordered.firstIndex(of: rhs.key) ?? Int.max
+                return left == right ? lhs.key < rhs.key : left < right
+            }
+            .map { (model: $0.key, cost: $0.value) }
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                VStack(spacing: 0) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                        Rectangle()
+                            .fill(ModelPalette.color(for: segment.model))
+                            .frame(height: max(1, geometry.size.height * CGFloat(segment.cost / maximum)))
+                    }
+                }
+                .frame(width: min(22, geometry.size.width * 0.58))
+                .clipShape(RoundedRectangle(cornerRadius: 1.5))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        }
+    }
+}
+
+struct WidgetRefreshButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(width: 26, height: 26)
+            .foregroundStyle(.primary)
+            .background(Circle().fill(Color.primary.opacity(configuration.isPressed ? 0.16 : 0.06)))
+            .contentShape(Circle())
+            .scaleEffect(configuration.isPressed ? 0.88 : 1)
+            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
     }
 }
 
@@ -321,6 +353,7 @@ struct OpenCodeGoWidget: Widget {
         }
         .configurationDisplayName("OpenCode Go")
         .description("近7天堆叠 + 5h/周/月额度")
+        .contentMarginsDisabled()
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
