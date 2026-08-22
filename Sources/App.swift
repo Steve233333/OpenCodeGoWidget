@@ -91,7 +91,7 @@ struct ContentView: View {
             let snap = WidgetSnapshot(
                 rolling: usage.rolling.percent, weekly: usage.weekly.percent, monthly: usage.monthly.percent,
                 rollingReset: usage.rolling.resetsAt, weeklyReset: usage.weekly.resetsAt, monthlyReset: usage.monthly.resetsAt,
-                costTotal: cost.total, costEntries: entries, updatedAt: Date(), error: nil
+                costTotal: cost.total, costEntries: entries, dailyCosts: cost.daily, updatedAt: Date(), error: nil as String?
             )
             WidgetDataStore.save(snap)
             snapshot = snap

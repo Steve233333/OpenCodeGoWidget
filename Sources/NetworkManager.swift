@@ -45,21 +45,18 @@ final class NetworkManager: @unchecked Sendable {
         }
     }
 
-    func fetchCostToday() async -> (total: Double, entries: [CostEntry]) {
-        // Best-effort: try to scrape /zen/go HTML for per-model cost (same data as dashboard stacked chart)
-        guard let key = KeychainStore.resolvedKey(), !key.isEmpty else { return (0, []) }
-        // Try JSON cost endpoints first (if opencode exposes them in future)
-        for path in ["zen/go/v1/cost", "zen/go/v1/costs", "zen/go/v1/dashboard"] {
-            if let url = URL(string: "https://opencode.ai/\(path)"), let result = await tryCostJSON(url: url, key: key), result.total > 0 {
-                return result
-            }
+    func fetchCostToday() async -> (total: Double, entries: [CostEntry], daily: [DailyCost]) {
+        if let mc = await CostCrawler.shared.fetchMonthlyCosts() {
+            let entries = mc.todayEntries.map { CostEntry(model: $0.key, cost: $0.value, percent: mc.todayEntries.values.reduce(0,+)>0 ? $0.value/mc.todayEntries.values.reduce(0,+)*100 : 0) }.sorted { $0.cost > $1.cost }
+            return (mc.todayEntries.values.reduce(0,+), entries, mc.daily)
         }
-        // Fallback: scrape dashboard HTML (Next.js embedded JSON)
-        if let html = await fetchHTML(urlString: "https://opencode.ai/zen/go", key: key),
-           let result = parseCostFromHTML(html), result.total > 0 {
-            return result
-        }
-        return (0, [])
+        return (0, [], [])
+    }
+
+    // Legacy wrapper for callers not yet migrated
+    func fetchCostTodayLegacy() async -> (total: Double, entries: [CostEntry]) {
+        let r = await fetchCostToday()
+        return (r.total, r.entries)
     }
 
     private func tryCostJSON(url: URL, key: String) async -> (total: Double, entries: [CostEntry])? {

@@ -8,7 +8,8 @@ struct WidgetSnapshot: Codable {
     var weeklyReset: Date
     var monthlyReset: Date
     var costTotal: Double
-    var costEntries: [String: Double] // model -> cost
+    var costEntries: [String: Double] // model -> cost (today)
+    var dailyCosts: [DailyCost] = []
     var updatedAt: Date
     var error: String?
 }

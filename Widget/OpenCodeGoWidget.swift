@@ -21,7 +21,7 @@ struct RefreshIntent: AppIntent {
             let snap = WidgetSnapshot(
                 rolling: usage.rolling.percent, weekly: usage.weekly.percent, monthly: usage.monthly.percent,
                 rollingReset: usage.rolling.resetsAt, weeklyReset: usage.weekly.resetsAt, monthlyReset: usage.monthly.resetsAt,
-                costTotal: cost.total, costEntries: entries, updatedAt: Date(), error: nil
+                costTotal: cost.total, costEntries: entries, dailyCosts: cost.daily, updatedAt: Date(), error: nil as String?
             )
             WidgetDataStore.save(snap)
             didSave = true
@@ -35,7 +35,7 @@ struct RefreshIntent: AppIntent {
         }
         // Always bump updatedAt even on total failure so user sees refresh happened
         if !didSave {
-            var snap = WidgetDataStore.load() ?? WidgetSnapshot(rolling: 0, weekly: 0, monthly: 0, rollingReset: Date(), weeklyReset: Date(), monthlyReset: Date(), costTotal: 0, costEntries: [:], updatedAt: Date(), error: "刷新失败")
+            var snap = WidgetDataStore.load() ?? WidgetSnapshot(rolling: 0, weekly: 0, monthly: 0, rollingReset: Date(), weeklyReset: Date(), monthlyReset: Date(), costTotal: 0, costEntries: [:], dailyCosts: [], updatedAt: Date(), error: "刷新失败")
             snap.updatedAt = Date()
             WidgetDataStore.save(snap)
         }
@@ -46,7 +46,7 @@ struct RefreshIntent: AppIntent {
 
 struct Provider: TimelineProvider {
     func placeholder(in context: Context) -> GoUsageEntry {
-        GoUsageEntry(date: Date(), snapshot: WidgetDataStore.load() ?? WidgetSnapshot(rolling: 96, weekly: 64, monthly: 82, rollingReset: Date().addingTimeInterval(3600), weeklyReset: Date().addingTimeInterval(86400), monthlyReset: Date().addingTimeInterval(86400*7), costTotal: 1.23, costEntries: ["mimo-v2.5-go":0.6, "deepseek-v4-flash-vision-exp-go":0.4, "glm-5-go":0.23], updatedAt: Date(), error: nil))
+        GoUsageEntry(date: Date(), snapshot: WidgetDataStore.load() ?? WidgetSnapshot(rolling: 96, weekly: 64, monthly: 82, rollingReset: Date().addingTimeInterval(3600), weeklyReset: Date().addingTimeInterval(86400), monthlyReset: Date().addingTimeInterval(86400*7), costTotal: 1.23, costEntries: ["mimo-v2.5-go":0.6, "deepseek-v4-flash-vision-exp-go":0.4, "glm-5-go":0.23], dailyCosts: [], updatedAt: Date(), error: nil))
     }
     func getSnapshot(in context: Context, completion: @escaping (GoUsageEntry) -> Void) {
         completion(GoUsageEntry(date: Date(), snapshot: WidgetDataStore.load()))
@@ -60,7 +60,7 @@ struct Provider: TimelineProvider {
                 let cost = await NetworkManager().fetchCostToday()
                 var entries: [String: Double] = [:]
                 for e in cost.entries { entries[e.model] = e.cost }
-                let newSnap = WidgetSnapshot(rolling: usage.rolling.percent, weekly: usage.weekly.percent, monthly: usage.monthly.percent, rollingReset: usage.rolling.resetsAt, weeklyReset: usage.weekly.resetsAt, monthlyReset: usage.monthly.resetsAt, costTotal: cost.total, costEntries: entries, updatedAt: Date(), error: nil)
+                let newSnap = WidgetSnapshot(rolling: usage.rolling.percent, weekly: usage.weekly.percent, monthly: usage.monthly.percent, rollingReset: usage.rolling.resetsAt, weeklyReset: usage.weekly.resetsAt, monthlyReset: usage.monthly.resetsAt, costTotal: cost.total, costEntries: entries, dailyCosts: cost.daily, updatedAt: Date(), error: nil as String?)
                 WidgetDataStore.save(newSnap)
                 snap = newSnap
             } catch {
