@@ -92,12 +92,14 @@ struct GoWidgetView: View {
                 Button(intent: RefreshIntent()) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 13, weight: .medium))
-                        // A completed refresh supplies a new timeline entry,
-                        // which gives the icon one lively bounce; the press
-                        // itself gives immediate scale and highlight feedback.
-                        .symbolEffect(.bounce, options: .speed(1.25), value: entry.date)
+                        // WidgetKit shows this as waiting while the intent
+                        // runs, then bounces it once when updated data arrives.
+                        .invalidatableContent()
+                        .symbolEffect(.bounce, options: .speed(1.25), value: snap?.updatedAt ?? entry.date)
                 }
-                .buttonStyle(WidgetRefreshButtonStyle())
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .controlSize(.mini)
             }
 
             if let s = snap {
@@ -278,18 +280,6 @@ struct WeekBarColumn: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
-    }
-}
-
-struct WidgetRefreshButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(width: 26, height: 26)
-            .foregroundStyle(.primary)
-            .background(Circle().fill(Color.primary.opacity(configuration.isPressed ? 0.16 : 0.06)))
-            .contentShape(Circle())
-            .scaleEffect(configuration.isPressed ? 0.88 : 1)
-            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
     }
 }
 

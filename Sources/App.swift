@@ -12,9 +12,12 @@ struct OpenCodeGoWidgetApp: App {
         // every external URL event, which is exactly what a widget tap sends.
         Window("OpenCode Go", id: "main") {
             ContentView()
+                .frame(width: 620, height: 860)
+                .fixedSize()
         }
         .handlesExternalEvents(matching: Set(arrayLiteral: "opencodego"))
         .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
     }
 }
 
@@ -127,8 +130,9 @@ struct ContentView: View {
 
             Spacer()
         }
-        .padding(20)
-        .frame(minWidth: 560, minHeight: 460)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(width: 620, height: 860)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
         .task { if snapshot == nil { await refresh() } }
         .onOpenURL { url in
@@ -336,52 +340,7 @@ struct SettingsView: View {
                 .font(.caption2)
             HStack {
                 Button("选择 HAR 文件") {
-                    let panel = NSOpenPanel()
-                    panel.allowedContentTypes = [UTType(filenameExtension: "har") ?? .data, .json]
-                    panel.allowsMultipleSelection = false
-                    panel.canChooseFiles = true
-                    panel.canChooseDirectories = false
-                    if panel.runModal() == .OK, let url = panel.url {
-                        if let data = try? Data(contentsOf: url),
-                           let har = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let log = har["log"] as? [String: Any],
-                           let entries = log["entries"] as? [[String: Any]] {
-                            var foundAuth: String?
-                            var foundWS: String?
-                            for e in entries {
-                                if let req = e["request"] as? [String: Any],
-                                   let cookies = req["cookies"] as? [[String: Any]] {
-                                    for c in cookies where (c["name"] as? String) == "auth" {
-                                        if let v = c["value"] as? String, !v.isEmpty {
-                                            foundAuth = v
-                                            break
-                                        }
-                                    }
-                                }
-                                if let req = e["request"] as? [String: Any], let u = req["url"] as? String, u.contains("/workspace/") {
-                                    if let r = u.range(of: "/workspace/") {
-                                        let rest = String(u[r.upperBound...])
-                                        if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
-                                            foundWS = id
-                                        }
-                                    }
-                                }
-                            }
-                            if let v = foundAuth {
-                                authCookie = v
-                                harStatus = "已从 HAR 提取 auth Cookie (\(v.count)B)"
-                            }
-                            if let id = foundWS {
-                                workspaceID = id
-                            }
-                            let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
-                            if let v = foundAuth { d?.set(v, forKey: "authCookie") }
-                            if let id = foundWS { d?.set(id, forKey: "workspaceID") }
-                            if foundAuth != nil || foundWS != nil {
-                                WidgetCenter.shared.reloadAllTimelines()
-                            }
-                        }
-                    }
+                    chooseHARFile()
                 }.controlSize(.small)
                 if !harStatus.isEmpty { Text(harStatus).font(.caption2).foregroundStyle(.green) }
                 Spacer()
@@ -492,6 +451,87 @@ struct SettingsView: View {
             }
             workspaceID = storedWS
             authCookie = storedAuth
+        }
+    }
+
+    private func importHAR(from url: URL) {
+        let hasAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasAccess { url.stopAccessingSecurityScopedResource() }
+        }
+        guard let data = try? Data(contentsOf: url),
+              let har = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let log = har["log"] as? [String: Any],
+              let entries = log["entries"] as? [[String: Any]] else {
+            harStatus = "无法读取 HAR 文件，请确认选择的是浏览器导出的 .har"
+            return
+        }
+
+        var foundAuth: String?
+        var foundWorkspace: String?
+        for entry in entries {
+            if let request = entry["request"] as? [String: Any],
+               let cookies = request["cookies"] as? [[String: Any]] {
+                for cookie in cookies where (cookie["name"] as? String) == "auth" {
+                    if let value = cookie["value"] as? String, !value.isEmpty {
+                        foundAuth = value
+                        break
+                    }
+                }
+            }
+            if let request = entry["request"] as? [String: Any],
+               let url = request["url"] as? String,
+               let range = url.range(of: "/workspace/") {
+                let rest = String(url[range.upperBound...])
+                if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
+                    foundWorkspace = id
+                }
+            }
+        }
+
+        if let auth = foundAuth {
+            authCookie = auth
+            harStatus = "已从 HAR 提取 auth Cookie (\(auth.count)B)"
+        }
+        if let workspace = foundWorkspace { workspaceID = workspace }
+
+        let defaults = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        if let auth = foundAuth { defaults?.set(auth, forKey: "authCookie") }
+        if let workspace = foundWorkspace { defaults?.set(workspace, forKey: "workspaceID") }
+        defaults?.synchronize()
+
+        if foundAuth != nil || foundWorkspace != nil {
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
+        } else {
+            harStatus = "未在 HAR 中找到 OpenCode workspace 或 auth Cookie"
+        }
+    }
+
+    @MainActor
+    private func chooseHARFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "har") ?? .data, .json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.prompt = "选择"
+        panel.message = "选择浏览器导出的 OpenCode HAR 文件"
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop", isDirectory: true)
+
+        let handleResult: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                importHAR(from: url)
+            }
+        }
+
+        // Settings itself is a SwiftUI sheet. An asynchronous child sheet is
+        // the supported way to present NSOpenPanel here; runModal() can leave
+        // the panel behind the settings sheet with no visible response.
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible }) {
+            panel.beginSheetModal(for: window, completionHandler: handleResult)
+        } else {
+            panel.begin(completionHandler: handleResult)
         }
     }
 }
