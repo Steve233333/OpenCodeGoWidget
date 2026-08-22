@@ -95,7 +95,8 @@ struct GoWidgetView: View {
                         .symbolEffect(.bounce, value: snap?.updatedAt)
                         .contentTransition(.symbolEffect(.replace))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
+                .invalidatableContent()
                 .sensoryFeedback(.impact, trigger: snap?.updatedAt)
             }
 
@@ -106,9 +107,9 @@ struct GoWidgetView: View {
                         QuotaMiniRow(label: label, percent: percent, reset: reset)
                     }
                 } else {
-                    // 中尺寸：左侧三档额度，右侧近7天堆叠（按用户要求对调）
-                    HStack(alignment: .top, spacing: 8) {
-                        VStack(spacing: 4) {
+                    // 中尺寸：左侧三档额度，右侧近7天堆叠（已对调）
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(spacing: 5) {
                             ForEach([("5小时", s.rolling, s.rollingReset), ("周", s.weekly, s.weeklyReset), ("月", s.monthly, s.monthlyReset)], id: \.0) { label, percent, reset in
                                 QuotaMiniRow(label: label, percent: percent, reset: reset)
                             }
@@ -116,20 +117,19 @@ struct GoWidgetView: View {
                         .frame(maxWidth: .infinity)
                         VStack(alignment: .leading, spacing: 4) {
                             let weekTotal = s.dailyCosts.suffix(7).reduce(0) { $0 + $1.total }
-                            HStack {
+                            HStack(spacing: 4) {
                                 Text("近7天").font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
                                 Text(String(format: "$%.2f", weekTotal)).font(.caption2.monospacedDigit().bold())
                             }
                             if !s.dailyCosts.isEmpty {
-                                // 点击柱状图打开 App 主图
                                 Link(destination: URL(string: "opencodego://month")!) {
                                     WeekChartView(dailyCosts: s.dailyCosts)
                                 }
                                 .buttonStyle(.plain)
                             } else {
                                 Text("暂无近7天费用").font(.system(size: 8)).foregroundStyle(.secondary)
-                                    .frame(height: 40)
+                                    .frame(height: 48)
                                     .frame(maxWidth: .infinity)
                                     .background(Color.primary.opacity(0.04))
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -138,7 +138,7 @@ struct GoWidgetView: View {
                         .frame(maxWidth: .infinity)
                     }
                 }
-                HStack {
+                HStack(spacing: 4) {
                     Text("更新于 \(s.updatedAt.formatted(date: .omitted, time: .shortened))")
                         .font(.system(size: 9)).foregroundStyle(.secondary)
                     Spacer()
@@ -151,7 +151,8 @@ struct GoWidgetView: View {
                 Spacer()
             }
         }
-        .padding(12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 }
 
@@ -248,17 +249,24 @@ struct WeekChartView: View {
             .chartXScale(domain: xDomain)
             .chartYScale(domain: 0...yMax)
             .chartXAxis {
-                AxisMarks(values: .stride(by: .day)) { val in
-                    AxisValueLabel {
+                AxisMarks(preset: .aligned, position: .bottom, values: last7Dates) { val in
+                    AxisGridLine(centered: true, stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.clear)
+                    AxisValueLabel(anchor: .top) {
                         if let d = val.as(Date.self) {
-                            Text(ChartFormatters.weekLabel.string(from: d)).font(.system(size: 6)).foregroundStyle(.secondary)
+                            Text(ChartFormatters.weekLabel.string(from: d))
+                                .font(.system(size: 6))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
                     }
                 }
             }
             .chartYAxis(.hidden)
             .chartLegend(.hidden)
-            .frame(height: 48)
+            .chartPlotStyle { plot in
+                plot.padding(.horizontal, 2).padding(.bottom, 2)
+            }
+            .frame(height: 52)
         }
     }
 }

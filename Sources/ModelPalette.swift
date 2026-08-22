@@ -99,25 +99,28 @@ enum ChartFormatters {
     }()
 }
 
-// 品牌小图标（4 柱状，如截图）
+// 品牌方环图标（深浅色自适应，如用户提供的两张图）
 struct BrandIconView: View {
+    @Environment(\.colorScheme) var colorScheme
     var size: CGFloat = 14
     var body: some View {
-        HStack(alignment: .bottom, spacing: 2) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color.primary)
-                .frame(width: size * 0.18, height: size * 0.55)
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color.primary)
-                .frame(width: size * 0.18, height: size * 0.85)
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color.primary.opacity(0.55))
-                .frame(width: size * 0.18, height: size * 0.35)
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color.primary)
-                .frame(width: size * 0.18, height: size)
+        ZStack {
+            // 外框：浅色白 / 深色黑，带圆角
+            RoundedRectangle(cornerRadius: size * 0.14, style: .continuous)
+                .fill(colorScheme == .dark ? Color.black : Color.white)
+                .frame(width: size, height: size)
+                .overlay(
+                    RoundedRectangle(cornerRadius: size * 0.14, style: .continuous)
+                        .stroke(Color.primary.opacity(colorScheme == .dark ? 0.15 : 0.08), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), radius: 0.8, x: 0, y: 0.5)
+            // 内空：水鸭青 #4F6F7A，对应截图内框
+            RoundedRectangle(cornerRadius: size * 0.05, style: .continuous)
+                .fill(Color(red: 0.32, green: 0.45, blue: 0.49))
+                .frame(width: size * 0.46, height: size * 0.62)
         }
-        .frame(width: size, height: size, alignment: .bottom)
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.14, style: .continuous))
     }
 }
 
