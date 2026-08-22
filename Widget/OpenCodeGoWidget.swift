@@ -12,6 +12,7 @@ struct RefreshIntent: AppIntent {
     static var description = IntentDescription("立即刷新用量")
     func perform() async throws -> some IntentResult {
         let mgr = NetworkManager()
+        var didSave = false
         do {
             let usage = try await mgr.fetchUsage()
             let cost = await mgr.fetchCostToday()
@@ -23,12 +24,20 @@ struct RefreshIntent: AppIntent {
                 costTotal: cost.total, costEntries: entries, updatedAt: Date(), error: nil
             )
             WidgetDataStore.save(snap)
+            didSave = true
         } catch {
             if var s = WidgetDataStore.load() {
                 s.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 s.updatedAt = Date()
                 WidgetDataStore.save(s)
+                didSave = true
             }
+        }
+        // Always bump updatedAt even on total failure so user sees refresh happened
+        if !didSave {
+            var snap = WidgetDataStore.load() ?? WidgetSnapshot(rolling: 0, weekly: 0, monthly: 0, rollingReset: Date(), weeklyReset: Date(), monthlyReset: Date(), costTotal: 0, costEntries: [:], updatedAt: Date(), error: "刷新失败")
+            snap.updatedAt = Date()
+            WidgetDataStore.save(snap)
         }
         WidgetCenter.shared.reloadAllTimelines()
         return .result()

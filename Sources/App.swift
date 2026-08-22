@@ -31,20 +31,20 @@ struct ContentView: View {
 
             if let snap = snapshot {
                 VStack(spacing: 10) {
-                    // Cost section (best-effort)
-                    if snap.costTotal > 0 {
-                        VStack(spacing: 4) {
-                            HStack {
-                                Text("今日花费").font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Text(String(format: "$%.2f", snap.costTotal)).font(.headline).monospacedDigit()
-                            }
-                            if !snap.costEntries.isEmpty {
-                                CostBar(entries: snap.costEntries, total: snap.costTotal)
-                            }
+                    VStack(spacing: 4) {
+                        HStack {
+                            Text("今日花费").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Text(String(format: "$%.2f", snap.costTotal)).font(.headline).monospacedDigit()
                         }
-                        Divider()
+                        if !snap.costEntries.isEmpty {
+                            CostBar(entries: snap.costEntries, total: snap.costTotal)
+                        } else {
+                            CostBar(entries: ["mimo-v2.5-go": 0.5, "deepseek-v4-flash-vision-exp-go": 0.35, "glm-5-go": 0.15], total: 1.0)
+                                .opacity(0.3)
+                        }
                     }
+                    Divider()
                     QuotaRow(label: "5小时", percent: snap.rolling, reset: snap.rollingReset)
                     QuotaRow(label: "周", percent: snap.weekly, reset: snap.weeklyReset)
                     QuotaRow(label: "月", percent: snap.monthly, reset: snap.monthlyReset)
@@ -57,16 +57,11 @@ struct ContentView: View {
                     .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
 
-            HStack(spacing: 12) {
-                Button { Task { await refresh() } } label: {
+            Button { Task { await refresh() } } label: {
                     if loading { ProgressView().scaleEffect(0.6) } else { Label("刷新", systemImage: "arrow.clockwise") }
                 }
                 .disabled(loading)
                 .buttonStyle(.borderedProminent)
-
-                Button("刷新小组件") { WidgetCenter.shared.reloadAllTimelines() }
-                    .buttonStyle(.bordered)
-            }
 
             if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
 
