@@ -90,14 +90,8 @@ struct GoWidgetView: View {
                 .font(.caption2.weight(.semibold))
                 Spacer()
                 Button(intent: RefreshIntent()) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.caption2)
-                        .symbolEffect(.bounce, value: snap?.updatedAt)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .buttonStyle(.borderless)
-                .invalidatableContent()
-                .sensoryFeedback(.impact, trigger: snap?.updatedAt)
+                    Image(systemName: "arrow.clockwise").font(.caption2)
+                }.buttonStyle(.plain)
             }
 
             if let s = snap {
@@ -221,12 +215,8 @@ struct WeekChartView: View {
         return max(1.5, ceil(maxDaily * 1.2 * 10) / 10)
     }
 
-    private var xDomain: ClosedRange<Date> {
-        guard let first = last7Dates.first, let last = last7Dates.last else {
-            let now = Date()
-            return now...now
-        }
-        return first...last
+    private var allWeekStrings: [String] {
+        last7Dates.map { ChartFormatters.weekLabel.string(from: $0) }
     }
 
     var body: some View {
@@ -238,22 +228,26 @@ struct WeekChartView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         } else {
             Chart(flat) { item in
-                BarMark(x: .value("Date", item.date, unit: .day), y: .value("Cost", item.cost), stacking: .standard)
-                    .foregroundStyle(by: .value("Model", item.model))
-                    .cornerRadius(1)
+                BarMark(
+                    x: .value("Date", ChartFormatters.weekLabel.string(from: item.date)),
+                    y: .value("Cost", item.cost),
+                    stacking: .standard
+                )
+                .foregroundStyle(by: .value("Model", item.model))
+                .cornerRadius(1)
             }
             .chartForegroundStyleScale { (model: String) in
                 if model == "__empty__" { return Color.clear }
                 return ModelPalette.color(for: model)
             }
-            .chartXScale(domain: xDomain)
+            .chartXScale(domain: allWeekStrings)
             .chartYScale(domain: 0...yMax)
             .chartXAxis {
-                AxisMarks(preset: .aligned, position: .bottom, values: last7Dates) { val in
+                AxisMarks(preset: .aligned, position: .bottom, values: allWeekStrings) { val in
                     AxisGridLine(centered: true, stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.clear)
                     AxisValueLabel(anchor: .top) {
-                        if let d = val.as(Date.self) {
-                            Text(ChartFormatters.weekLabel.string(from: d))
+                        if let s = val.as(String.self) {
+                            Text(s)
                                 .font(.system(size: 6))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -264,7 +258,7 @@ struct WeekChartView: View {
             .chartYAxis(.hidden)
             .chartLegend(.hidden)
             .chartPlotStyle { plot in
-                plot.padding(.horizontal, 2).padding(.bottom, 2)
+                plot.padding(.horizontal, 4).padding(.bottom, 2)
             }
             .frame(height: 52)
         }

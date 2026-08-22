@@ -18,6 +18,12 @@ mkdir -p "build/${APP_NAME}.app/Contents/Resources"
 mkdir -p "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS"
 mkdir -p "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources"
 
+echo "==> 拷贝资源"
+cp Resources/BrandLight.png "build/${APP_NAME}.app/Contents/Resources/" 2>/dev/null || true
+cp Resources/BrandDark.png "build/${APP_NAME}.app/Contents/Resources/" 2>/dev/null || true
+cp Resources/BrandLight.png "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
+cp Resources/BrandDark.png "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
+
 echo "==> 编写 Info.plist"
 cat > "build/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

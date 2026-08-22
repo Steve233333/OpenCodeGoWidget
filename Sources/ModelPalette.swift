@@ -99,28 +99,36 @@ enum ChartFormatters {
     }()
 }
 
-// 品牌方环图标（深浅色自适应，如用户提供的两张图）
+// 品牌方环图标（深浅色自适应，用户提供的两张 PNG）
 struct BrandIconView: View {
     @Environment(\.colorScheme) var colorScheme
     var size: CGFloat = 14
+    private var imageName: String {
+        // 用在浅色模式.png 为白外框（浅色），用在深色模式.png 为黑外框（深色）
+        // Bundle.main 在 App 与 Widget appex 中指向各自 bundle，需确保图片已拷贝到两处 Resources
+        colorScheme == .dark ? "BrandDark" : "BrandLight"
+    }
     var body: some View {
-        ZStack {
-            // 外框：浅色白 / 深色黑，带圆角
-            RoundedRectangle(cornerRadius: size * 0.14, style: .continuous)
-                .fill(colorScheme == .dark ? Color.black : Color.white)
-                .frame(width: size, height: size)
-                .overlay(
+        Group {
+            if let path = Bundle.main.path(forResource: imageName, ofType: "png"),
+               let nsImg = NSImage(contentsOfFile: path) {
+                Image(nsImage: nsImg)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                // 回退：若资源缺失，显示之前的自绘方环，避免空白
+                ZStack {
                     RoundedRectangle(cornerRadius: size * 0.14, style: .continuous)
-                        .stroke(Color.primary.opacity(colorScheme == .dark ? 0.15 : 0.08), lineWidth: 0.5)
-                )
-                .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08), radius: 0.8, x: 0, y: 0.5)
-            // 内空：水鸭青 #4F6F7A，对应截图内框
-            RoundedRectangle(cornerRadius: size * 0.05, style: .continuous)
-                .fill(Color(red: 0.32, green: 0.45, blue: 0.49))
-                .frame(width: size * 0.46, height: size * 0.62)
+                        .fill(colorScheme == .dark ? Color.black : Color.white)
+                    RoundedRectangle(cornerRadius: size * 0.05, style: .continuous)
+                        .fill(Color(red: 0.32, green: 0.45, blue: 0.49))
+                        .frame(width: size * 0.46, height: size * 0.62)
+                }
+            }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.12, style: .continuous))
     }
 }
 

@@ -254,18 +254,14 @@ struct MonthChartView: View {
         return 0...capped
     }
 
-    private var xDomain: ClosedRange<Date> {
-        guard let first = monthDates.first, let last = monthDates.last else {
-            let now = Date()
-            return now...now
-        }
-        return first...last
+    private var allMonthStrings: [String] {
+        monthDates.map { ChartFormatters.monthLabel.string(from: $0) }
     }
 
     var body: some View {
         Chart(flat) { item in
             BarMark(
-                x: .value("Date", item.date, unit: .day),
+                x: .value("Date", ChartFormatters.monthLabel.string(from: item.date)),
                 y: .value("Cost", item.cost),
                 stacking: .standard
             )
@@ -276,7 +272,7 @@ struct MonthChartView: View {
             if model == "__empty__" { return Color.clear }
             return ModelPalette.color(for: model)
         }
-        .chartXScale(domain: xDomain)
+        .chartXScale(domain: allMonthStrings)
         .chartYScale(domain: yDomain)
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { val in
@@ -289,11 +285,11 @@ struct MonthChartView: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .stride(by: .day, count: 3)) { val in
+            AxisMarks(values: allMonthStrings.enumerated().filter { $0.offset % 3 == 0 }.map { $0.element }) { val in
                 AxisGridLine().foregroundStyle(Color.clear)
                 AxisValueLabel(centered: true) {
-                    if let d = val.as(Date.self) {
-                        Text(ChartFormatters.monthLabel.string(from: d)).font(.system(size: 7)).foregroundStyle(.secondary)
+                    if let s = val.as(String.self) {
+                        Text(s).font(.system(size: 7)).foregroundStyle(.secondary)
                     }
                 }
             }
