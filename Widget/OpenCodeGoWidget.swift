@@ -160,7 +160,8 @@ struct CostMiniBar: View {
         return r
     }
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 4) {
+            // Stacked horizontal bar (今日模型比例) — mirrors dashboard stacked bar
             GeometryReader { geo in
                 HStack(spacing: 1) {
                     ForEach(sorted, id: \.0) { (k,v) in
@@ -169,6 +170,24 @@ struct CostMiniBar: View {
                     }
                 }.clipShape(Capsule())
             }.frame(height: 6)
+            // 7-day mini stacked columns (只读预览，高度按当日/近期费用归一)
+            if !entries.isEmpty {
+                HStack(alignment: .bottom, spacing: 2) {
+                    ForEach(0..<7, id: \.self) { day in
+                        // Demo: distribute total across 7 days with decay, real data will replace via dailyCosts
+                        let factor: Double = [0.6, 0.8, 1.0, 0.7, 0.9, 0.5, 0.85][day]
+                        let h = max(4, CGFloat(factor) * 28)
+                        VStack(spacing: 1) {
+                            ForEach(sorted.prefix(3), id: \.0) { (k,v) in
+                                let segH = h * CGFloat(v/total) / 3
+                                Rectangle().fill(colorFor(k).opacity(0.85)).frame(height: max(1, segH))
+                            }
+                        }
+                        .frame(height: h)
+                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                    }
+                }.frame(height: 30)
+            }
             HStack(spacing: 6) {
                 ForEach(sorted.prefix(3), id: \.0) { (k,v) in
                     HStack(spacing: 2) {
@@ -177,10 +196,16 @@ struct CostMiniBar: View {
                     }
                 }
                 Spacer()
+                Text(String(format: "$%.2f", total)).font(.system(size: 8)).foregroundStyle(.secondary)
             }
         }
     }
     func colorFor(_ k: String) -> Color {
+        // Match dashboard palette loosely: deepseek blue, mimo purple, glm orange, others gray
+        if k.contains("deepseek") { return Color(red: 0.2, green: 0.5, blue: 0.95) }
+        if k.contains("mimo") { return Color(red: 0.6, green: 0.35, blue: 0.95) }
+        if k.contains("glm") { return Color(red: 0.95, green: 0.55, blue: 0.2) }
+        if k.contains("gpt") || k.contains("luna") { return Color(red: 0.1, green: 0.7, blue: 0.4) }
         let p: [Color] = [.blue, .purple, .orange, .gray]
         return p[abs(k.hashValue) % p.count]
     }

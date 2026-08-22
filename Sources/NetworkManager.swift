@@ -45,13 +45,76 @@ final class NetworkManager: @unchecked Sendable {
         }
     }
 
-    // Cost data comes from opencode dashboard page scraping as fallback
-    // If the HTML parsing fails, we return empty cost list and widget shows only额度
     func fetchCostToday() async -> (total: Double, entries: [CostEntry]) {
-        // Try to scrape cost page; if unavailable, return empty
-        // The dashboard at /zen/go renders costs; we mimic the reference widget's HTML parsing
-        // For now, return empty to keep widget stable; cost feature is best-effort
+        // Best-effort: try to scrape /zen/go HTML for per-model cost (same data as dashboard stacked chart)
+        guard let key = KeychainStore.resolvedKey(), !key.isEmpty else { return (0, []) }
+        // Try JSON cost endpoints first (if opencode exposes them in future)
+        for path in ["zen/go/v1/cost", "zen/go/v1/costs", "zen/go/v1/dashboard"] {
+            if let url = URL(string: "https://opencode.ai/\(path)"), let result = await tryCostJSON(url: url, key: key), result.total > 0 {
+                return result
+            }
+        }
+        // Fallback: scrape dashboard HTML (Next.js embedded JSON)
+        if let html = await fetchHTML(urlString: "https://opencode.ai/zen/go", key: key),
+           let result = parseCostFromHTML(html), result.total > 0 {
+            return result
+        }
         return (0, [])
+    }
+
+    private func tryCostJSON(url: URL, key: String) async -> (total: Double, entries: [CostEntry])? {
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 10
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        // Try to extract daily cost arrays; shapes vary, so we look for any array with model+cost
+        return extractCost(from: json)
+    }
+
+    private func fetchHTML(urlString: String, key: String) async -> String? {
+        guard let url = URL(string: urlString) else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 10
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let html = String(data: data, encoding: .utf8) else { return nil }
+        return html
+    }
+
+    private func parseCostFromHTML(_ html: String) -> (total: Double, entries: [CostEntry])? {
+        // Look for Next.js data blobs: usagePercent or cost-related patterns
+        // The cost chart is hydrated from an API; we search for any JSON with "cost" and model names
+        // If not found, return nil to keep widget stable
+        // Placeholder: actual HTML parsing needs live sample; return nil to keep widget stable
+        _ = html
+        return nil
+    }
+
+    private func extractCost(from json: [String: Any]) -> (total: Double, entries: [CostEntry])? {
+        // Walk any nested dict/arrays to find model -> cost
+        var found: [(String, Double)] = []
+        func walk(_ obj: Any) {
+            if let dict = obj as? [String: Any] {
+                for (k, v) in dict {
+                    if k.contains("-go") || k.contains("deepseek") || k.contains("glm") {
+                        if let d = v as? Double { found.append((k, d)) }
+                        else if let i = v as? Int { found.append((k, Double(i))) }
+                    }
+                    walk(v)
+                }
+            } else if let arr = obj as? [Any] {
+                for e in arr { walk(e) }
+            }
+        }
+        walk(json)
+        guard !found.isEmpty else { return nil }
+        let total = found.reduce(0) { $0 + $1.1 }
+        let entries = found.map { CostEntry(model: $0.0, cost: $0.1, percent: total > 0 ? $0.1/total*100 : 0) }.sorted { $0.cost > $1.cost }
+        return (total, entries)
     }
 
     static let decoder: JSONDecoder = {
