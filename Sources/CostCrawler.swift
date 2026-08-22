@@ -46,34 +46,33 @@ final class CostCrawler: @unchecked Sendable {
         let shared = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
         var workspaceID: String? = shared?.string(forKey: "workspaceID")
         var authCookie: String? = shared?.string(forKey: "authCookie")
-        if let w = workspaceID, !w.isEmpty, let a = authCookie, !a.isEmpty {
-            if let mc = await fetchWorkspaceCost(workspaceID: w, authCookie: a) { return mc }
+        // Normalize workspaceID: user may have pasted full URL https://opencode.ai/workspace/wrk_.../usage
+        if let w = workspaceID, w.contains("/workspace/") {
+            if let r = w.range(of: "/workspace/") {
+                let rest = String(w[r.upperBound...])
+                workspaceID = rest.split(separator: "/").first.map(String.init) ?? w
+            }
         }
-
-        // 2. Try HAR on Desktop (user exported via Safari)
-        let harPath = NSString(string: "~/Desktop/opencode.ai.har").expandingTildeInPath
-        if workspaceID == nil || authCookie == nil {
-            if let harData = try? Data(contentsOf: URL(fileURLWithPath: harPath)),
+        // Normalize authCookie if user pasted a HAR file path (e.g. /Users/.../opencode.ai.har)
+        if let a = authCookie, (a.hasSuffix(".har") || a.contains(".har")) {
+            let harPath2 = NSString(string: a).expandingTildeInPath
+            if let harData = try? Data(contentsOf: URL(fileURLWithPath: harPath2)),
                let har = try? JSONSerialization.jsonObject(with: harData) as? [String: Any],
-               let log = har["log"] as? [String: Any],
-               let entries = log["entries"] as? [[String: Any]] {
+               let log = har["log"] as? [String: Any], let entries = log["entries"] as? [[String: Any]] {
                 for e in entries {
-                    if let req = e["request"] as? [String: Any],
-                       let cookies = req["cookies"] as? [[String: Any]] {
+                    if let req = e["request"] as? [String: Any], let cookies = req["cookies"] as? [[String: Any]] {
                         for c in cookies where (c["name"] as? String) == "auth" {
-                            if let v = c["value"] as? String, !v.isEmpty { authCookie = v }
-                        }
-                    }
-                    if let req = e["request"] as? [String: Any], let url = req["url"] as? String, url.contains("/workspace/") {
-                        if let m = url.range(of: "/workspace/") {
-                            let rest = String(url[m.upperBound...])
-                            let id = rest.split(separator: "/").first.map(String.init)
-                            if let id = id, id.hasPrefix("wrk_") { workspaceID = id }
+                            if let v = c["value"] as? String, !v.isEmpty { authCookie = v; break }
                         }
                     }
                 }
             }
         }
+        if let w = workspaceID, !w.isEmpty, let a = authCookie, !a.isEmpty {
+            if let mc = await fetchWorkspaceCost(workspaceID: w, authCookie: a) { return mc }
+        }
+
+        // 2. (Removed direct Desktop HAR read — sandboxed Widget cannot read ~/Desktop; use shared prefs instead)
 
         // 2. Fallback: try to find workspaceID in opencode config dir (if user had config.json with cookie)
         if workspaceID == nil {

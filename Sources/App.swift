@@ -254,8 +254,28 @@ struct SettingsView: View {
                         KeychainStore.save(t)
                         apiKey = t
                     }
-                    let ws = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let ac = authCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+                    var ws = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+                    var ac = authCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Normalize ws if full URL
+                    if ws.contains("/workspace/"), let r = ws.range(of: "/workspace/") {
+                        let rest = String(ws[r.upperBound...])
+                        ws = rest.split(separator: "/").first.map(String.init) ?? ws
+                    }
+                    // If ac is a HAR file path, extract real auth cookie
+                    if ac.hasSuffix(".har") || ac.contains(".har") {
+                        let expanded = NSString(string: ac).expandingTildeInPath
+                        if let data = try? Data(contentsOf: URL(fileURLWithPath: expanded)),
+                           let har = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let log = har["log"] as? [String: Any], let entries = log["entries"] as? [[String: Any]] {
+                            for e in entries {
+                                if let req = e["request"] as? [String: Any], let cookies = req["cookies"] as? [[String: Any]] {
+                                    for c in cookies where (c["name"] as? String) == "auth" {
+                                        if let v = c["value"] as? String, !v.isEmpty { ac = v; break }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
                     d?.set(ws, forKey: "workspaceID")
                     d?.set(ac, forKey: "authCookie")
@@ -276,7 +296,7 @@ struct SettingsView: View {
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
             workspaceID = d?.string(forKey: "workspaceID") ?? workspaceID
             authCookie = d?.string(forKey: "authCookie") ?? authCookie
-            // Auto-fill from Desktop HAR if fields still empty
+            // Auto-fill from Desktop HAR if fields still empty (extract real auth)
             if workspaceID.isEmpty || authCookie.isEmpty {
                 let harPath = NSString(string: "~/Desktop/opencode.ai.har").expandingTildeInPath
                 if let data = try? Data(contentsOf: URL(fileURLWithPath: harPath)),
@@ -294,11 +314,16 @@ struct SettingsView: View {
                             if let r = url.range(of: "/workspace/") {
                                 let rest = String(url[r.upperBound...])
                                 if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_"), workspaceID.isEmpty {
-                                    workspaceID = "https://opencode.ai/workspace/\(id)/usage"
+                                    // Store bare workspaceID, not full URL, to match CostCrawler
+                                    workspaceID = id
                                 }
                             }
                         }
                     }
+                    // Persist extracted values so next refresh uses real auth, not HAR path
+                    let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+                    if !workspaceID.isEmpty { d?.set(workspaceID, forKey: "workspaceID") }
+                    if !authCookie.isEmpty, !authCookie.hasSuffix(".har") { d?.set(authCookie, forKey: "authCookie") }
                 }
             }
         }
