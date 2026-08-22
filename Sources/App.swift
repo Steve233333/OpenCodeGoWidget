@@ -8,7 +8,9 @@ import Charts
 struct OpenCodeGoWidgetApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
-        WindowGroup(id: "main") {
+        // This app has one dashboard. WindowGroup creates a new instance for
+        // every external URL event, which is exactly what a widget tap sends.
+        Window("OpenCode Go", id: "main") {
             ContentView()
         }
         .handlesExternalEvents(matching: Set(arrayLiteral: "opencodego"))
@@ -63,7 +65,6 @@ struct ContentView: View {
                             Text("本月花费").font(.caption).foregroundStyle(.secondary)
                             Spacer()
                             Text(String(format: "$%.2f USD", monthlyTotal)).font(.headline).monospacedDigit()
-                            Text("· 今日 $\(String(format: "%.2f", snap.costTotal)) USD").font(.caption2).foregroundStyle(.secondary)
                         }
                         if snap.dailyCosts.isEmpty {
                             VStack(spacing: 6) {
@@ -113,10 +114,17 @@ struct ContentView: View {
             }
 
             Button { Task { await refresh() } } label: {
-                    if loading { ProgressView().scaleEffect(0.6) } else { Label("刷新", systemImage: "arrow.clockwise") }
-                }
-                .disabled(loading)
-                .buttonStyle(.borderedProminent)
+                Label(loading ? "正在刷新" : "刷新", systemImage: "arrow.clockwise")
+                    .rotationEffect(.degrees(loading ? 360 : 0))
+                    .animation(
+                        loading
+                            ? .linear(duration: 0.75).repeatForever(autoreverses: false)
+                            : .easeOut(duration: 0.16),
+                        value: loading
+                    )
+            }
+            .disabled(loading)
+            .buttonStyle(RefreshButtonStyle())
 
             if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
 
@@ -129,27 +137,18 @@ struct ContentView: View {
         .onOpenURL { url in
             if url.scheme == "opencodego" {
                 NSApp.activate(ignoringOtherApps: true)
-                // 触发刷新以确保显示最新月图
-                Task { await refresh() }
             }
         }
     }
 
     private func refresh() async {
+        guard !loading else { return }
         loading = true; error = nil
         do {
-            let usage = try await NetworkManager().fetchUsage()
-            let cost = await NetworkManager().fetchCostToday()
-            var entries: [String: Double] = [:]
-            for e in cost.entries { entries[e.model] = e.cost }
-            let snap = WidgetSnapshot(
-                rolling: usage.rolling.percent, weekly: usage.weekly.percent, monthly: usage.monthly.percent,
-                rollingReset: usage.rolling.resetsAt, weeklyReset: usage.weekly.resetsAt, monthlyReset: usage.monthly.resetsAt,
-                costTotal: cost.total, costEntries: entries, dailyCosts: cost.daily, updatedAt: Date(), error: nil as String?
-            )
+            let snap = try await WidgetSnapshotRefresher.fetch()
             WidgetDataStore.save(snap)
             snapshot = snap
-            WidgetCenter.shared.reloadAllTimelines()
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             self.error = msg
@@ -157,6 +156,20 @@ struct ContentView: View {
             if var s = snapshot { s.error = msg; WidgetDataStore.save(s); snapshot = s }
         }
         loading = false
+    }
+}
+
+struct RefreshButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(Color.accentColor.gradient))
+            .shadow(color: Color.accentColor.opacity(configuration.isPressed ? 0.12 : 0.28), radius: configuration.isPressed ? 2 : 6, y: configuration.isPressed ? 1 : 3)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.snappy(duration: 0.16, extraBounce: 0), value: configuration.isPressed)
     }
 }
 
@@ -181,8 +194,6 @@ struct QuotaRow: View {
         }
     }
     func color(_ p: Int) -> Color {
-        let used = 100 - p // remaining; if remaining low -> red
-        // Actually percent is remaining? Server percent is remaining. Invert for level
         let remaining = p
         if remaining < 20 { return .red }
         if remaining < 50 { return .orange }
@@ -249,7 +260,7 @@ struct MonthChartView: View {
     }
 
     private var flat: [DayModelCost] {
-        var map: [String: DailyCost] = Dictionary(uniqueKeysWithValues: dailyCosts.map { ($0.date, $0) })
+        let map: [String: DailyCost] = Dictionary(uniqueKeysWithValues: dailyCosts.map { ($0.date, $0) })
         var result: [DayModelCost] = []
         for date in monthDates {
             let key = ChartFormatters.day.string(from: date)

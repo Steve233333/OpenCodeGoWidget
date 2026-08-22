@@ -11,19 +11,12 @@ struct GoUsageEntry: TimelineEntry {
 struct RefreshIntent: AppIntent {
     static var title: LocalizedStringResource = "刷新 OpenCode Go"
     static var description = IntentDescription("立即刷新用量")
+    static var openAppWhenRun: Bool = false
+
     func perform() async throws -> some IntentResult {
-        let mgr = NetworkManager()
         var didSave = false
         do {
-            let usage = try await mgr.fetchUsage()
-            let cost = await mgr.fetchCostToday()
-            var entries: [String: Double] = [:]
-            for e in cost.entries { entries[e.model] = e.cost }
-            let snap = WidgetSnapshot(
-                rolling: usage.rolling.percent, weekly: usage.weekly.percent, monthly: usage.monthly.percent,
-                rollingReset: usage.rolling.resetsAt, weeklyReset: usage.weekly.resetsAt, monthlyReset: usage.monthly.resetsAt,
-                costTotal: cost.total, costEntries: entries, dailyCosts: cost.daily, updatedAt: Date(), error: nil as String?
-            )
+            let snap = try await WidgetSnapshotRefresher.fetch()
             WidgetDataStore.save(snap)
             didSave = true
         } catch {
@@ -40,7 +33,9 @@ struct RefreshIntent: AppIntent {
             snap.updatedAt = Date()
             WidgetDataStore.save(snap)
         }
-        WidgetCenter.shared.reloadAllTimelines()
+        // save() synchronizes the App Group first; the provider now uses this
+        // fresh snapshot instead of starting another network request.
+        WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         return .result()
     }
 }
@@ -53,23 +48,29 @@ struct Provider: TimelineProvider {
         completion(GoUsageEntry(date: Date(), snapshot: WidgetDataStore.load()))
     }
     func getTimeline(in context: Context, completion: @escaping (Timeline<GoUsageEntry>) -> Void) {
+        let cached = WidgetDataStore.load()
+        let now = Date()
+        let staleAfter: TimeInterval = 15 * 60
+
+        // A manual RefreshIntent has just stored a fresh snapshot. Return it
+        // directly so the widget changes as soon as WidgetKit reloads it.
+        guard cached == nil || now.timeIntervalSince(cached!.updatedAt) >= staleAfter else {
+            let next = cached!.updatedAt.addingTimeInterval(staleAfter)
+            completion(Timeline(entries: [GoUsageEntry(date: now, snapshot: cached)], policy: .after(next)))
+            return
+        }
+
         Task {
-            var snap = WidgetDataStore.load()
-            // Try background fetch
+            var snap = cached
             do {
-                let usage = try await NetworkManager().fetchUsage()
-                let cost = await NetworkManager().fetchCostToday()
-                var entries: [String: Double] = [:]
-                for e in cost.entries { entries[e.model] = e.cost }
-                let newSnap = WidgetSnapshot(rolling: usage.rolling.percent, weekly: usage.weekly.percent, monthly: usage.monthly.percent, rollingReset: usage.rolling.resetsAt, weeklyReset: usage.weekly.resetsAt, monthlyReset: usage.monthly.resetsAt, costTotal: cost.total, costEntries: entries, dailyCosts: cost.daily, updatedAt: Date(), error: nil as String?)
-                WidgetDataStore.save(newSnap)
-                snap = newSnap
+                let refreshed = try await WidgetSnapshotRefresher.fetch()
+                WidgetDataStore.save(refreshed)
+                snap = refreshed
             } catch {
-                // keep last snapshot, mark error
+                // Keep the last successful data when a scheduled fetch fails.
             }
-            let entry = GoUsageEntry(date: Date(), snapshot: snap)
-            let next = Calendar.current.date(byAdding: .minute, value: 15, to: Date()) ?? Date().addingTimeInterval(900)
-            completion(Timeline(entries: [entry], policy: .after(next)))
+            let entry = GoUsageEntry(date: now, snapshot: snap)
+            completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(staleAfter))))
         }
     }
 }
@@ -188,16 +189,11 @@ struct WeekChartView: View {
     private var last7Dates: [Date] {
         let cal = Calendar(identifier: .gregorian)
         let today = cal.startOfDay(for: Date())
-        let ref: Date = {
-            if let last = dailyCosts.last?.date, let d = ChartFormatters.day.date(from: last) { return d }
-            return today
-        }()
-        let end = cal.startOfDay(for: ref)
-        return (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: end) }
+        return (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: today) }
     }
 
     private var flat: [DayModelCost] {
-        var map = Dictionary(uniqueKeysWithValues: dailyCosts.map { ($0.date, $0) })
+        let map = Dictionary(uniqueKeysWithValues: dailyCosts.map { ($0.date, $0) })
         var result: [DayModelCost] = []
         for date in last7Dates {
             let key = ChartFormatters.day.string(from: date)
@@ -215,8 +211,10 @@ struct WeekChartView: View {
         return max(1.5, ceil(maxDaily * 1.2 * 10) / 10)
     }
 
-    private var allWeekStrings: [String] {
-        last7Dates.map { ChartFormatters.weekLabel.string(from: $0) }
+    private var weekDomain: ClosedRange<Date> {
+        let start = last7Dates.first ?? Date()
+        let end = last7Dates.last ?? start.addingTimeInterval(6 * 86_400)
+        return start...end
     }
 
     var body: some View {
@@ -229,7 +227,7 @@ struct WeekChartView: View {
         } else {
             Chart(flat) { item in
                 BarMark(
-                    x: .value("Date", ChartFormatters.weekLabel.string(from: item.date)),
+                    x: .value("Date", item.date, unit: .day),
                     y: .value("Cost", item.cost),
                     stacking: .standard
                 )
@@ -240,14 +238,15 @@ struct WeekChartView: View {
                 if model == "__empty__" { return Color.clear }
                 return ModelPalette.color(for: model)
             }
-            .chartXScale(domain: allWeekStrings)
+            .chartXScale(domain: weekDomain)
+            .chartXScale(range: .plotDimension(startPadding: 12, endPadding: 12))
             .chartYScale(domain: 0...yMax)
             .chartXAxis {
-                AxisMarks(values: allWeekStrings) { val in
+                AxisMarks(values: last7Dates) { val in
                     AxisGridLine(centered: true).foregroundStyle(Color.clear)
                     AxisValueLabel(centered: true, anchor: .top) {
-                        if let s = val.as(String.self) {
-                            Text(s)
+                        if let date = val.as(Date.self) {
+                            Text(ChartFormatters.weekLabel.string(from: date))
                                 .font(.system(size: 6))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -257,9 +256,6 @@ struct WeekChartView: View {
             }
             .chartYAxis(.hidden)
             .chartLegend(.hidden)
-            .chartPlotStyle { plot in
-                plot.padding(.horizontal, 4).padding(.bottom, 2)
-            }
             .frame(height: 52)
         }
     }
@@ -317,7 +313,7 @@ struct OpenCodeGoWidgetBundle: WidgetBundle {
 }
 
 struct OpenCodeGoWidget: Widget {
-    let kind = "OpenCodeGoWidget"
+    let kind = WidgetConstants.kind
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: Provider()) { entry in
             GoWidgetView(entry: entry)
