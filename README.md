@@ -1,4 +1,4 @@
-# OpenCode Go 套餐查看器
+# OpenCode Go 套餐小组件
 
 > macOS 原生小组件 + 仪表盘 · 实时查看 OpenCode Go 额度与按日按模型花费
 
@@ -31,7 +31,7 @@
 
 ## ✨ 这是什么
 
-**OpenCode Go 套餐查看器** 是为 [opencode.ai](https://opencode.ai) Go 套餐用户做的 macOS 轻量查看器，解决官网只能网页查额度、无法常驻看花费的痛点。
+**OpenCode Go 套餐小组件** 是为 [opencode.ai](https://opencode.ai) Go 套餐用户做的 macOS 轻量查看器，解决官网只能网页查额度、无法常驻看花费的痛点。
 
 - **桌面小组件**常驻：5 小时 / 周 / 月三档额度进度 + 近 7 天堆叠花费（仅点击柱状图进主 App，点其他区域不跳转）
 - **主 App 仪表盘**固定窗口 `620×860`：本月 `31 天`完整堆叠柱（空日留空不塌陷）、图例按模型分色、今日模型细分、实时刷新
@@ -41,7 +41,7 @@
 
 | 主 App（固定窗口） | 设置（HAR 一键导入） | 桌面小组件（中尺寸） |
 |---|---|---|
-| <img src="docs/images/app.png?v=20250822-3" width="320" alt="主 App 本月花费 31 天堆叠"> | <img src="docs/images/settings.png?v=20250822-3" width="320" alt="设置粘贴 API Key 与 workspace"> | <img src="docs/images/widget.png?v=20250822-3" width="320" alt="小组件 5小时周月+近7天"> |
+| <img src="docs/images/app.png?v=20250822-4" width="320" alt="主 App 本月花费 31 天堆叠"> | <img src="docs/images/settings.png?v=20250822-4" width="320" alt="设置粘贴 API Key 与 workspace"> | <img src="docs/images/widget.png?v=20250822-4" width="320" alt="小组件 5小时周月+近7天"> |
 
 > 图片为 `v1.0` 实机截图：本月 `$7.11 USD`、近 7 天 `$7.11 USD`、今日模型 `muse-spark 87%` 等与线上一致
 
@@ -118,7 +118,7 @@ open /Applications/OpenCodeGoWidget.app
 
 ## 📄 开源
 
-MIT License · 欢迎 Issue / PR · `opencode go 套餐查看器` 独立社区项目，与 `OpenCode` 官方无关
+MIT License · 欢迎 Issue / PR · `opencode go 套餐小组件` 独立社区项目，与 `OpenCode` 官方无关
 
 ---
 
