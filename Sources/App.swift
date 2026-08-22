@@ -40,8 +40,16 @@ struct ContentView: View {
                         if !snap.costEntries.isEmpty {
                             CostBar(entries: snap.costEntries, total: snap.costTotal)
                         } else {
-                            CostBar(entries: ["mimo-v2.5-go": 0.5, "deepseek-v4-flash-vision-exp-go": 0.35, "glm-5-go": 0.15], total: 1.0)
-                                .opacity(0.3)
+                            VStack(spacing: 6) {
+                                Text("暂无今日模型费用数据")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                Text("官方费用明细接口暂未开放，待 opencode 暴露真实分模型数据后自动显示")
+                                    .font(.system(size: 9)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            }
+                            .frame(height: 40)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.primary.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
                     }
                     Divider()

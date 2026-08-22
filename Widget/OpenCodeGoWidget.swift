@@ -108,8 +108,7 @@ struct GoWidgetView: View {
                                 CostMiniBar(entries: s.costEntries, total: s.costTotal)
                             } else {
                                 // 即使无费用数据也显示占位堆叠，保持与截图一致的视觉
-                                CostMiniBar(entries: ["mimo-v2.5-go": 0.5, "deepseek-v4-flash-vision-exp-go": 0.35, "glm-5-go": 0.15], total: 1.0)
-                                    .opacity(0.35)
+                                Text("暂无今日模型费用").font(.system(size: 8)).foregroundStyle(.secondary)
                             }
                         }
                         .frame(maxWidth: .infinity)
@@ -191,23 +190,9 @@ struct CostMiniBar: View {
                     }
                 }.clipShape(Capsule())
             }.frame(height: 6)
-            // 7-day mini stacked columns (只读预览，高度按当日/近期费用归一)
             if !entries.isEmpty {
-                HStack(alignment: .bottom, spacing: 2) {
-                    ForEach(0..<7, id: \.self) { day in
-                        // Demo: distribute total across 7 days with decay, real data will replace via dailyCosts
-                        let factor: Double = [0.6, 0.8, 1.0, 0.7, 0.9, 0.5, 0.85][day]
-                        let h = max(4, CGFloat(factor) * 28)
-                        VStack(spacing: 1) {
-                            ForEach(sorted.prefix(3), id: \.0) { (k,v) in
-                                let segH = h * CGFloat(v/total) / 3
-                                Rectangle().fill(colorFor(k).opacity(0.85)).frame(height: max(1, segH))
-                            }
-                        }
-                        .frame(height: h)
-                        .clipShape(RoundedRectangle(cornerRadius: 2))
-                    }
-                }.frame(height: 30)
+                Text("\(sorted.count) 个模型 · \(sorted.prefix(3).map{ short($0.0) }.joined(separator: " · "))")
+                    .font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
             }
             HStack(spacing: 6) {
                 ForEach(sorted.prefix(3), id: \.0) { (k,v) in
