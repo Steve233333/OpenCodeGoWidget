@@ -206,8 +206,10 @@ struct SettingsView: View {
             HStack {
                 Button("选择 HAR 文件") {
                     let panel = NSOpenPanel()
-                    panel.allowedContentTypes = [.init(filenameExtension: "har")!]
+                    panel.allowedContentTypes = [UTType(filenameExtension: "har") ?? .data, .json]
                     panel.allowsMultipleSelection = false
+                    panel.canChooseFiles = true
+                    panel.canChooseDirectories = false
                     if panel.runModal() == .OK, let url = panel.url {
                         if let data = try? Data(contentsOf: url),
                            let har = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -274,6 +276,31 @@ struct SettingsView: View {
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
             workspaceID = d?.string(forKey: "workspaceID") ?? workspaceID
             authCookie = d?.string(forKey: "authCookie") ?? authCookie
+            // Auto-fill from Desktop HAR if fields still empty
+            if workspaceID.isEmpty || authCookie.isEmpty {
+                let harPath = NSString(string: "~/Desktop/opencode.ai.har").expandingTildeInPath
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: harPath)),
+                   let har = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let log = har["log"] as? [String: Any],
+                   let entries = log["entries"] as? [[String: Any]] {
+                    for e in entries {
+                        if let req = e["request"] as? [String: Any],
+                           let cookies = req["cookies"] as? [[String: Any]] {
+                            for c in cookies where (c["name"] as? String) == "auth" {
+                                if let v = c["value"] as? String, !v.isEmpty, authCookie.isEmpty { authCookie = v }
+                            }
+                        }
+                        if let req = e["request"] as? [String: Any], let url = req["url"] as? String, url.contains("/workspace/") {
+                            if let r = url.range(of: "/workspace/") {
+                                let rest = String(url[r.upperBound...])
+                                if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_"), workspaceID.isEmpty {
+                                    workspaceID = "https://opencode.ai/workspace/\(id)/usage"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
