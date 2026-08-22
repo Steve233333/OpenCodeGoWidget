@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import WidgetKit
 
 @main
@@ -184,30 +186,94 @@ struct SettingsView: View {
     @Binding var apiKey: String
     @Environment(\.dismiss) var dismiss
     @State private var draft: String = ""
+    @State private var workspaceID: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "workspaceID") ?? ""
+    @State private var authCookie: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "authCookie") ?? ""
+    @State private var harStatus: String = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("设置").font(.headline)
-            Text("粘贴你的 OpenCode Go API Key（sk-...），可在 opencode.ai 的 Settings → API Keys 复制。Key 仅存本机钥匙串，也会尝试从 ~/.config/agent-vision-toolkit/env 的 ZEN_API_KEY 读取。")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("1. 粘贴 OpenCode Go API Key（sk-...），在 opencode.ai → Settings → API Keys 复制。")
+                .font(.caption2).foregroundStyle(.secondary)
             SecureField("sk-...", text: $draft)
                 .textFieldStyle(.roundedBorder)
+
+            Divider()
+            Text("2. 柱状图费用（可选）：粘贴你的 workspace 链接或 HAR，以启用按日按模型堆叠真数据")
+                .font(.caption2).foregroundStyle(.secondary)
+            TextField("https://opencode.ai/workspace/wrk_.../usage", text: $workspaceID)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption2)
+            HStack {
+                Button("选择 HAR 文件") {
+                    let panel = NSOpenPanel()
+                    panel.allowedContentTypes = [.init(filenameExtension: "har")!]
+                    panel.allowsMultipleSelection = false
+                    if panel.runModal() == .OK, let url = panel.url {
+                        if let data = try? Data(contentsOf: url),
+                           let har = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let log = har["log"] as? [String: Any],
+                           let entries = log["entries"] as? [[String: Any]] {
+                            for e in entries {
+                                if let req = e["request"] as? [String: Any],
+                                   let cookies = req["cookies"] as? [[String: Any]] {
+                                    for c in cookies where (c["name"] as? String) == "auth" {
+                                        if let v = c["value"] as? String {
+                                            authCookie = v
+                                            harStatus = "已从 HAR 提取 auth Cookie"
+                                        }
+                                    }
+                                }
+                                if let req = e["request"] as? [String: Any], let url = req["url"] as? String, url.contains("/workspace/") {
+                                    if let r = url.range(of: "/workspace/") {
+                                        let rest = String(url[r.upperBound...])
+                                        if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
+                                            workspaceID = id
+                                        }
+                                    }
+                                }
+                            }
+                            if !authCookie.isEmpty {
+                                UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.set(authCookie, forKey: "authCookie")
+                            }
+                        }
+                    }
+                }.controlSize(.small)
+                if !harStatus.isEmpty { Text(harStatus).font(.caption2).foregroundStyle(.green) }
+                Spacer()
+            }
+            TextField("auth Cookie（或直接选 HAR 自动填）", text: $authCookie)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption2)
+
             HStack {
                 Button("保存") {
                     let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !t.isEmpty {
                         KeychainStore.save(t)
                         apiKey = t
-                        WidgetCenter.shared.reloadAllTimelines()
                     }
+                    let ws = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let ac = authCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+                    d?.set(ws, forKey: "workspaceID")
+                    d?.set(ac, forKey: "authCookie")
+                    WidgetCenter.shared.reloadAllTimelines()
                     dismiss()
-                }.buttonStyle(.borderedProminent).disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.buttonStyle(.borderedProminent)
                 Button("取消", role: .cancel) { dismiss() }
                 Spacer()
             }
+            Text("提示：柱状图需要 workspace 链接或 HAR 里的 auth Cookie；不填则仅显示额度。HAR 覆盖路径 ~/Desktop/opencode.ai.har 也会自动读取。")
+                .font(.system(size: 9)).foregroundStyle(.secondary)
             Spacer()
         }
         .padding(20)
-        .frame(width: 420, height: 200)
-        .onAppear { draft = apiKey }
+        .frame(width: 520, height: 360)
+        .onAppear {
+            draft = apiKey
+            let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+            workspaceID = d?.string(forKey: "workspaceID") ?? workspaceID
+            authCookie = d?.string(forKey: "authCookie") ?? authCookie
+        }
     }
 }
