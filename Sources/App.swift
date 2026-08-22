@@ -6,11 +6,29 @@ import Charts
 
 @main
 struct OpenCodeGoWidgetApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView()
         }
+        .handlesExternalEvents(matching: Set(arrayLiteral: "opencodego"))
         .windowStyle(.hiddenTitleBar)
+    }
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, open urls: [URL]) {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) ?? NSApp.keyWindow ?? NSApp.windows.first {
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        return true
     }
 }
 
@@ -44,8 +62,8 @@ struct ContentView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text("本月花费").font(.caption).foregroundStyle(.secondary)
                             Spacer()
-                            Text(String(format: "$%.2f", monthlyTotal)).font(.headline).monospacedDigit()
-                            Text("· 今日 $\(String(format: "%.2f", snap.costTotal))").font(.caption2).foregroundStyle(.secondary)
+                            Text(String(format: "$%.2f USD", monthlyTotal)).font(.headline).monospacedDigit()
+                            Text("· 今日 $\(String(format: "%.2f", snap.costTotal)) USD").font(.caption2).foregroundStyle(.secondary)
                         }
                         if snap.dailyCosts.isEmpty {
                             VStack(spacing: 6) {
@@ -74,7 +92,7 @@ struct ContentView: View {
                                 HStack {
                                     Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
                                     Spacer()
-                                    Text(String(format: "$%.2f", snap.costTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+                                    Text(String(format: "$%.2f USD", snap.costTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
                                 }
                                 CostBar(entries: snap.costEntries, total: snap.costTotal)
                             }

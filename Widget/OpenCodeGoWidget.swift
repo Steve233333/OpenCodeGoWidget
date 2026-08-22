@@ -114,7 +114,7 @@ struct GoWidgetView: View {
                             HStack(spacing: 4) {
                                 Text("近7天").font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
-                                Text(String(format: "$%.2f", weekTotal)).font(.caption2.monospacedDigit().bold())
+                                Text(String(format: "$%.2f USD", weekTotal)).font(.caption2.monospacedDigit().bold())
                             }
                             if !s.dailyCosts.isEmpty {
                                 Link(destination: URL(string: "opencodego://month")!) {
@@ -243,9 +243,9 @@ struct WeekChartView: View {
             .chartXScale(domain: allWeekStrings)
             .chartYScale(domain: 0...yMax)
             .chartXAxis {
-                AxisMarks(preset: .aligned, position: .bottom, values: allWeekStrings) { val in
-                    AxisGridLine(centered: true, stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.clear)
-                    AxisValueLabel(anchor: .top) {
+                AxisMarks(values: allWeekStrings) { val in
+                    AxisGridLine(centered: true).foregroundStyle(Color.clear)
+                    AxisValueLabel(centered: true, anchor: .top) {
                         if let s = val.as(String.self) {
                             Text(s)
                                 .font(.system(size: 6))
@@ -298,7 +298,7 @@ struct CostMiniBar: View {
                     }
                 }
                 Spacer()
-                Text(String(format: "$%.2f", total)).font(.system(size: 8)).foregroundStyle(.secondary)
+                Text(String(format: "$%.2f USD", total)).font(.system(size: 8)).foregroundStyle(.secondary)
             }
         }
     }
