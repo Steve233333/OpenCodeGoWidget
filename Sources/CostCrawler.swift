@@ -39,10 +39,10 @@ final class CostCrawler: @unchecked Sendable {
         return nil
     }
 
-    // MARK: - Workspace HAR-based crawler (Cookie + workspaceID)
+    // MARK: - Workspace HAR-based crawler (Cookie + workspaceID) - App Group only, no direct file read
 
     private func fetchViaWorkspace() async -> MonthlyCost? {
-        // 1. Try App Group shared prefs (user filled in Settings window)
+        // Only via App Group shared prefs (user filled in Settings window, already normalized by App)
         let shared = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
         var workspaceID: String? = shared?.string(forKey: "workspaceID")
         var authCookie: String? = shared?.string(forKey: "authCookie")
@@ -53,66 +53,45 @@ final class CostCrawler: @unchecked Sendable {
                 workspaceID = rest.split(separator: "/").first.map(String.init) ?? w
             }
         }
-        // Normalize authCookie if user pasted a HAR file path (e.g. /Users/.../opencode.ai.har)
+        // Defensive: if stored authCookie is still a HAR path (legacy), ignore and treat as missing
+        // App.swift now ensures real 539B cookie is stored, so this is just a safety net.
         if let a = authCookie, (a.hasSuffix(".har") || a.contains(".har")) {
-            let harPath2 = NSString(string: a).expandingTildeInPath
-            if let harData = try? Data(contentsOf: URL(fileURLWithPath: harPath2)),
-               let har = try? JSONSerialization.jsonObject(with: harData) as? [String: Any],
-               let log = har["log"] as? [String: Any], let entries = log["entries"] as? [[String: Any]] {
-                for e in entries {
-                    if let req = e["request"] as? [String: Any], let cookies = req["cookies"] as? [[String: Any]] {
-                        for c in cookies where (c["name"] as? String) == "auth" {
-                            if let v = c["value"] as? String, !v.isEmpty { authCookie = v; break }
-                        }
-                    }
-                }
-            }
+            logger.warning("CostCrawler: authCookie is still HAR path, ignoring - App should have parsed it")
+            authCookie = nil
         }
-        if let w = workspaceID, !w.isEmpty, let a = authCookie, !a.isEmpty {
-            if let mc = await fetchWorkspaceCost(workspaceID: w, authCookie: a) { return mc }
-        }
-
-        // 2. (Removed direct Desktop HAR read — sandboxed Widget cannot read ~/Desktop; use shared prefs instead)
-
-        // 2. Fallback: try to find workspaceID in opencode config dir (if user had config.json with cookie)
-        if workspaceID == nil {
-            let candidates = [
-                NSString(string: "~/Desktop/opencode-go-widget-ref/config.json").expandingTildeInPath,
-                NSString(string: "~/Desktop/opencode.ai.har").expandingTildeInPath
-            ]
-            for p in candidates {
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: p)),
-                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let ws = j["workspaceID"] as? String, ws.hasPrefix("wrk_") {
-                    workspaceID = ws
-                    if authCookie == nil, let c = j["cookie"] as? String {
-                        // cookie is "auth=Fe26...."
-                        if c.contains("auth="), let m = c.range(of: "auth=") {
-                            authCookie = String(c[m.upperBound...]).split(separator: ";").first.map(String.init) ?? c
-                        } else {
-                            authCookie = c
-                        }
-                    }
-                }
-            }
-        }
-
-        guard let ws = workspaceID, let auth = authCookie else {
-            logger.info("CostCrawler: no workspaceID/auth in HAR, fallback to JSON")
+        guard let ws = workspaceID, !ws.isEmpty, let auth = authCookie, !auth.isEmpty else {
+            logger.info("CostCrawler: no workspaceID/auth in App Group, fallback to JSON")
             return nil
         }
-
         return await fetchWorkspaceCost(workspaceID: ws, authCookie: auth)
     }
 
     private func fetchWorkspaceCost(workspaceID: String, authCookie: String) async -> MonthlyCost? {
         let cal = Calendar.current
         let now = Date()
-        // Fetch current month (server expects 0-based month)
-        var comps = cal.dateComponents(in: TimeZone(identifier: "Asia/Shanghai")!, from: now)
+        let comps = cal.dateComponents(in: TimeZone(identifier: "Asia/Shanghai")!, from: now)
         let year = comps.year ?? 2026
         let month0 = (comps.month ?? 8) - 1
 
+        // Layered fetch: with X-Server header -> without -> fallback to JSON/HAR
+        if let mc = await fetchWorkspaceCostAttempt(workspaceID: workspaceID, authCookie: authCookie, year: year, month0: month0, includeServerHeader: true) {
+            return mc
+        }
+        logger.info("CostCrawler: retry without X-Server-Id")
+        if let mc = await fetchWorkspaceCostAttempt(workspaceID: workspaceID, authCookie: authCookie, year: year, month0: month0, includeServerHeader: false) {
+            return mc
+        }
+        logger.info("CostCrawler: _server both header variants failed, fallback to HAR cached JSON if available")
+        // HAR local fallback: try to parse locally cached HAR _server response if App has saved it via shared auth
+        // Retained branch but triggered from shared auth, not file path
+        if let mc = await fetchHARFallback() {
+            return mc
+        }
+        logger.info("CostCrawler: HAR fallback also nil, will try legacy JSON in caller")
+        return nil
+    }
+
+    private func fetchWorkspaceCostAttempt(workspaceID: String, authCookie: String, year: Int, month0: Int, includeServerHeader: Bool) async -> MonthlyCost? {
         let url = URL(string: "https://opencode.ai/_server")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -123,8 +102,10 @@ final class CostCrawler: @unchecked Sendable {
         req.setValue("https://opencode.ai/workspace/\(workspaceID)/usage", forHTTPHeaderField: "Referer")
         req.setValue("oc_locale=zh; auth=\(authCookie)", forHTTPHeaderField: "Cookie")
         req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
-        req.setValue("15702f3a12ff8bff357f8c2aa154a17e65b746d5f6b96adc9002c86ee0c15205", forHTTPHeaderField: "X-Server-Id")
-        req.setValue("server-fn:0", forHTTPHeaderField: "X-Server-Instance")
+        if includeServerHeader {
+            req.setValue("15702f3a12ff8bff357f8c2aa154a17e65b746d5f6b96adc9002c86ee0c15205", forHTTPHeaderField: "X-Server-Id")
+            req.setValue("server-fn:0", forHTTPHeaderField: "X-Server-Instance")
+        }
 
         let payload: [String: Any] = [
             "t": ["t": 9, "i": 0, "l": 4, "a": [["t": 1, "s": workspaceID], ["t": 0, "s": year], ["t": 0, "s": month0], ["t": 1, "s": "+08:00"]], "o": 0],
@@ -136,14 +117,36 @@ final class CostCrawler: @unchecked Sendable {
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
               let text = String(data: data, encoding: .utf8) else {
-            logger.error("CostCrawler workspace POST failed")
+            logger.error("CostCrawler workspace POST failed includeHeader=\(includeServerHeader)")
             return nil
         }
-
-        return parseServerFnCost(text)
+        // If server returns HTML (auth expired / X-Server session gone), parse will return nil and we will retry
+        if let mc = parseServerFnCost(text), !mc.daily.isEmpty {
+            cacheServerText(text)
+            return mc
+        }
+        logger.warning("CostCrawler: parseServerFnCost returned nil, likely HTML/auth expired")
+        return nil
     }
 
-    private func parseServerFnCost(_ text: String) -> MonthlyCost? {
+    private func fetchHARFallback() async -> MonthlyCost? {
+        // Intentionally not reading ~/Desktop/opencode.ai.har directly (sandbox deny)
+        // Instead, if App has previously persisted the last successful _server text into App Group, try it
+        let shared = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        if let cached = shared?.string(forKey: "lastServerText"), !cached.isEmpty,
+           let mc = parseServerFnCost(cached) {
+            logger.info("CostCrawler: HAR fallback via cached lastServerText succeeded")
+            return mc
+        }
+        // Legacy: try reading shared auth-triggered HAR JSON only if explicitly cached by App (not file path)
+        return nil
+    }
+
+    func cacheServerText(_ text: String) {
+        UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.set(text, forKey: "lastServerText")
+    }
+
+    func parseServerFnCost(_ text: String) -> MonthlyCost? {
         // text is: ;0x....;((self.$R=...)[{date:"2026-08-18",model:"mimo-v2.5",totalCost:123,...},...]
         let pattern = #"date:"([^"]+)",model:"([^"]+)",totalCost:(\d+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
@@ -161,8 +164,8 @@ final class CostCrawler: @unchecked Sendable {
             let model = String(text[mRange])
             let costStr = String(text[cRange])
             guard let costInt = Int(costStr) else { continue }
-            // totalCost is in micro-dollars? Divide by 1e6 for display, but keep raw for chart scaling
-            let cost = Double(costInt) / 1_000_000.0
+            // totalCost is in 1e-8 dollars (verified: 135915701 -> $1.359..., sum 5 days matches tooltip $1.36/$0.69)
+            let cost = Double(costInt) / 100_000_000.0
             byDate[date, default: [:]][model, default: 0] += cost
         }
         guard !byDate.isEmpty else { return nil }

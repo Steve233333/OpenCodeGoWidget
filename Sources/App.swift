@@ -215,27 +215,39 @@ struct SettingsView: View {
                            let har = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                            let log = har["log"] as? [String: Any],
                            let entries = log["entries"] as? [[String: Any]] {
+                            var foundAuth: String?
+                            var foundWS: String?
                             for e in entries {
                                 if let req = e["request"] as? [String: Any],
                                    let cookies = req["cookies"] as? [[String: Any]] {
                                     for c in cookies where (c["name"] as? String) == "auth" {
-                                        if let v = c["value"] as? String {
-                                            authCookie = v
-                                            harStatus = "已从 HAR 提取 auth Cookie"
+                                        if let v = c["value"] as? String, !v.isEmpty {
+                                            foundAuth = v
+                                            break
                                         }
                                     }
                                 }
-                                if let req = e["request"] as? [String: Any], let url = req["url"] as? String, url.contains("/workspace/") {
-                                    if let r = url.range(of: "/workspace/") {
-                                        let rest = String(url[r.upperBound...])
+                                if let req = e["request"] as? [String: Any], let u = req["url"] as? String, u.contains("/workspace/") {
+                                    if let r = u.range(of: "/workspace/") {
+                                        let rest = String(u[r.upperBound...])
                                         if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
-                                            workspaceID = id
+                                            foundWS = id
                                         }
                                     }
                                 }
                             }
-                            if !authCookie.isEmpty {
-                                UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.set(authCookie, forKey: "authCookie")
+                            if let v = foundAuth {
+                                authCookie = v
+                                harStatus = "已从 HAR 提取 auth Cookie (\(v.count)B)"
+                            }
+                            if let id = foundWS {
+                                workspaceID = id
+                            }
+                            let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+                            if let v = foundAuth { d?.set(v, forKey: "authCookie") }
+                            if let id = foundWS { d?.set(id, forKey: "workspaceID") }
+                            if foundAuth != nil || foundWS != nil {
+                                WidgetCenter.shared.reloadAllTimelines()
                             }
                         }
                     }
@@ -256,12 +268,13 @@ struct SettingsView: View {
                     }
                     var ws = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
                     var ac = authCookie.trimmingCharacters(in: .whitespacesAndNewlines)
-                    // Normalize ws if full URL
+                    // Normalize ws if full URL https://opencode.ai/workspace/wrk_.../usage
                     if ws.contains("/workspace/"), let r = ws.range(of: "/workspace/") {
                         let rest = String(ws[r.upperBound...])
                         ws = rest.split(separator: "/").first.map(String.init) ?? ws
                     }
-                    // If ac is a HAR file path, extract real auth cookie
+                    // If ac is a HAR file path or workspace full link pasted into auth field, extract real auth in host process
+                    var harWS: String?
                     if ac.hasSuffix(".har") || ac.contains(".har") {
                         let expanded = NSString(string: ac).expandingTildeInPath
                         if let data = try? Data(contentsOf: URL(fileURLWithPath: expanded)),
@@ -273,19 +286,43 @@ struct SettingsView: View {
                                         if let v = c["value"] as? String, !v.isEmpty { ac = v; break }
                                     }
                                 }
+                                if harWS == nil, let req = e["request"] as? [String: Any], let u = req["url"] as? String, u.contains("/workspace/") {
+                                    if let r = u.range(of: "/workspace/") {
+                                        let rest = String(u[r.upperBound...])
+                                        if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
+                                            harWS = id
+                                        }
+                                    }
+                                }
                             }
+                        }
+                    }
+                    // If ws still empty but HAR contained workspace, fill it
+                    if ws.isEmpty, let hw = harWS { ws = hw }
+                    // Also handle case where auth field contains full workspace URL pasted by mistake
+                    if ac.contains("/workspace/"), let r = ac.range(of: "/workspace/") {
+                        let rest = String(ac[r.upperBound...])
+                        if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
+                            if ws.isEmpty { ws = id }
+                            // auth was actually a URL, clear it to avoid storing URL as cookie
+                            if ac.hasPrefix("https://") { ac = "" }
                         }
                     }
                     let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
                     d?.set(ws, forKey: "workspaceID")
-                    d?.set(ac, forKey: "authCookie")
+                    // Only store real cookie (539B), never HAR path
+                    if !ac.isEmpty && !ac.hasSuffix(".har") && !ac.contains(".har") {
+                        d?.set(ac, forKey: "authCookie")
+                    } else if ac.isEmpty {
+                        // keep existing if new is empty
+                    }
                     WidgetCenter.shared.reloadAllTimelines()
                     dismiss()
                 }.buttonStyle(.borderedProminent)
                 Button("取消", role: .cancel) { dismiss() }
                 Spacer()
             }
-            Text("提示：柱状图需要 workspace 链接或 HAR 里的 auth Cookie；不填则仅显示额度。HAR 覆盖路径 ~/Desktop/opencode.ai.har 也会自动读取。")
+            Text("提示：柱状图需要 workspace 裸ID (wrk_...) 与 539B auth Cookie；粘贴 .har 路径或 https://.../workspace/wrk_.../usage 全链路时会在保存时即时解析为真实 Cookie 存入 App Group，无需手动复制。")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
             Spacer()
         }
@@ -294,38 +331,36 @@ struct SettingsView: View {
         .onAppear {
             draft = apiKey
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
-            workspaceID = d?.string(forKey: "workspaceID") ?? workspaceID
-            authCookie = d?.string(forKey: "authCookie") ?? authCookie
-            // Auto-fill from Desktop HAR if fields still empty (extract real auth)
-            if workspaceID.isEmpty || authCookie.isEmpty {
-                let harPath = NSString(string: "~/Desktop/opencode.ai.har").expandingTildeInPath
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: harPath)),
+            var storedWS = d?.string(forKey: "workspaceID") ?? ""
+            var storedAuth = d?.string(forKey: "authCookie") ?? ""
+            // Legacy migration: if stored values are still HAR path or full URL, parse in host process now
+            if storedWS.contains("/workspace/"), let r = storedWS.range(of: "/workspace/") {
+                let rest = String(storedWS[r.upperBound...])
+                storedWS = rest.split(separator: "/").first.map(String.init) ?? storedWS
+                d?.set(storedWS, forKey: "workspaceID")
+            }
+            if storedAuth.hasSuffix(".har") || storedAuth.contains(".har") {
+                let expanded = NSString(string: storedAuth).expandingTildeInPath
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: expanded)),
                    let har = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let log = har["log"] as? [String: Any],
                    let entries = log["entries"] as? [[String: Any]] {
                     for e in entries {
-                        if let req = e["request"] as? [String: Any],
-                           let cookies = req["cookies"] as? [[String: Any]] {
+                        if let req = e["request"] as? [String: Any], let cookies = req["cookies"] as? [[String: Any]] {
                             for c in cookies where (c["name"] as? String) == "auth" {
-                                if let v = c["value"] as? String, !v.isEmpty, authCookie.isEmpty { authCookie = v }
-                            }
-                        }
-                        if let req = e["request"] as? [String: Any], let url = req["url"] as? String, url.contains("/workspace/") {
-                            if let r = url.range(of: "/workspace/") {
-                                let rest = String(url[r.upperBound...])
-                                if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_"), workspaceID.isEmpty {
-                                    // Store bare workspaceID, not full URL, to match CostCrawler
-                                    workspaceID = id
-                                }
+                                if let v = c["value"] as? String, !v.isEmpty { storedAuth = v; break }
                             }
                         }
                     }
-                    // Persist extracted values so next refresh uses real auth, not HAR path
-                    let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
-                    if !workspaceID.isEmpty { d?.set(workspaceID, forKey: "workspaceID") }
-                    if !authCookie.isEmpty, !authCookie.hasSuffix(".har") { d?.set(authCookie, forKey: "authCookie") }
+                    d?.set(storedAuth, forKey: "authCookie")
+                    WidgetCenter.shared.reloadAllTimelines()
+                } else {
+                    // HAR path invalid, clear to avoid CostCrawler treating it as cookie
+                    storedAuth = ""
                 }
             }
+            workspaceID = storedWS
+            authCookie = storedAuth
         }
     }
 }
