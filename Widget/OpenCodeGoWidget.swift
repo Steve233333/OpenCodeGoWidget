@@ -1,6 +1,7 @@
 import SwiftUI
 import WidgetKit
 import AppIntents
+import Charts
 
 struct GoUsageEntry: TimelineEntry {
     let date: Date
@@ -96,19 +97,23 @@ struct GoWidgetView: View {
                         QuotaMiniRow(label: label, percent: percent, reset: reset)
                     }
                 } else {
-                    // 中尺寸：左侧迷你堆叠柱，右侧三档额度
+                    // 中尺寸：左侧近7天堆叠柱，右侧三档额度
                     HStack(alignment: .top, spacing: 8) {
                         VStack(alignment: .leading, spacing: 4) {
+                            let weekTotal = s.dailyCosts.suffix(7).reduce(0) { $0 + $1.total }
                             HStack {
-                                Text("今日").font(.caption2).foregroundStyle(.secondary)
+                                Text("近7天").font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
-                                Text(String(format: "$%.2f", s.costTotal)).font(.caption2.monospacedDigit().bold())
+                                Text(String(format: "$%.2f", weekTotal)).font(.caption2.monospacedDigit().bold())
                             }
-                            if !s.costEntries.isEmpty {
-                                CostMiniBar(entries: s.costEntries, total: s.costTotal)
+                            if !s.dailyCosts.isEmpty {
+                                WeekChartView(dailyCosts: s.dailyCosts)
                             } else {
-                                // 即使无费用数据也显示占位堆叠，保持与截图一致的视觉
-                                Text("暂无今日模型费用").font(.system(size: 8)).foregroundStyle(.secondary)
+                                Text("暂无近7天费用").font(.system(size: 8)).foregroundStyle(.secondary)
+                                    .frame(height: 40)
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.primary.opacity(0.04))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                         }
                         .frame(maxWidth: .infinity)
@@ -166,6 +171,70 @@ struct QuotaMiniRow: View {
         if h >= 24 { return "\(h/24)d" }
         if h > 0 { return "\(h)h\(m)m" }
         return "\(m)m"
+    }
+}
+
+struct WeekChartView: View {
+    let dailyCosts: [DailyCost]
+
+    private var last7Dates: [Date] {
+        let cal = Calendar(identifier: .gregorian)
+        let today = cal.startOfDay(for: Date())
+        let ref: Date = {
+            if let last = dailyCosts.last?.date, let d = ChartFormatters.day.date(from: last) { return d }
+            return today
+        }()
+        let end = cal.startOfDay(for: ref)
+        return (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: end) }
+    }
+
+    private var flat: [DayModelCost] {
+        var map = Dictionary(uniqueKeysWithValues: dailyCosts.map { ($0.date, $0) })
+        var result: [DayModelCost] = []
+        for date in last7Dates {
+            let key = ChartFormatters.day.string(from: date)
+            if let dc = map[key] {
+                for (m, c) in dc.entries where c > 0 {
+                    result.append(DayModelCost(date: date, model: m, cost: c))
+                }
+            }
+        }
+        return result
+    }
+
+    private var yMax: Double {
+        let maxDaily = dailyCosts.map { $0.total }.max() ?? 0
+        return max(1.5, ceil(maxDaily * 1.2 * 10) / 10)
+    }
+
+    var body: some View {
+        if dailyCosts.isEmpty {
+            Text("暂无近7天费用").font(.system(size: 8)).foregroundStyle(.secondary)
+                .frame(height: 40)
+                .frame(maxWidth: .infinity)
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        } else {
+            Chart(flat) { item in
+                BarMark(x: .value("Date", item.date, unit: .day), y: .value("Cost", item.cost), stacking: .standard)
+                    .foregroundStyle(by: .value("Model", item.model))
+                    .cornerRadius(1)
+            }
+            .chartForegroundStyleScale { (model: String) in ModelPalette.color(for: model) }
+            .chartYScale(domain: 0...yMax)
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .day)) { val in
+                    AxisValueLabel {
+                        if let d = val.as(Date.self) {
+                            Text(ChartFormatters.weekLabel.string(from: d)).font(.system(size: 6)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .chartYAxis(.hidden)
+            .chartLegend(.hidden)
+            .frame(height: 48)
+        }
     }
 }
 
@@ -233,7 +302,7 @@ struct OpenCodeGoWidget: Widget {
                 .containerBackground(for: .widget) { Color.clear }
         }
         .configurationDisplayName("OpenCode Go")
-        .description("今日花费 + 模型比例 + 5h/周/月额度")
+        .description("近7天堆叠 + 5h/周/月额度")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import WidgetKit
+import Charts
 
 @main
 struct OpenCodeGoWidgetApp: App {
@@ -32,26 +33,48 @@ struct ContentView: View {
             }
 
             if let snap = snapshot {
-                VStack(spacing: 10) {
-                    VStack(spacing: 4) {
-                        HStack {
-                            Text("今日花费").font(.caption).foregroundStyle(.secondary)
+                VStack(spacing: 12) {
+                    // 月度堆叠柱状图（整月长度，如截图）
+                    VStack(alignment: .leading, spacing: 6) {
+                        let monthlyTotal = snap.dailyCosts.reduce(0) { $0 + $1.total }
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text("本月花费").font(.caption).foregroundStyle(.secondary)
                             Spacer()
-                            Text(String(format: "$%.2f", snap.costTotal)).font(.headline).monospacedDigit()
+                            Text(String(format: "$%.2f", monthlyTotal)).font(.headline).monospacedDigit()
+                            Text("· 今日 $\(String(format: "%.2f", snap.costTotal))").font(.caption2).foregroundStyle(.secondary)
                         }
-                        if !snap.costEntries.isEmpty {
-                            CostBar(entries: snap.costEntries, total: snap.costTotal)
-                        } else {
+                        if snap.dailyCosts.isEmpty {
                             VStack(spacing: 6) {
-                                Text("暂无今日模型费用数据")
+                                Text("暂无本月模型费用数据")
                                     .font(.caption2).foregroundStyle(.secondary)
-                                Text("官方费用明细接口暂未开放，待 opencode 暴露真实分模型数据后自动显示")
+                                Text("配置 workspace 后自动拉取按日堆叠真数据")
                                     .font(.system(size: 9)).foregroundStyle(.secondary).multilineTextAlignment(.center)
                             }
-                            .frame(height: 40)
+                            .frame(height: 120)
                             .frame(maxWidth: .infinity)
                             .background(Color.primary.opacity(0.05))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            MonthChartView(dailyCosts: snap.dailyCosts)
+                                .frame(height: 160)
+                            // 图例
+                            let allModels = Set(snap.dailyCosts.flatMap { $0.entries.keys })
+                            let legend = ModelPalette.ordered.filter { allModels.contains($0) } + allModels.filter { !ModelPalette.ordered.contains($0) }.sorted()
+                            if !legend.isEmpty {
+                                WrappingLegendView(models: legend)
+                            }
+                        }
+                        // 今日模型细分保留，便于对比
+                        if !snap.costEntries.isEmpty {
+                            VStack(spacing: 4) {
+                                HStack {
+                                    Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text(String(format: "$%.2f", snap.costTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+                                }
+                                CostBar(entries: snap.costEntries, total: snap.costTotal)
+                            }
+                            .padding(.top, 4)
                         }
                     }
                     Divider()
@@ -78,7 +101,7 @@ struct ContentView: View {
             Spacer()
         }
         .padding(20)
-        .frame(minWidth: 380, minHeight: 320)
+        .frame(minWidth: 560, minHeight: 460)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
         .task { if snapshot == nil { await refresh() } }
     }
@@ -179,6 +202,88 @@ struct CostBar: View {
     }
     func short(_ s: String) -> String {
         s.replacingOccurrences(of: " (go)", with: "").replacingOccurrences(of: "-go", with: "")
+    }
+}
+
+struct MonthChartView: View {
+    let dailyCosts: [DailyCost]
+
+    private var monthDates: [Date] {
+        let cal = Calendar(identifier: .gregorian)
+        let refDate: Date = {
+            if let last = dailyCosts.last?.date,
+               let d = ChartFormatters.day.date(from: last) { return d }
+            return Date()
+        }()
+        guard let monthInterval = cal.dateInterval(of: .month, for: refDate),
+              let days = cal.range(of: .day, in: .month, for: refDate) else { return [] }
+        return days.compactMap { day -> Date? in
+            cal.date(byAdding: .day, value: day - 1, to: monthInterval.start)
+        }
+    }
+
+    private var flat: [DayModelCost] {
+        var map: [String: DailyCost] = Dictionary(uniqueKeysWithValues: dailyCosts.map { ($0.date, $0) })
+        var result: [DayModelCost] = []
+        for date in monthDates {
+            let key = ChartFormatters.day.string(from: date)
+            if let dc = map[key] {
+                for (model, cost) in dc.entries where cost > 0 {
+                    result.append(DayModelCost(date: date, model: model, cost: cost))
+                }
+            }
+        }
+        return result
+    }
+
+    private var yDomain: ClosedRange<Double> {
+        let maxDaily = dailyCosts.map { $0.total }.max() ?? 0
+        let top = max(2.5, ceil(maxDaily * 1.2 * 10) / 10)
+        let capped = min(max(top, 2.5), 6.0)
+        return 0...capped
+    }
+
+    var body: some View {
+        Chart(flat) { item in
+            BarMark(
+                x: .value("Date", item.date, unit: .day),
+                y: .value("Cost", item.cost),
+                stacking: .standard
+            )
+            .foregroundStyle(by: .value("Model", item.model))
+            .cornerRadius(1)
+        }
+        .chartForegroundStyleScale { (model: String) in
+            ModelPalette.color(for: model)
+        }
+        .chartYScale(domain: yDomain)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { val in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2,2])).foregroundStyle(Color.primary.opacity(0.12))
+                AxisValueLabel {
+                    if let v = val.as(Double.self) {
+                        Text(String(format: "$%.0f", v)).font(.system(size: 8)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .day, count: 3)) { val in
+                AxisGridLine().foregroundStyle(Color.clear)
+                AxisValueLabel(centered: true) {
+                    if let d = val.as(Date.self) {
+                        Text(ChartFormatters.monthLabel.string(from: d)).font(.system(size: 7)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .chartPlotStyle { plot in
+            plot
+                .background(Color.primary.opacity(0.03))
+                .border(Color.primary.opacity(0.08), width: 0.5)
+        }
+        .chartLegend(.hidden)
+        .padding(.top, 4)
     }
 }
 
