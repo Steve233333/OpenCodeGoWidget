@@ -47,8 +47,10 @@ final class NetworkManager: @unchecked Sendable {
 
     func fetchCostToday() async -> (total: Double, entries: [CostEntry], daily: [DailyCost]) {
         if let mc = await CostCrawler.shared.fetchMonthlyCosts() {
-            let entries = mc.todayEntries.map { CostEntry(model: $0.key, cost: $0.value, percent: mc.todayEntries.values.reduce(0,+)>0 ? $0.value/mc.todayEntries.values.reduce(0,+)*100 : 0) }.sorted { $0.cost > $1.cost }
-            return (mc.todayEntries.values.reduce(0,+), entries, mc.daily)
+            let today = mc.todayEntries
+            let total = today.values.reduce(0, +)
+            let entries = today.map { CostEntry(model: $0.key, cost: $0.value, percent: total > 0 ? $0.value / total * 100 : 0) }.sorted { $0.cost > $1.cost }
+            return (total, entries, mc.daily)
         }
         return (0, [], [])
     }

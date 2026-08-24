@@ -106,18 +106,27 @@ struct ContentView: View {
                                 WrappingLegendView(models: legend)
                             }
                         }
-                        // 今日模型细分保留，便于对比
-                        if !snap.costEntries.isEmpty {
-                            VStack(spacing: 4) {
-                                HStack {
-                                    Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
-                                    Spacer()
+                        // 今日模型：当日无使用显示占位，避免回退到昨日
+                        VStack(spacing: 4) {
+                            HStack {
+                                Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
+                                Spacer()
+                                if snap.costEntries.isEmpty {
+                                    Text("今日暂无使用 · $0.00 USD").font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+                                } else {
                                     Text(String(format: "$%.2f USD", snap.costTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
                                 }
+                            }
+                            if snap.costEntries.isEmpty {
+                                Capsule()
+                                    .fill(Color.primary.opacity(0.08))
+                                    .frame(height: 8)
+                                    .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
+                            } else {
                                 CostBar(entries: snap.costEntries, total: snap.costTotal)
                             }
-                            .padding(.top, 4)
                         }
+                        .padding(.top, 4)
                     }
                     Divider()
                     QuotaRow(label: "5小时", percent: snap.rolling, reset: snap.rollingReset)

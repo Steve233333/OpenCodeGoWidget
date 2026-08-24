@@ -11,14 +11,22 @@ struct MonthlyCost: Equatable {
     let daily: [DailyCost]
     var total: Double { daily.reduce(0) { $0 + $1.total } }
     var todayEntries: [String: Double] {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
+        todayEntries(for: Date())
+    }
+
+    /// 可注入日期，便于测试；当日无数据返回 [:]，避免回退到昨日导致“今日用量”不刷新
+    func todayEntries(for date: Date) -> [String: Double] {
+        let tz = TimeZone(identifier: "Asia/Shanghai")!
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+        // 复用 ChartFormatters.day 的 Asia/Shanghai 语义，保证与 daily 解析一致
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
-        fmt.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        let todayStr = fmt.string(from: today)
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = tz
+        let todayStr = fmt.string(from: date)
         if let d = daily.first(where: { $0.date == todayStr }) { return d.entries }
-        return daily.last?.entries ?? [:]
+        return [:]
     }
 }
 
