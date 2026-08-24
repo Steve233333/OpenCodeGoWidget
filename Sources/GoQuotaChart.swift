@@ -105,19 +105,21 @@ struct GoQuotaChart: View {
                     }
                 }
             }
-            // X 轴刻度：轴优先，横排等分，基于 monthlyBaseline 倍率
+            // X 轴刻度：轴优先，与条同尺（ratio），Kimi 1x 对齐其月条末端
             HStack(spacing: 6) {
                 Color.clear.frame(width: 130, height: 1)
-                VStack(spacing: 4) {
-                    Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
-                    HStack(spacing: 0) {
-                        // 均匀铺开，保证视觉统一
+                GeometryReader { geo in
+                    let totalW = geo.size.width
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
                         ForEach(tickPairs, id: \.0) { pair in
+                            let x = totalW * ratio(for: pair.1)
                             VStack(spacing: 2) {
                                 Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 4)
                                 Text(pair.0).font(.system(size: 7)).foregroundStyle(.secondary)
                             }
-                            .frame(maxWidth: .infinity)
+                            .frame(width: 28)
+                            .offset(x: min(max(0, x - 14), totalW - 28))
                         }
                     }
                 }
@@ -201,32 +203,30 @@ private struct QuotaBarRowNested: View {
             }
             .frame(width: 130, alignment: .leading)
 
-            // 嵌套月内：总长 = monthly 在轴上的位置，内部 5h 与周按比例嵌套
+            // 嵌套月内：总长 = monthly 在轴上的位置，内部按线性比例（22.45%/51.02%）避免对数膨胀
             GeometryReader { geo in
                 let totalW = geo.size.width
-                let xMonthly = totalW * ratio(quota.monthly ?? 0)
-                let xWeekly = totalW * ratio(quota.weekly ?? 0)
-                let xH5 = totalW * ratio(quota.h5 ?? 0)
-                // 嵌套：红 0~h5，橙 h5~weekly，绿 weekly~monthly
-                let wH5 = max(0, xH5)
-                let wWeekly = max(0, xWeekly - xH5)
-                let wMonthly = max(0, xMonthly - xWeekly)
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.06))
-                    HStack(spacing: 0) {
-                        if wH5 > 0 {
-                            Rectangle().fill(c5h).frame(width: wH5)
+                let monthlyVal = quota.monthly ?? 0
+                let xMonthly = totalW * ratio(monthlyVal)
+                if let m = quota.monthly, m > 0 {
+                    let h5 = quota.h5 ?? 0
+                    let w = quota.weekly ?? 0
+                    let wH5 = xMonthly * CGFloat(h5) / CGFloat(m)
+                    let wWeekly = xMonthly * CGFloat(max(0, w - h5)) / CGFloat(m)
+                    let wRemain = max(0, xMonthly - wH5 - wWeekly)
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.06))
+                        HStack(spacing: 0) {
+                            if wH5 > 0 { Rectangle().fill(c5h).frame(width: wH5) }
+                            if wWeekly > 0 { Rectangle().fill(cWeekly).frame(width: wWeekly) }
+                            if wRemain > 0 { Rectangle().fill(cMonthly).frame(width: wRemain) }
+                            Spacer(minLength: 0)
                         }
-                        if wWeekly > 0 {
-                            Rectangle().fill(cWeekly).frame(width: wWeekly)
-                        }
-                        if wMonthly > 0 {
-                            Rectangle().fill(cMonthly).frame(width: wMonthly)
-                        }
-                        Spacer(minLength: 0)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.3))
                     }
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.3))
+                } else {
+                    ZStack(alignment: .leading) { Capsule().fill(Color.primary.opacity(0.06)) }
                 }
             }
             .frame(height: 8)
