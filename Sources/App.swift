@@ -253,9 +253,9 @@ struct QuotaRow: View {
         }
     }
     func color(_ p: Int) -> Color {
-        let remaining = p
-        if remaining < 20 { return .red }
-        if remaining < 50 { return .orange }
+        // p 为已用占比，越高越告警
+        if p >= 80 { return .red }
+        if p >= 50 { return .orange }
         return .green
     }
     func resetText(_ d: Date) -> String {

@@ -19,6 +19,21 @@ struct GoQuotaChart: View {
         quotas.sorted { ($0.h5 ?? Int.max) < ($1.h5 ?? Int.max) }
     }
 
+    // 官网黄图倍率基线：Kimi K3 每5小时 110 请求 ≈ 1x，250x ≈ 27500，与官方条长度一致（已上网核实）
+    private let baseline: Int = 110
+    private var tickPairs: [(String, Int)] {
+        [( "1x", baseline*1), ("10x", baseline*10), ("25x", baseline*25), ("50x", baseline*50), ("100x", baseline*100), ("250x", baseline*250)]
+    }
+    // 与 BarSegment 同尺的混合对数比例（0.72 log + 0.28 linear），用于刻度与条同把尺子
+    private func ratio(for value: Int) -> CGFloat {
+        guard value > 0, maxMonthly > 0 else { return 0 }
+        let logV = log10(Double(value) + 10)
+        let logM = log10(Double(maxMonthly) + 10)
+        let logRatio = logV / logM
+        let linear = CGFloat(value) / CGFloat(maxMonthly)
+        return CGFloat(0.72 * logRatio + 0.28 * Double(linear))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -48,21 +63,27 @@ struct GoQuotaChart: View {
                     QuotaBarRow(quota: q, maxMonthly: maxMonthly)
                 }
             }
-            // X 轴刻度：与条轨道同尺（最大月配额 226600），横排等分，不再用 position
+            // X 轴刻度：与条同尺（基线 110，log 混合），横排按比例而非等分，彻底消除 position 歪斜
             HStack(spacing: 6) {
                 Color.clear.frame(width: 130, height: 1)
-                VStack(spacing: 4) {
-                    Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
-                    HStack(spacing: 0) {
-                        ForEach(["1x", "10x", "25x", "50x", "100x", "250x"], id: \.self) { label in
+                GeometryReader { geo in
+                    let totalW = geo.size.width
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
+                        ForEach(Array(tickPairs.enumerated()), id: \.offset) { _, pair in
+                            let r = ratio(for: pair.1)
+                            // 1x 贴零点，避免最左越界；其余按比例
+                            let x = max(0, totalW * r)
                             VStack(spacing: 2) {
                                 Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 4)
-                                Text(label).font(.system(size: 7)).foregroundStyle(.secondary)
+                                Text(pair.0).font(.system(size: 7)).foregroundStyle(.secondary)
                             }
-                            .frame(maxWidth: .infinity)
+                            .frame(width: 22)
+                            .offset(x: min(x - 11, totalW - 22))
                         }
                     }
                 }
+                .frame(height: 16)
                 Color.clear.frame(width: 70, height: 1)
             }
             .frame(height: 16)
@@ -143,21 +164,21 @@ private struct BarSegment: View {
     let totalWidth: CGFloat
     let color: Color
 
+    private func segRatio(for v: Int) -> CGFloat {
+        let logV = log10(Double(v) + 10)
+        let logM = log10(Double(max) + 10)
+        let logRatio = logV / logM
+        let linear = CGFloat(v) / CGFloat(max)
+        return CGFloat(0.72 * logRatio + 0.28 * Double(linear))
+    }
+
     var body: some View {
-        // 对数缩放使小值可见，线性过小时截图 110 几乎不可见；用 log 压缩
-        let ratio: CGFloat = {
+        let r: CGFloat = {
             guard let v = value, v > 0, max > 0 else { return 0 }
-            // log 缩放：log10(v+1)/log10(max+1)，再混入少量线性保证 110 与 45300 区分度约 8 倍如截图
-            let logV = log10(Double(v) + 10)
-            let logM = log10(Double(max) + 10)
-            let logRatio = logV / logM
-            // 与线性加权 0.7*log + 0.3*linear，使小值不至于过长
-            let linear = CGFloat(v) / CGFloat(max)
-            return CGFloat(0.72 * logRatio + 0.28 * Double(linear))
+            return segRatio(for: v)
         }()
         // 每段占总宽 1/3 容器内按比例，实际三段并排总宽约 1.0*totalWidth
-        // 为保持同行三色对比，每段独立按 ratio*totalWidth/3? 这里每段占 1/3 轨道各自缩放
-        let w = value == nil ? 0 : Swift.max(3, totalWidth / 3 * ratio)
+        let w = value == nil ? 0 : Swift.max(3, totalWidth / 3 * r)
         Rectangle().fill(value == nil ? Color.clear : color)
             .frame(width: value == nil ? 0 : w, height: 6)
             .clipShape(Capsule())

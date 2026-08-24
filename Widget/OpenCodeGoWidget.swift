@@ -183,8 +183,9 @@ struct QuotaMiniRow: View {
         }
     }
     func remainingColor(_ p: Int) -> Color {
-        if p < 20 { return .red }
-        if p < 50 { return .orange }
+        // p 为已用占比，越高越红
+        if p >= 80 { return .red }
+        if p >= 50 { return .orange }
         return .green
     }
     func shortReset(_ d: Date) -> String {
