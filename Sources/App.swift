@@ -59,6 +59,7 @@ struct ContentView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var showSettings = false
+    @State private var modelTick = 0 // 触发图例重算（ModelPalette.ordered 读 App Group 缓存）
 
     var body: some View {
         VStack(spacing: 16) {
@@ -99,9 +100,14 @@ struct ContentView: View {
                         } else {
                             MonthChartView(dailyCosts: snap.dailyCosts)
                                 .frame(height: 160)
-                            // 图例
-                            let allModels = Set(snap.dailyCosts.flatMap { $0.entries.keys })
-                            let legend = ModelPalette.ordered.filter { allModels.contains($0) } + allModels.filter { !ModelPalette.ordered.contains($0) }.sorted()
+                            // 图例：实时展示官方 Go 全量（已同步 29 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
+                            // modelTick 仅用于触发 SwiftUI 在 App Group 缓存更新后重算
+                            let _ = modelTick
+                            let allModels = Set(snap.dailyCosts.flatMap { $0.entries.keys }.map { $0.lowercased() })
+                            let ordered = ModelPalette.ordered
+                            let orderedLower = Set(ordered.map { $0.lowercased() })
+                            let historicalExtra = allModels.filter { !orderedLower.contains($0) }.sorted()
+                            let legend = ordered + historicalExtra
                             if !legend.isEmpty {
                                 WrappingLegendView(models: legend)
                             }
@@ -160,8 +166,11 @@ struct ContentView: View {
         .frame(width: 620, height: 860)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
         .task {
-            // 后台同步 Go 模型列表，不阻塞首屏额度
-            Task { _ = await ModelRegistry.refreshIfNeeded() }
+            // 后台同步 Go 模型列表（迁移旧 19 项缓存 -> 29 项，isCacheOutdated 会强制拉取）
+            Task {
+                _ = await ModelRegistry.refreshIfNeeded()
+                await MainActor.run { modelTick += 1 }
+            }
             if snapshot == nil { await refresh() }
         }
         .onOpenURL { url in
@@ -174,16 +183,19 @@ struct ContentView: View {
     private func refresh() async {
         guard !loading else { return }
         loading = true; error = nil
-        // 刷新额度/费用前顺带同步模型列表（Go 实时列表 24h TTL，失败静默）
-        async let modelRefresh: [String] = ModelRegistry.refreshIfNeeded()
+        // 刷新额度/费用前强制同步模型列表（用户主动刷新应立即体现官方新增，失败静默）
+        async let modelRefresh: [String] = ModelRegistry.refreshIfNeeded(force: true)
         do {
             let snap = try await WidgetSnapshotRefresher.fetch()
-            _ = await modelRefresh
+            let models = await modelRefresh
+            // 触发图例重算
+            await MainActor.run { modelTick += 1; _ = models }
             WidgetDataStore.save(snap)
             snapshot = snap
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         } catch {
-            _ = await modelRefresh
+            let models = await modelRefresh
+            await MainActor.run { modelTick += 1; _ = models }
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             self.error = msg
             // preserve last snapshot but mark error

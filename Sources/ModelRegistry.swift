@@ -54,7 +54,27 @@ enum ModelRegistry {
               let arr = d.stringArray(forKey: cacheKey), !arr.isEmpty else {
             return fallbackOrdered
         }
+        // 迁移：旧缓存仅 17/19 项，自动视为过期，返回回退以避免显示不全（下次刷新会写新）
+        if arr.count < fallbackOrdered.count {
+            return fallbackOrdered
+        }
+        // 若缺少关键新模型（如 kimi-k3/qwen），也视为过期回退
+        let required: Set<String> = ["kimi-k3", "qwen3.7-max", "qwen3.7-plus", "mimo-v2-pro"]
+        if !required.isSubset(of: Set(arr.map { $0.lowercased() })) {
+            return fallbackOrdered
+        }
         return arr
+    }
+
+    /// 仅用于判断缓存是否过期（含迁移过期）
+    static var isCacheOutdated: Bool {
+        guard let d = UserDefaults(suiteName: suiteName),
+              let arr = d.stringArray(forKey: cacheKey), !arr.isEmpty else { return true }
+        if arr.count < fallbackOrdered.count { return true }
+        let required: Set<String> = ["kimi-k3", "qwen3.7-max", "qwen3.7-plus", "mimo-v2-pro"]
+        if !required.isSubset(of: Set(arr.map { $0.lowercased() })) { return true }
+        if let date = cachedDate(), Date().timeIntervalSince(date) < ttl { return false }
+        return true
     }
 
     static func cachedDate() -> Date? {
@@ -112,7 +132,7 @@ enum ModelRegistry {
         let cached = cachedOrderedSync()
         let hasCache = UserDefaults(suiteName: suiteName)?.stringArray(forKey: cacheKey) != nil
         let date = cachedDate()
-        let stale = date == nil || now.timeIntervalSince(date!) >= ttl
+        let stale = date == nil || now.timeIntervalSince(date!) >= ttl || isCacheOutdated
 
         if !force, hasCache, !stale {
             return cached
