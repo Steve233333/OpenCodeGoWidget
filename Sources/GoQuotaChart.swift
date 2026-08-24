@@ -4,38 +4,64 @@ struct GoQuotaChart: View {
     let quotas: [GoQuota]
     var updatedAt: Date? = nil
 
-    // 配额三段配色：与 QuotaRow 5h/周/月呼应，区分度高
+    // 配额三段配色：与 QuotaRow 5h/周/月呼应
     private let c5h: Color = Color(red: 0.92, green: 0.32, blue: 0.32) // 红
     private let cWeekly: Color = Color(red: 0.98, green: 0.58, blue: 0.14) // 橙
     private let cMonthly: Color = Color(red: 0.20, green: 0.78, blue: 0.45) // 绿
+    private let goldTop: Color = Color(red: 1.0, green: 0.84, blue: 0.0)
+    private let goldBottom: Color = Color(red: 0.85, green: 0.65, blue: 0.13)
 
+    private var monthlyBaseline: Int {
+        quotas.compactMap { $0.monthly }.min() ?? 490
+    }
     private var maxMonthly: Int {
         quotas.compactMap { $0.monthly }.max() ?? 1
     }
-    private var maxH5: Int { quotas.compactMap { $0.h5 }.max() ?? 1 }
+    // 轴最大：现有最大月配额 +10%，不做无意义大刻度
+    private var axisMaxValue: Int {
+        let raw = Int(ceil(Double(maxMonthly) * 1.10))
+        // 取整到 100，美观
+        return max(raw, 1)
+    }
+    private var axisMaxMultiplier: Double {
+        guard monthlyBaseline > 0 else { return 1 }
+        return Double(axisMaxValue) / Double(monthlyBaseline)
+    }
 
-    // 按 h5 升序，与截图一致
+    // 按 h5 升序
     private var sorted: [GoQuota] {
         quotas.sorted { ($0.h5 ?? Int.max) < ($1.h5 ?? Int.max) }
     }
 
-    // 官网倍率基线：Kimi K3 110 ≈ 1x；轴优先：先定刻度轴，再按轴画条
-    private let baseline: Int = 110
-    private var axisMaxMultiplier: Int {
-        let maxV = maxMonthly
-        let need = max(1, Int(ceil(Double(maxV) / Double(baseline))))
-        // 动态刻度：覆盖当前最大月配额，超出 250 则自动加 500/1000/2000
-        let candidates = [1, 10, 25, 50, 100, 250, 500, 1000, 2000, 5000]
-        // 轴最大取大于 need 的下一档，保证最大条不溢出
-        for c in candidates where c >= need { return c }
-        return candidates.last!
-    }
+    // 动态刻度：以 monthlyBaseline 为 1x，按 +10% 轴最大生成 1x/10x/25x/50x/100x/250x/500x 等，过滤超出轴最大
     private var tickPairs: [(String, Int)] {
-        let candidates: [(String, Int)] = [("1x",1),("10x",10),("25x",25),("50x",50),("100x",100),("250x",250),("500x",500),("1000x",1000),("2000x",2000)]
-        return candidates.filter { $0.1 <= axisMaxMultiplier }.map { ($0.0, baseline * $0.1) }
+        let candidates: [(String, Int)] = [("1x",1),("5x",5),("10x",10),("25x",25),("50x",50),("100x",100),("250x",250),("500x",500),("1000x",1000)]
+        var result: [(String, Int)] = []
+        for (label, mult) in candidates {
+            let v = monthlyBaseline * mult
+            if v <= axisMaxValue + 1 { // 包含略超的 43.88x 等
+                result.append((label, v))
+            } else if result.isEmpty {
+                result.append((label, v))
+            }
+        }
+        // 保证至少包含 1x 与最接近轴最大的刻度
+        if let last = result.last, last.1 < axisMaxValue {
+            let maxLabel = String(format: "%.1fx", axisMaxMultiplier)
+            // 避免重复，例如已含 500x 再加 510x 无意义，改用轴最大对应的倍率
+            if !result.contains(where: { $0.0 == maxLabel }) {
+                result.append((String(format: "%.0fx", ceil(axisMaxMultiplier)), axisMaxValue))
+            }
+        }
+        // 去重并限制数量，避免过密
+        if result.count > 7 {
+            // 保留首尾，中间稀疏
+            return [result[0], result[2], result[4], result[result.count-1]]
+        }
+        return result
     }
-    // 轴优先的混合比例：分母用 axisMax（刻度最大值）而非 maxMonthly，保证条与刻度同尺
-    private var axisMaxValue: Int { baseline * axisMaxMultiplier }
+
+    // 轴优先的混合比例（0.72 log +0.28 linear），分母用 axisMaxValue
     private func ratio(for value: Int) -> CGFloat {
         guard value > 0, axisMaxValue > 0 else { return 0 }
         let logV = log10(Double(value) + 10)
@@ -54,13 +80,14 @@ struct GoQuotaChart: View {
                     LegendDot(color: c5h, label: "5h")
                     LegendDot(color: cWeekly, label: "周")
                     LegendDot(color: cMonthly, label: "月")
+                    LegendDot(color: goldTop, label: "免费")
                 }
                 if let d = updatedAt {
                     Text(d.formatted(date: .omitted, time: .shortened))
                         .font(.system(size: 8)).foregroundStyle(.secondary)
                 }
             }
-            // 列头（130 与条轨道左对齐，70 与右侧数值列对齐，避免刻度歪斜）
+            // 列头
             HStack(spacing: 6) {
                 Text("模型").font(.system(size: 8)).foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
                 Text("请求数 (同行三段)").font(.system(size: 8)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
@@ -71,15 +98,20 @@ struct GoQuotaChart: View {
 
             VStack(spacing: 5) {
                 ForEach(sorted) { q in
-                    QuotaBarRow(quota: q, maxMonthly: maxMonthly)
+                    if q.monthly == nil || q.slug == "ox-alpha-free" {
+                        GoldBarRow(displayName: q.displayName)
+                    } else {
+                        QuotaBarRowNested(quota: q, axisMaxValue: axisMaxValue, ratio: ratio, c5h: c5h, cWeekly: cWeekly, cMonthly: cMonthly)
+                    }
                 }
             }
-            // X 轴刻度：轴优先，横排等分（官网均匀感），与条同用 axisMax 混合比例
+            // X 轴刻度：轴优先，横排等分，基于 monthlyBaseline 倍率
             HStack(spacing: 6) {
                 Color.clear.frame(width: 130, height: 1)
                 VStack(spacing: 4) {
                     Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
                     HStack(spacing: 0) {
+                        // 均匀铺开，保证视觉统一
                         ForEach(tickPairs, id: \.0) { pair in
                             VStack(spacing: 2) {
                                 Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 4)
@@ -115,24 +147,49 @@ private struct LegendDot: View {
     }
 }
 
-private struct QuotaBarRow: View {
-    let quota: GoQuota
-    let maxMonthly: Int
-    private let c5h: Color = Color(red: 0.92, green: 0.32, blue: 0.32)
-    private let cWeekly: Color = Color(red: 0.98, green: 0.58, blue: 0.14)
-    private let cMonthly: Color = Color(red: 0.20, green: 0.78, blue: 0.45)
-    // 轴最大用于条缩放（与刻度同尺）
-    private var axisMax: Int {
-        let baseline = 110
-        let need = max(1, Int(ceil(Double(maxMonthly) / Double(baseline))))
-        let candidates = [250, 500, 1000, 2000, 5000]
-        for c in candidates where c >= need { return baseline * c }
-        return baseline * 5000
+private struct GoldBarRow: View {
+    let displayName: String
+    var body: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 4) {
+                Text("∞").font(.system(size: 9, weight: .bold)).frame(width: 36, alignment: .trailing).foregroundStyle(Color(red: 0.85, green: 0.65, blue: 0.13))
+                Text(displayName).font(.system(size: 9)).lineLimit(1).foregroundStyle(.primary)
+            }
+            .frame(width: 130, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.06))
+                    LinearGradient(colors: [Color(red: 1.0, green: 0.84, blue: 0.0), Color(red: 0.85, green: 0.65, blue: 0.13)], startPoint: .leading, endPoint: .trailing)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.3))
+                    HStack {
+                        Text("∞ 免费拉满").font(.system(size: 7, weight: .bold)).foregroundColor(.white)
+                            .padding(.leading, 6)
+                        Spacer()
+                    }
+                }
+            }
+            .frame(height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("限时免费").font(.system(size: 7)).foregroundStyle(Color(red: 0.85, green: 0.65, blue: 0.13)).lineLimit(1)
+                Text("∞").font(.system(size: 7)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .frame(width: 70, alignment: .leading)
+        }
+        .frame(height: 14)
     }
+}
+
+private struct QuotaBarRowNested: View {
+    let quota: GoQuota
+    let axisMaxValue: Int
+    let ratio: (Int) -> CGFloat
+    let c5h: Color
+    let cWeekly: Color
+    let cMonthly: Color
 
     var body: some View {
         HStack(spacing: 6) {
-            // 左侧模型名 + 数值（截图风格：数值加粗在前）
             HStack(spacing: 4) {
                 if let v = quota.h5 {
                     Text(GoQuota.fmt(v)).font(.system(size: 9, weight: .semibold).monospacedDigit()).lineLimit(1)
@@ -144,24 +201,36 @@ private struct QuotaBarRow: View {
             }
             .frame(width: 130, alignment: .leading)
 
-            // 右侧同行三段条：轴优先，按 axisMax 混合比例
+            // 嵌套月内：总长 = monthly 在轴上的位置，内部 5h 与周按比例嵌套
             GeometryReader { geo in
                 let totalW = geo.size.width
-                HStack(spacing: 1) {
-                    // 5h
-                    BarSegment(value: quota.h5, max: axisMax, totalWidth: totalW, color: c5h)
-                    // 周
-                    BarSegment(value: quota.weekly, max: axisMax, totalWidth: totalW, color: cWeekly)
-                    // 月
-                    BarSegment(value: quota.monthly, max: axisMax, totalWidth: totalW, color: cMonthly)
+                let xMonthly = totalW * ratio(quota.monthly ?? 0)
+                let xWeekly = totalW * ratio(quota.weekly ?? 0)
+                let xH5 = totalW * ratio(quota.h5 ?? 0)
+                // 嵌套：红 0~h5，橙 h5~weekly，绿 weekly~monthly
+                let wH5 = max(0, xH5)
+                let wWeekly = max(0, xWeekly - xH5)
+                let wMonthly = max(0, xMonthly - xWeekly)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.06))
+                    HStack(spacing: 0) {
+                        if wH5 > 0 {
+                            Rectangle().fill(c5h).frame(width: wH5)
+                        }
+                        if wWeekly > 0 {
+                            Rectangle().fill(cWeekly).frame(width: wWeekly)
+                        }
+                        if wMonthly > 0 {
+                            Rectangle().fill(cMonthly).frame(width: wMonthly)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.3))
                 }
-                .frame(height: 8)
-                .clipShape(Capsule())
-                .background(Capsule().fill(Color.primary.opacity(0.06)))
             }
             .frame(height: 8)
 
-            // 右侧数值补充（可选周/月悬浮）
             VStack(alignment: .leading, spacing: 1) {
                 if let w = quota.weekly { Text("周\(GoQuota.fmt(w))").font(.system(size: 7)).foregroundStyle(.secondary).lineLimit(1) }
                 if let m = quota.monthly { Text("月\(GoQuota.fmt(m))").font(.system(size: 7)).foregroundStyle(.secondary).lineLimit(1) }
@@ -169,33 +238,5 @@ private struct QuotaBarRow: View {
             .frame(width: 70, alignment: .leading)
         }
         .frame(height: 14)
-    }
-}
-
-private struct BarSegment: View {
-    let value: Int?
-    let max: Int
-    let totalWidth: CGFloat
-    let color: Color
-
-    private func segRatio(for v: Int) -> CGFloat {
-        let logV = log10(Double(v) + 10)
-        let logM = log10(Double(max) + 10)
-        let logRatio = logV / logM
-        let linear = CGFloat(v) / CGFloat(max)
-        return CGFloat(0.72 * logRatio + 0.28 * Double(linear))
-    }
-
-    var body: some View {
-        let r: CGFloat = {
-            guard let v = value, v > 0, max > 0 else { return 0 }
-            return segRatio(for: v)
-        }()
-        // 每段占总宽 1/3 容器内按比例，实际三段并排总宽约 1.0*totalWidth
-        let w = value == nil ? 0 : Swift.max(3, totalWidth / 3 * r)
-        Rectangle().fill(value == nil ? Color.clear : color)
-            .frame(width: value == nil ? 0 : w, height: 6)
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.3))
     }
 }
