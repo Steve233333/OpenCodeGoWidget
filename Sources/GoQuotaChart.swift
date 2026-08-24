@@ -61,18 +61,16 @@ struct GoQuotaChart: View {
         return result
     }
 
-    // 高区分度分段：0-2000 线性占40%（小值可辨），2000-axisMax 对数占60%（大值不压）
+    // 纯纯 Log2 倍率轴：倍率 = value / monthlyBaseline，轴 = log2(倍率+1) / log2(axisMax倍率+1)
     private func ratio(for value: Int) -> CGFloat {
-        guard value > 0, axisMaxValue > 0 else { return 0 }
-        let cap = 2000
-        if value <= cap {
-            return 0.40 * CGFloat(value) / CGFloat(cap)
-        }
-        let logV = log10(Double(value))
-        let logCap = log10(Double(cap))
-        let logM = log10(Double(axisMaxValue))
-        guard logM > logCap else { return CGFloat(value) / CGFloat(axisMaxValue) }
-        return 0.40 + 0.60 * CGFloat((logV - logCap) / (logM - logCap))
+        guard value > 0, monthlyBaseline > 0, axisMaxValue > 0 else { return 0 }
+        let mult = Double(value) / Double(monthlyBaseline)
+        let maxMult = Double(axisMaxValue) / Double(monthlyBaseline)
+        // +1 避免 1x 归零，log2 纯粹
+        let v = log2(mult + 1)
+        let m = log2(maxMult + 1)
+        guard m > 0 else { return 0 }
+        return CGFloat(v / m)
     }
 
     var body: some View {
