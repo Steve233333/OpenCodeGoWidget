@@ -73,13 +73,13 @@ PLIST
 
 echo "==> 编译 App"
 swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 \
-  Sources/App.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift \
+  Sources/App.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift \
   -o "build/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"
 swiftc -parse-as-library -application-extension -target "$TARGET" -sdk "$SDK" -swift-version 5 \
   -Xlinker -e -Xlinker _NSExtensionMain \
-  Widget/OpenCodeGoWidget.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift \
+  Widget/OpenCodeGoWidget.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift \
   -o "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS/${WIDGET_NAME}"
 
 # Ensure codex-signing keychain is in search list for codesign without explicit --keychain fallback

@@ -60,9 +60,11 @@ struct ContentView: View {
     @State private var error: String?
     @State private var showSettings = false
     @State private var modelTick = 0 // 触发图例重算（ModelPalette.ordered 读 App Group 缓存）
+    @State private var quotas: [GoQuota] = GoQuotaRegistry.cachedSync()
+    @State private var quotaUpdatedAt: Date? = GoQuotaRegistry.cachedDate()
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
             HStack {
                 Label {
                     Text("OpenCode Go")
@@ -75,101 +77,115 @@ struct ContentView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
 
-            if let snap = snapshot {
-                VStack(spacing: 12) {
-                    // 月度堆叠柱状图（整月长度，如截图）
-                    VStack(alignment: .leading, spacing: 6) {
-                        let monthlyTotal = snap.dailyCosts.reduce(0) { $0 + $1.total }
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text("本月花费").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Text(String(format: "$%.2f USD", monthlyTotal)).font(.headline).monospacedDigit()
-                        }
-                        if snap.dailyCosts.isEmpty {
-                            VStack(spacing: 6) {
-                                Text("暂无本月模型费用数据")
-                                    .font(.caption2).foregroundStyle(.secondary)
-                                Text("配置 workspace 后自动拉取按日堆叠真数据")
-                                    .font(.system(size: 9)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                            }
-                            .frame(height: 120)
-                            .frame(maxWidth: .infinity)
-                            .background(Color.primary.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        } else {
-                            MonthChartView(dailyCosts: snap.dailyCosts)
-                                .frame(height: 160)
-                            // 图例：实时展示官方 Go 全量（已同步 29 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
-                            // modelTick 仅用于触发 SwiftUI 在 App Group 缓存更新后重算
-                            let _ = modelTick
-                            let allModels = Set(snap.dailyCosts.flatMap { $0.entries.keys }.map { $0.lowercased() })
-                            let ordered = ModelPalette.ordered
-                            let orderedLower = Set(ordered.map { $0.lowercased() })
-                            let historicalExtra = allModels.filter { !orderedLower.contains($0) }.sorted()
-                            let legend = ordered + historicalExtra
-                            if !legend.isEmpty {
-                                WrappingLegendView(models: legend)
-                            }
-                        }
-                        // 今日模型：当日无使用显示占位，避免回退到昨日
-                        VStack(spacing: 4) {
-                            HStack {
-                                Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
-                                Spacer()
-                                if snap.costEntries.isEmpty {
-                                    Text("今日暂无使用 · $0.00 USD").font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
-                                } else {
-                                    Text(String(format: "$%.2f USD", snap.costTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(spacing: 16) {
+                    if let snap = snapshot {
+                        VStack(spacing: 12) {
+                            // 月度堆叠柱状图（整月长度，如截图）
+                            VStack(alignment: .leading, spacing: 6) {
+                                let monthlyTotal = snap.dailyCosts.reduce(0) { $0 + $1.total }
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("本月花费").font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text(String(format: "$%.2f USD", monthlyTotal)).font(.headline).monospacedDigit()
                                 }
+                                if snap.dailyCosts.isEmpty {
+                                    VStack(spacing: 6) {
+                                        Text("暂无本月模型费用数据")
+                                            .font(.caption2).foregroundStyle(.secondary)
+                                        Text("配置 workspace 后自动拉取按日堆叠真数据")
+                                            .font(.system(size: 9)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                                    }
+                                    .frame(height: 120)
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.primary.opacity(0.05))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                } else {
+                                    MonthChartView(dailyCosts: snap.dailyCosts)
+                                        .frame(height: 160)
+                                    // 图例：实时展示官方 Go 全量（已同步 29 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
+                                    let _ = modelTick
+                                    let allModels = Set(snap.dailyCosts.flatMap { $0.entries.keys }.map { $0.lowercased() })
+                                    let ordered = ModelPalette.ordered
+                                    let orderedLower = Set(ordered.map { $0.lowercased() })
+                                    let historicalExtra = allModels.filter { !orderedLower.contains($0) }.sorted()
+                                    let legend = ordered + historicalExtra
+                                    if !legend.isEmpty {
+                                        WrappingLegendView(models: legend)
+                                    }
+                                }
+                                // 今日模型：当日无使用显示占位，避免回退到昨日
+                                VStack(spacing: 4) {
+                                    HStack {
+                                        Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
+                                        Spacer()
+                                        if snap.costEntries.isEmpty {
+                                            Text("今日暂无使用 · $0.00 USD").font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+                                        } else {
+                                            Text(String(format: "$%.2f USD", snap.costTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    if snap.costEntries.isEmpty {
+                                        Capsule()
+                                            .fill(Color.primary.opacity(0.08))
+                                            .frame(height: 8)
+                                            .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
+                                    } else {
+                                        CostBar(entries: snap.costEntries, total: snap.costTotal)
+                                    }
+                                }
+                                .padding(.top, 4)
                             }
-                            if snap.costEntries.isEmpty {
-                                Capsule()
-                                    .fill(Color.primary.opacity(0.08))
-                                    .frame(height: 8)
-                                    .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
-                            } else {
-                                CostBar(entries: snap.costEntries, total: snap.costTotal)
-                            }
+                            Divider()
+                            QuotaRow(label: "5小时", percent: snap.rolling, reset: snap.rollingReset)
+                            QuotaRow(label: "周", percent: snap.weekly, reset: snap.weeklyReset)
+                            QuotaRow(label: "月", percent: snap.monthly, reset: snap.monthlyReset)
+                            Text("更新于 \(snap.updatedAt.formatted(date: .omitted, time: .shortened))")
+                                .font(.caption2).foregroundStyle(.secondary)
+                            if let e = snap.error { Text(e).font(.caption2).foregroundStyle(.red) }
+
+                            // Go 配额横条图（最底部，实时同步文档配额表，同一行三段分色）
+                            Divider()
+                            GoQuotaChart(quotas: quotas, updatedAt: quotaUpdatedAt)
+                                .id(modelTick) // 随模型列表更新重绘
                         }
-                        .padding(.top, 4)
+                    } else {
+                        Text("暂无数据，请先配置 API Key 并刷新")
+                            .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
-                    Divider()
-                    QuotaRow(label: "5小时", percent: snap.rolling, reset: snap.rollingReset)
-                    QuotaRow(label: "周", percent: snap.weekly, reset: snap.weeklyReset)
-                    QuotaRow(label: "月", percent: snap.monthly, reset: snap.monthlyReset)
-                    Text("更新于 \(snap.updatedAt.formatted(date: .omitted, time: .shortened))")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    if let e = snap.error { Text(e).font(.caption2).foregroundStyle(.red) }
+
+                    Button { Task { await refresh() } } label: {
+                        if loading {
+                            ProgressView().scaleEffect(0.6)
+                        } else {
+                            Label("刷新", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(loading)
+                    .buttonStyle(.borderedProminent)
+
+                    if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
                 }
-            } else {
-                Text("暂无数据，请先配置 API Key 并刷新")
-                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
             }
-
-            Button { Task { await refresh() } } label: {
-                if loading {
-                    ProgressView().scaleEffect(0.6)
-                } else {
-                    Label("刷新", systemImage: "arrow.clockwise")
-                }
-            }
-            .disabled(loading)
-            .buttonStyle(.borderedProminent)
-
-            if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
-
-            Spacer()
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
         .frame(width: 620, height: 860)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
         .task {
-            // 后台同步 Go 模型列表（迁移旧 19 项缓存 -> 29 项，isCacheOutdated 会强制拉取）
+            // 后台同步 Go 模型列表与配额表
             Task {
                 _ = await ModelRegistry.refreshIfNeeded()
-                await MainActor.run { modelTick += 1 }
+                let q = await GoQuotaRegistry.refreshIfNeeded()
+                await MainActor.run {
+                    modelTick += 1
+                    quotas = q
+                    quotaUpdatedAt = GoQuotaRegistry.cachedDate()
+                }
             }
             if snapshot == nil { await refresh() }
         }
@@ -183,19 +199,30 @@ struct ContentView: View {
     private func refresh() async {
         guard !loading else { return }
         loading = true; error = nil
-        // 刷新额度/费用前强制同步模型列表（用户主动刷新应立即体现官方新增，失败静默）
+        // 刷新额度/费用前强制同步模型列表与配额表（用户主动刷新应立即体现官方新增，失败静默）
         async let modelRefresh: [String] = ModelRegistry.refreshIfNeeded(force: true)
+        async let quotaRefresh: [GoQuota] = GoQuotaRegistry.refreshIfNeeded(force: true)
         do {
             let snap = try await WidgetSnapshotRefresher.fetch()
             let models = await modelRefresh
-            // 触发图例重算
-            await MainActor.run { modelTick += 1; _ = models }
+            let q = await quotaRefresh
+            // 触发图例与配额图重算
+            await MainActor.run {
+                modelTick += 1; _ = models
+                quotas = q
+                quotaUpdatedAt = GoQuotaRegistry.cachedDate()
+            }
             WidgetDataStore.save(snap)
             snapshot = snap
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         } catch {
             let models = await modelRefresh
-            await MainActor.run { modelTick += 1; _ = models }
+            let q = await quotaRefresh
+            await MainActor.run {
+                modelTick += 1; _ = models
+                quotas = q
+                quotaUpdatedAt = GoQuotaRegistry.cachedDate()
+            }
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             self.error = msg
             // preserve last snapshot but mark error
