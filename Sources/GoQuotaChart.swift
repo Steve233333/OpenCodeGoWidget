@@ -34,35 +34,38 @@ struct GoQuotaChart: View {
                         .font(.system(size: 8)).foregroundStyle(.secondary)
                 }
             }
-            // 列头
-            HStack(spacing: 0) {
-                Text("模型").font(.system(size: 8)).foregroundStyle(.secondary).frame(width: 110, alignment: .leading)
-                Spacer()
-                Text("请求数 (同行三段)").font(.system(size: 8)).foregroundStyle(.secondary)
+            // 列头（130 与条轨道左对齐，70 与右侧数值列对齐，避免刻度歪斜）
+            HStack(spacing: 6) {
+                Text("模型").font(.system(size: 8)).foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
+                Text("请求数 (同行三段)").font(.system(size: 8)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 2)
+                Color.clear.frame(width: 70, height: 8)
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, 0)
 
             VStack(spacing: 5) {
                 ForEach(sorted) { q in
                     QuotaBarRow(quota: q, maxMonthly: maxMonthly)
                 }
             }
-            // X 轴刻度（模拟截图 1x 10x 25x 50x 100x 250x，对数示意）
-            GeometryReader { geo in
-                let ticks: [(String, Double)] = [("1x", 0.02), ("10x", 0.18), ("25x", 0.32), ("50x", 0.45), ("100x", 0.62), ("250x", 0.85)]
-                ZStack(alignment: .leading) {
+            // X 轴刻度：与条轨道同尺（最大月配额 226600），横排等分，不再用 position
+            HStack(spacing: 6) {
+                Color.clear.frame(width: 130, height: 1)
+                VStack(spacing: 4) {
                     Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
-                    ForEach(ticks, id: \.0) { label, frac in
-                        VStack(spacing: 2) {
-                            Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 4)
-                            Text(label).font(.system(size: 7)).foregroundStyle(.secondary)
+                    HStack(spacing: 0) {
+                        ForEach(["1x", "10x", "25x", "50x", "100x", "250x"], id: \.self) { label in
+                            VStack(spacing: 2) {
+                                Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 4)
+                                Text(label).font(.system(size: 7)).foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity)
                         }
-                        .position(x: geo.size.width * CGFloat(frac), y: 8)
                     }
                 }
+                Color.clear.frame(width: 70, height: 1)
             }
             .frame(height: 16)
-            .padding(.horizontal, 4)
 
             Text("数据实时同步自 opencode.ai/docs/zh-cn/go/ 配额表，刷新自动更新；Ox Alpha Free 为限时免费不计配额。")
                 .font(.system(size: 8)).foregroundStyle(.secondary).multilineTextAlignment(.center)

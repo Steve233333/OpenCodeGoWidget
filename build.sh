@@ -37,8 +37,8 @@ cat > "build/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>${APP_NAME}</string>
 	<key>CFBundleDisplayName</key><string>OpenCode Go</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.0</string>
-	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>1.1</string>
+	<key>CFBundleVersion</key><string>2</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><false/>
 	<key>NSHighResolutionCapable</key><true/>
@@ -60,8 +60,8 @@ cat > "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Info
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.0</string>
-	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>1.1</string>
+	<key>CFBundleVersion</key><string>2</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
 	<key>NSExtension</key><dict>
