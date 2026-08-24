@@ -1,26 +1,13 @@
 import SwiftUI
 
 enum ModelPalette {
-    // 截图图例顺序 17 模型（与 opencode.ai usage 页一致）
-    static let ordered: [String] = [
-        "deepseek-v4-flash",
-        "deepseek-v4-flash-vision-exp",
-        "deepseek-v4-pro",
-        "glm-5",
-        "glm-5.1",
-        "glm-5.2",
-        "glm-5.3",
-        "gpt-5.6-luna",
-        "grok-4.5",
-        "hy3",
-        "kimi-k2.6",
-        "kimi-k2.7-code",
-        "mimo-v2.5",
-        "mimo-v2.5-pro",
-        "minimax-m2.7",
-        "minimax-m3",
-        "muse-spark-1.2-contributor"
-    ]
+    // Go 套餐模型顺序：实时同步 https://opencode.ai/zen/go/v1/models
+    // 首屏直接读 App Group 缓存（ModelRegistry），无网回退到硬编码全量 29 项
+    static var ordered: [String] {
+        ModelRegistry.cachedOrderedSync()
+    }
+    // 硬编码回退（与 ModelRegistry.fallbackOrdered 同源，保留兼容）
+    static let fallbackOrdered: [String] = ModelRegistry.fallbackOrdered
 
     // 为每个模型分配与截图相近的淡色系，确保相邻色可区分
     static let mapping: [String: Color] = [
@@ -34,13 +21,25 @@ enum ModelPalette {
         "gpt-5.6-luna": Color(red: 0.68, green: 0.80, blue: 0.92), // 淡蓝
         "grok-4.5": Color(red: 0.85, green: 0.78, blue: 0.62), // 米褐
         "hy3": Color(red: 0.88, green: 0.88, blue: 0.62),
+        "hy3-preview": Color(red: 0.92, green: 0.88, blue: 0.50), // Hy 预览 黄
+        "kimi-k2.5": Color(red: 0.70, green: 0.90, blue: 0.75),
         "kimi-k2.6": Color(red: 0.68, green: 0.92, blue: 0.80), // 薄荷
         "kimi-k2.7-code": Color(red: 0.72, green: 0.68, blue: 0.92), // 紫
+        "kimi-k3": Color(red: 0.60, green: 0.72, blue: 0.95), // K3 深蓝
         "mimo-v2.5": Color(red: 0.62, green: 0.88, blue: 0.82), // 青绿
         "mimo-v2.5-pro": Color(red: 0.72, green: 0.78, blue: 0.92),
+        "mimo-v2-pro": Color(red: 0.58, green: 0.80, blue: 0.88),
+        "mimo-v2-omni": Color(red: 0.66, green: 0.84, blue: 0.90),
+        "minimax-m2.5": Color(red: 0.80, green: 0.70, blue: 0.90),
         "minimax-m2.7": Color(red: 0.78, green: 0.72, blue: 0.92),
         "minimax-m3": Color(red: 0.92, green: 0.72, blue: 0.82),
         "muse-spark-1.2-contributor": Color(red: 0.72, green: 0.92, blue: 0.72), // 截图中最高的淡绿
+        "qwen3.5-plus": Color(red: 0.75, green: 0.80, blue: 0.95),
+        "qwen3.6-plus": Color(red: 0.70, green: 0.78, blue: 0.94),
+        "qwen3.7-plus": Color(red: 0.65, green: 0.76, blue: 0.92),
+        "qwen3.7-max": Color(red: 0.60, green: 0.70, blue: 0.90),
+        "qwen3.8-max": Color(red: 0.55, green: 0.68, blue: 0.88),
+        "ox-alpha-free": Color(red: 0.45, green: 0.85, blue: 0.45), // 限时免费 亮绿
         // 兼容旧模型名别名
         "muse-spark": Color(red: 0.72, green: 0.92, blue: 0.72),
         "deepseek": Color(red: 0.90, green: 0.90, blue: 0.68),
@@ -48,6 +47,9 @@ enum ModelPalette {
         "glm": Color(red: 0.92, green: 0.62, blue: 0.62),
         "kimi": Color(red: 0.68, green: 0.92, blue: 0.80),
         "minimax": Color(red: 0.78, green: 0.72, blue: 0.92),
+        "qwen": Color(red: 0.65, green: 0.76, blue: 0.92),
+        "hy": Color(red: 0.88, green: 0.88, blue: 0.62),
+        "ox": Color(red: 0.45, green: 0.85, blue: 0.45),
     ]
 
     static func color(for model: String) -> Color {

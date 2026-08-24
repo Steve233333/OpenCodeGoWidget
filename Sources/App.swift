@@ -159,7 +159,11 @@ struct ContentView: View {
         .padding(.vertical, 16)
         .frame(width: 620, height: 860)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
-        .task { if snapshot == nil { await refresh() } }
+        .task {
+            // 后台同步 Go 模型列表，不阻塞首屏额度
+            Task { _ = await ModelRegistry.refreshIfNeeded() }
+            if snapshot == nil { await refresh() }
+        }
         .onOpenURL { url in
             if url.scheme == "opencodego" {
                 NSApp.activate(ignoringOtherApps: true)
@@ -170,12 +174,16 @@ struct ContentView: View {
     private func refresh() async {
         guard !loading else { return }
         loading = true; error = nil
+        // 刷新额度/费用前顺带同步模型列表（Go 实时列表 24h TTL，失败静默）
+        async let modelRefresh: [String] = ModelRegistry.refreshIfNeeded()
         do {
             let snap = try await WidgetSnapshotRefresher.fetch()
+            _ = await modelRefresh
             WidgetDataStore.save(snap)
             snapshot = snap
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         } catch {
+            _ = await modelRefresh
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             self.error = msg
             // preserve last snapshot but mark error

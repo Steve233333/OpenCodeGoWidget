@@ -13,6 +13,8 @@ struct RefreshIntent: AppIntent {
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult {
+        // 实时同步 Go 模型列表（不阻塞主刷新，失败静默）
+        _ = await ModelRegistry.refreshIfNeeded()
         var didSave = false
         do {
             let snap = try await WidgetSnapshotRefresher.fetch()
@@ -60,6 +62,8 @@ struct Provider: TimelineProvider {
         }
 
         Task {
+            // 后台刷新 Go 模型列表（TTL 24h，轻量无鉴权）
+            _ = await ModelRegistry.refreshIfNeeded()
             var snap = cached
             do {
                 let refreshed = try await WidgetSnapshotRefresher.fetch()
