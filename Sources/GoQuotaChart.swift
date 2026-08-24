@@ -61,14 +61,18 @@ struct GoQuotaChart: View {
         return result
     }
 
-    // 轴优先的混合比例（0.72 log +0.28 linear），分母用 axisMaxValue
+    // 高区分度分段：0-2000 线性占40%（小值可辨），2000-axisMax 对数占60%（大值不压）
     private func ratio(for value: Int) -> CGFloat {
         guard value > 0, axisMaxValue > 0 else { return 0 }
-        let logV = log10(Double(value) + 10)
-        let logM = log10(Double(axisMaxValue) + 10)
-        let logRatio = logV / logM
-        let linear = CGFloat(value) / CGFloat(axisMaxValue)
-        return CGFloat(0.72 * logRatio + 0.28 * Double(linear))
+        let cap = 2000
+        if value <= cap {
+            return 0.40 * CGFloat(value) / CGFloat(cap)
+        }
+        let logV = log10(Double(value))
+        let logCap = log10(Double(cap))
+        let logM = log10(Double(axisMaxValue))
+        guard logM > logCap else { return CGFloat(value) / CGFloat(axisMaxValue) }
+        return 0.40 + 0.60 * CGFloat((logV - logCap) / (logM - logCap))
     }
 
     var body: some View {
