@@ -349,6 +349,7 @@ struct SettingsView: View {
     @State private var workspaceID: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "workspaceID") ?? ""
     @State private var authCookie: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "authCookie") ?? ""
     @State private var harStatus: String = ""
+    @State private var showFileImporter = false
     @State private var launchAtLogin: Bool = {
         if #available(macOS 13.0, *) {
             return SMAppService.mainApp.status == .enabled
@@ -371,7 +372,8 @@ struct SettingsView: View {
                 .font(.caption2)
             HStack {
                 Button("选择 HAR 文件") {
-                    chooseHARFile()
+                    // 一劳永逸：优先 SwiftUI fileImporter（自动处理沙盒与 sheet 嵌套），失败回退到 AppKit
+                    showFileImporter = true
                 }.controlSize(.small)
                 if !harStatus.isEmpty { Text(harStatus).font(.caption2).foregroundStyle(.green) }
                 Spacer()
@@ -505,6 +507,29 @@ struct SettingsView: View {
             workspaceID = storedWS
             authCookie = storedAuth
         }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [
+                UTType(filenameExtension: "har") ?? .json,
+                .json,
+                .plainText,
+                .data
+            ],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                // fileImporter 已授权，importHAR 内部仍会 startAccessing
+                importHAR(from: url)
+            case .failure(let err):
+                harStatus = "选择失败：\(err.localizedDescription)"
+                // 回退到 AppKit 以防 fileImporter 在极端 sheet 嵌套下不弹出
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    chooseHARFileFallback()
+                }
+            }
+        }
     }
 
     private func importHAR(from url: URL) {
@@ -562,14 +587,30 @@ struct SettingsView: View {
 
     @MainActor
     private func chooseHARFile() {
+        // 保留兼容入口，内部转调一劳永逸的回退实现
+        chooseHARFileFallback()
+    }
+
+    @MainActor
+    private func chooseHARFileFallback() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "har") ?? .data, .json]
+        // 放宽类型：har 未在系统注册时回退到 .data/.json/.plainText，确保不过滤掉文件
+        if let harType = UTType(filenameExtension: "har") {
+            panel.allowedContentTypes = [harType, .json, .plainText, .data]
+        } else {
+            panel.allowedContentTypes = [.json, .plainText, .data]
+        }
         panel.allowsMultipleSelection = false
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
+        panel.canCreateDirectories = false
+        panel.isExtensionHidden = false
         panel.prompt = "选择"
-        panel.message = "选择浏览器导出的 OpenCode HAR 文件"
-        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop", isDirectory: true)
+        panel.message = "选择浏览器导出的 OpenCode HAR 文件（.har 或 .json）"
+        // 沙盒下用 FileManager.urls 更可靠，且不强制要求权限
+        if let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first {
+            panel.directoryURL = desktop
+        }
 
         let handleResult: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .OK, let url = panel.url else { return }
@@ -578,13 +619,34 @@ struct SettingsView: View {
             }
         }
 
-        // Settings itself is a SwiftUI sheet. An asynchronous child sheet is
-        // the supported way to present NSOpenPanel here; runModal() can leave
-        // the panel behind the settings sheet with no visible response.
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible }) {
-            panel.beginSheetModal(for: window, completionHandler: handleResult)
-        } else {
-            panel.begin(completionHandler: handleResult)
+        // 一劳永逸的窗口查找：
+        // Settings 处于 sheet 时，keyWindow.attachedSheet 即 Settings 本体，
+        // 此时必须把面板挂到 attachedSheet，否则挂到主窗口会被静默拒绝（already has sheet）
+        // 若无可用窗口则用独立模态 begin（不依赖父窗口），保证在任何层级都能弹出
+        if let win = NSApp.keyWindow {
+            if let sheet = win.attachedSheet {
+                panel.beginSheetModal(for: sheet, completionHandler: handleResult)
+                return
+            }
+            // keyWindow 无 sheet，正常挂载
+            // 先检查是否已有 sheet，避免 duplicate sheet 错误
+            if win.attachedSheet == nil {
+                // 确认窗口可见且可作为 sheet 父窗口
+                if win.isVisible {
+                    panel.beginSheetModal(for: win, completionHandler: handleResult)
+                    return
+                }
+            }
         }
+        if let main = NSApp.mainWindow, main.isVisible, main.attachedSheet == nil {
+            panel.beginSheetModal(for: main, completionHandler: handleResult)
+            return
+        }
+        // 兜底：独立模态（不依赖父窗口），沙盒下最稳定，即使 sheet 嵌套也能置顶
+        panel.center()
+        panel.level = .modalPanel
+        panel.orderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin(completionHandler: handleResult)
     }
 }
