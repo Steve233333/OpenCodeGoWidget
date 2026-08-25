@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 APP_BUNDLE_ID="com.steve233.opencodego"
 WIDGET_BUNDLE_ID="com.steve233.opencodego.widget"
 APP_NAME="OpenCodeGoWidget"
+APP_BUNDLE_NAME="OpenCode 小组件"
 WIDGET_NAME="OpenCodeGoWidget"
 
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
@@ -13,20 +14,20 @@ TARGET="${ARCH}-apple-macos14.0"
 
 echo "==> 清理旧构建"
 rm -rf build
-mkdir -p "build/${APP_NAME}.app/Contents/MacOS"
-mkdir -p "build/${APP_NAME}.app/Contents/Resources"
-mkdir -p "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS"
-mkdir -p "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources"
+mkdir -p "build/${APP_BUNDLE_NAME}.app/Contents/MacOS"
+mkdir -p "build/${APP_BUNDLE_NAME}.app/Contents/Resources"
+mkdir -p "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS"
+mkdir -p "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources"
 
 echo "==> 拷贝资源"
-cp Resources/AppIcon.icns "build/${APP_NAME}.app/Contents/Resources/" 2>/dev/null || true
-cp Resources/BrandLight.png "build/${APP_NAME}.app/Contents/Resources/" 2>/dev/null || true
-cp Resources/BrandDark.png "build/${APP_NAME}.app/Contents/Resources/" 2>/dev/null || true
-cp Resources/BrandLight.png "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
-cp Resources/BrandDark.png "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
+cp Resources/AppIcon.icns "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
+cp Resources/BrandLight.png "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
+cp Resources/BrandDark.png "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
+cp Resources/BrandLight.png "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
+cp Resources/BrandDark.png "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
 
 echo "==> 编写 Info.plist"
-cat > "build/${APP_NAME}.app/Contents/Info.plist" <<PLIST
+cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -51,7 +52,7 @@ cat > "build/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-cat > "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Info.plist" <<PLIST
+cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -77,92 +78,84 @@ PLIST
 echo "==> 编译 App"
 swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 \
   Sources/App.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift \
-  -o "build/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
+  -o "build/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"
 swiftc -parse-as-library -application-extension -target "$TARGET" -sdk "$SDK" -swift-version 5 \
   -Xlinker -e -Xlinker _NSExtensionMain \
   Widget/OpenCodeGoWidget.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift \
-  -o "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS/${WIDGET_NAME}"
+  -o "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS/${WIDGET_NAME}"
 
-# Ensure codex-signing keychain is in search list for codesign without explicit --keychain fallback
-security list-keychains -d user -s "$HOME/Library/Keychains/codex-signing.keychain-db" "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true
-SIGN_IDENTITY="Codex Patched Signing"
-SIGN_KEYCHAIN="$HOME/Library/Keychains/codex-signing.keychain-db"
-for _pw in "0000" "" "codex123"; do security unlock-keychain -p "$_pw" "$SIGN_KEYCHAIN" 2>/dev/null && break; done || true
-if ! security find-identity -p codesigning "$SIGN_KEYCHAIN" 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
-  echo "!! 未找到 $SIGN_IDENTITY，使用 ad-hoc（widget 刷新可能不稳定）"
-  SIGN_IDENTITY="-"
-  SIGN_ARGS=(--sign "$SIGN_IDENTITY")
-else
-  SIGN_ARGS=(--sign "$SIGN_IDENTITY" --keychain "$SIGN_KEYCHAIN")
-fi
+SIGN_IDENTITY="-"
+SIGN_ARGS=(--sign "$SIGN_IDENTITY")
+echo "!! 强制 ad-hoc 签名（保证 Dock 中文名与签名校验通过）"
 
 echo "==> 签名 Widget"
 if [ "$SIGN_IDENTITY" = "-" ]; then
   # ad-hoc：不带 --options runtime，但保留 entitlements（App Groups/沙盒），否则 widget 无法共享数据且可能触发 invalid blob
-  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
+  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 else
-  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
+  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 fi
 echo "==> 签名 App"
 if [ "$SIGN_IDENTITY" = "-" ]; then
-  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app"
+  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app"
 else
-  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app"
+  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app"
 fi
 
 echo "==> 安装到 /Applications"
-rm -rf "/Applications/${APP_NAME}.app"
-ditto "build/${APP_NAME}.app" "/Applications/${APP_NAME}.app"
+rm -rf "/Applications/OpenCodeGoWidget.app"
+rm -rf "/Applications/${APP_BUNDLE_NAME}.app"
+ditto "build/${APP_BUNDLE_NAME}.app" "/Applications/${APP_BUNDLE_NAME}.app"
 if [ "$SIGN_IDENTITY" = "-" ]; then
-  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_NAME}.app" 2>/dev/null || true
+  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
 else
-  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_NAME}.app" 2>/dev/null || true
+  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
 fi
 
 echo "==> 注册"
 # 生成可安装文件（DMG + ZIP）到 dist/，再清理 build 中间产物
 DIST_DIR="$(pwd)/dist"
-VERSION="$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "build/${APP_NAME}.app/Contents/Info.plist" 2>/dev/null || echo "1.0")"
-DMG_NAME="${APP_NAME}-${VERSION}.dmg"
-ZIP_NAME="${APP_NAME}-${VERSION}.zip"
+VERSION="$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" 2>/dev/null || echo "1.0")"
+DMG_NAME="${APP_BUNDLE_NAME}-${VERSION}.dmg"
+ZIP_NAME="${APP_BUNDLE_NAME}-${VERSION}.zip"
 mkdir -p "$DIST_DIR"
 # 保留 build 供打包
 STAGING_DIR="build/staging"
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
-ditto "build/${APP_NAME}.app" "$STAGING_DIR/${APP_NAME}.app"
+ditto "build/${APP_BUNDLE_NAME}.app" "$STAGING_DIR/${APP_BUNDLE_NAME}.app"
 # 创建带 Applications 替身的 DMG（便于拖拽安装）
 DMG_TMP="$STAGING_DIR/dmg"
 rm -rf "$DMG_TMP"
 mkdir -p "$DMG_TMP"
-ditto "build/${APP_NAME}.app" "$DMG_TMP/${APP_NAME}.app"
+ditto "build/${APP_BUNDLE_NAME}.app" "$DMG_TMP/${APP_BUNDLE_NAME}.app"
 ln -s /Applications "$DMG_TMP/Applications" 2>/dev/null || true
 # 生成 DMG（UDZO 压缩，兼容性好）
-if hdiutil create -volname "${APP_NAME}" -srcfolder "$DMG_TMP" -ov -format UDZO "build/${DMG_NAME}" 2>&1 | tail -5; then
+if hdiutil create -volname "${APP_BUNDLE_NAME}" -srcfolder "$DMG_TMP" -ov -format UDZO "build/${DMG_NAME}" 2>&1 | tail -5; then
   ditto "build/${DMG_NAME}" "$DIST_DIR/${DMG_NAME}"
   echo "DMG 已生成: $DIST_DIR/${DMG_NAME}"
 else
   echo "!! DMG 生成失败，回退为 ZIP"
 fi
 # 生成 ZIP（保留 Finder 拖拽安装可用）
-if ditto -c -k --sequesterRsrc --keepParent "build/${APP_NAME}.app" "build/${ZIP_NAME}" 2>&1 | tail -3; then
+if ditto -c -k --sequesterRsrc --keepParent "build/${APP_BUNDLE_NAME}.app" "build/${ZIP_NAME}" 2>&1 | tail -3; then
   ditto "build/${ZIP_NAME}" "$DIST_DIR/${ZIP_NAME}"
   echo "ZIP 已生成: $DIST_DIR/${ZIP_NAME}"
 fi
 # 也保留未压缩的 .app 到 dist 供直接分发
-ditto "build/${APP_NAME}.app" "$DIST_DIR/${APP_NAME}.app"
-echo "APP 已复制: $DIST_DIR/${APP_NAME}.app"
+ditto "build/${APP_BUNDLE_NAME}.app" "$DIST_DIR/${APP_BUNDLE_NAME}.app"
+echo "APP 已复制: $DIST_DIR/${APP_BUNDLE_NAME}.app"
 # 清理 build 中间产物（保留 dist）
 rm -rf build
 # 注册系统服务
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/${APP_NAME}.app" 2>/dev/null || true
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
 killall pkd 2>/dev/null || true
 sleep 1
-pluginkit -a "/Applications/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex" 2>/dev/null || true
+pluginkit -a "/Applications/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex" 2>/dev/null || true
 pluginkit -e use -p com.apple.widgetkit-extension -i "$WIDGET_BUNDLE_ID" 2>/dev/null || true
 
-echo "完成：open /Applications/${APP_NAME}.app 然后在通知中心添加小组件"
+echo "完成：open /Applications/${APP_BUNDLE_NAME}.app 然后在通知中心添加小组件"
 echo "可安装文件位于 dist/:"
 ls -lh "$DIST_DIR" 2>&1 | tail -20
