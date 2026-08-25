@@ -95,19 +95,31 @@ if ! security find-identity -p codesigning "$SIGN_KEYCHAIN" 2>/dev/null | grep -
   SIGN_IDENTITY="-"
   SIGN_ARGS=(--sign "$SIGN_IDENTITY")
 else
-  # Try common passwords for the codex-signing keychain
   SIGN_ARGS=(--sign "$SIGN_IDENTITY" --keychain "$SIGN_KEYCHAIN")
 fi
 
 echo "==> 签名 Widget"
-codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  # ad-hoc：不带 --options runtime，但保留 entitlements（App Groups/沙盒），否则 widget 无法共享数据且可能触发 invalid blob
+  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
+else
+  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
+fi
 echo "==> 签名 App"
-codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app"
+else
+  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_NAME}.app"
+fi
 
 echo "==> 安装到 /Applications"
 rm -rf "/Applications/${APP_NAME}.app"
 ditto "build/${APP_NAME}.app" "/Applications/${APP_NAME}.app"
-codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_NAME}.app" 2>/dev/null || true
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_NAME}.app" 2>/dev/null || true
+else
+  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_NAME}.app" 2>/dev/null || true
+fi
 
 echo "==> 注册"
 # 生成可安装文件（DMG + ZIP）到 dist/，再清理 build 中间产物
