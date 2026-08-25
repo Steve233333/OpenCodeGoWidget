@@ -1,125 +1,150 @@
 # OpenCode Go 套餐小组件
 
-> macOS 原生小组件 + 仪表盘 · 实时查看 OpenCode Go 额度与按日按模型花费
+> 把 OpenCode Go 的额度、花费和全模型配额表，钉在 macOS 桌面上的原生小组件。
 
 <p align="center">
   <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest">
     <img src="https://img.shields.io/github/v/release/Steve233333/OpenCodeGoWidget?label=最新版本&color=0A84FF" alt="release">
   </a>
   <img src="https://img.shields.io/badge/macOS-14.0+-black" alt="macOS 14+">
-  <img src="https://img.shields.io/badge/Swift-5.9-orange" alt="Swift">
+  <img src="https://img.shields.io/badge/SwiftUI-Charts%20%2B%20WidgetKit-0A84FF" alt="SwiftUI Charts WidgetKit">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
   <img src="https://img.shields.io/github/downloads/Steve233333/OpenCodeGoWidget/total?label=下载" alt="downloads">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.0.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.1.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.0.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.1.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
 
 <p align="center">
-  <b>一键下载 → 拖入「应用程序」→ 打开即用</b><br/>
-  <sub>支持 Apple Silicon / Intel · 无需 Homebrew · 沙盒安全</sub>
+  <b>下载 → 拖入「应用程序」→ 配 API Key → 添加小组件</b><br/>
+  <sub>Apple Silicon / Intel · 无需 Homebrew · 数据只存本机</sub>
 </p>
 
 ---
 
-## ✨ 这是什么
+## 为什么值得装
 
-**OpenCode Go 套餐小组件** 是为 [opencode.ai](https://opencode.ai) Go 套餐用户做的 macOS 轻量查看器，解决官网只能网页查额度、无法常驻看花费的痛点。
+OpenCode Go 的额度分散在官网多个页面：5 小时、周、月要分别看；模型费用要进 Usage 页翻；每个模型的配额倍率更是藏在文档表里。这个工具把它们压进一块桌面小组件和一个固定尺寸的仪表盘里。
 
-- **桌面小组件**常驻：5 小时 / 周 / 月三档额度进度 + 近 7 天堆叠花费（仅点击柱状图进主 App，点其他区域不跳转）
-- **主 App 仪表盘**固定窗口 `620×860`：本月 `31 天`完整堆叠柱（空日留空不塌陷）、图例按模型分色、今日模型细分、实时刷新
-- **真数据**：通过 workspace 维度拉取 `/_server` 全量 `totalCost`（`1e-8` 美元累加），与官网 Usage 页 `Tooltip` 一致，而非假数据占位
+- **一眼看全局**：5 小时 / 周 / 月三档额度、剩余重置时间、近 7 天花费，小组件里直接看。
+- **费用不再靠猜**：主 App 展示本月按日按模型堆叠柱状图、今日模型占比，数据来自 workspace 真实用量。
+- **全模型配额表**：从官方文档同步 Go 模型配额，用 1x / 10x / 25x / 50x / 100x / 250x 相对刻度展示 5h、周、月三段请求量。
+- **常驻不折腾**：原生 WidgetKit 小组件，点击图表进主 App，支持开机自启。
 
-## 📸 预览
+## 预览
 
-| 主 App（固定窗口） | 设置（HAR 一键导入） | 桌面小组件（中尺寸） |
-|---|---|---|
-| <img src="docs/images/app.png?v=20250822-5" width="320" alt="主 App 本月花费 31 天堆叠"> | <img src="docs/images/settings.png?v=20250822-5" width="320" alt="设置粘贴 API Key 与 workspace"> | <img src="docs/images/widget.png?v=20250822-5" width="320" alt="小组件 5小时周月+近7天"> |
+| 桌面小组件 | 主仪表盘 | 全模型配额图 | 设置与导入 |
+|---|---|---|---|
+| <img src="docs/images/widget.png?v=20260826" width="300" alt="小组件：额度、近 7 天花费"> | <img src="docs/images/app.png?v=20260826" width="300" alt="主 App：本月花费堆叠图"> | <img src="docs/images/quota.png?v=20260826" width="300" alt="Go 全模型配额图"> | <img src="docs/images/settings.png?v=20260826" width="300" alt="设置：API Key 与 HAR 导入"> |
 
-> 图片为 `v1.0` 实机截图：本月 `$7.11 USD`、近 7 天 `$7.11 USD`、今日模型 `muse-spark 87%` 等与线上一致
+截图数据示例：本月 `$9.15 USD`、今日 `$0.10 USD`、5 小时 `5%`、周 `8%`、月 `25%`。
 
-## 🚀 30 秒快速开始
+## 快速开始
 
-### 方式一：DMG（推荐）
-1. 点击顶部 <b>DMG 安装包</b> 绿色按钮下载 `OpenCodeGoWidget-1.0.dmg`
-2. 双击 DMG → 把 `OpenCodeGoWidget.app` 拖入 `Applications`
-3. `open /Applications/OpenCodeGoWidget.app` 首次启动自动注册**开机自启**（可在 `设置` 关闭或 `系统设置 → 通用 → 登录项` 管理）
+### 安装
 
-### 方式二：ZIP 免安装
-1. 下载 `OpenCodeGoWidget-1.0.zip` → 解压得 `OpenCodeGoWidget.app`
-2. 双击运行即可，无需安装
+**DMG 推荐**：下载后打开，把 `OpenCode 小组件.app` 拖入「应用程序」。
 
-### 首次配置（2 分钟）
+**ZIP 免安装**：解压后直接运行。
 
-1. **API Key**：打开 App → 右上 `⚙︎` → 粘贴 `opencode.ai → Settings → API Keys` 复制的 `sk-...` → 保存
-   - 密钥存于系统 `Keychain` + `App Group`，仅本地使用，更新后小组件自动同步
-2. **柱状图真数据（可选但推荐）**：
-   - 在 `opencode.ai` 打开你的 `workspace/usage` 页 → 浏览器 `导出 HAR` 保存到桌面 → 回到 App 设置点 `选择 HAR 文件` → 自动提取 `wrk_...` 与 `539B auth Cookie` 存入 `App Group`，柱状图即显示 **31 天堆叠真数据**
-   - 也可直接粘贴 `https://opencode.ai/workspace/wrk_.../usage` 全链路或裸 `wrk_...` + `auth`，保存时同自动解析，无需手动复制
-3. **添加到桌面**：`桌面右键 → 编辑小组件 → 搜索 OpenCode Go → 添加中尺寸` → 已自动显示近 7 天图表（点柱状图进主 App，点 `↻` 刷新）
+### 配置
 
-> 未配置 workspace 时，App 与小组件仅显示三档额度与“暂无费用”占位，不报错
+1. 打开应用，点右上角齿轮。
+2. 粘贴 OpenCode Go API Key（`opencode.ai → Settings → API Keys` 里的 `sk-...`）。
+3. 想看真实费用图，就再导入一次 workspace：
+   - 粘贴 `https://opencode.ai/workspace/wrk_.../usage` 全链接；或
+   - 在浏览器导出 HAR 后点「选择 HAR 文件」，应用会自动提取 workspace ID 和认证 Cookie。
+4. 桌面右键 → 编辑小组件 → 搜索「OpenCode Go」→ 添加中尺寸。
 
-## 🔧 功能一览
+API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，不上传到任何第三方。
 
-- **额度**：`5 小时 / 周 / 月` 百分比 + 剩余重置时间（`· 4小时59分 / · 1天 / · 26天`），低于 `20%` 红、`50%` 橙
-- **花费**：本月总额 `USD`、今日总额 `USD`、今日模型横向堆叠（`Top3 + 其他` 灰）、`17` 模型统一淡色系与图例同色
-- **图表**：App `Charts` 整月连续轴 `xDomain = 01-31` 空日透明占位不塌陷；小组件 `GeometryReader` 近 7 天等宽柱 `42 高 + 11 高日期`
-- **交互**：小组件 **仅柱状图可点** 跳转 `opencodego://month` 单例主窗（`Window id:main + handlesExternalEvents`），刷新按钮 `28pt` 圆命中扩大防误触
-- **窗口**：主 App `windowResizability(.contentSize) 620×860 fixedSize` 固定卡片，`onOpenURL` 激活唯一窗口
+## 核心功能
 
-## 📦 下载直链（免翻 Releases 页）
+### 桌面小组件
 
-- **DMG**: https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.0.dmg
-- **ZIP**: https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.0.zip
-- **历史版本**: https://github.com/Steve233333/OpenCodeGoWidget/releases
+- 5 小时 / 周 / 月额度进度和重置倒计时。
+- 近 7 天按日堆叠花费，日期轴清晰。
+- 点击图表进入主 App；点击刷新按钮立即更新。
 
-> 若浏览器提示“未验证开发者”，`右键 → 打开` 首次允许即可（`Codex Patched Signing` 自签名，`--options runtime`）
+### 主仪表盘
 
-## 🛠️ 本地构建
+- 本月完整月份的按日按模型堆叠柱状图，空日不塌陷。
+- 模型图例统一配色，今日模型占比单独展示。
+- 固定 `620×860` 窗口，信息密度高但不乱。
+
+### Go 配额图
+
+- 实时同步 `opencode.ai` 官方 Go 配额文档。
+- 同一行内展示 5h、周、月三段请求数，右侧给出具体数值。
+- 使用相对倍率刻度，方便比较模型配额量级；限时免费模型单独标注。
+
+### 设置与安全
+
+- API Key 存 Keychain；workspace 凭据存 App Group。
+- HAR 导入自动解析裸 workspace ID 和认证 Cookie，不需要手动复制。
+- 开机自启可开关，也可在系统设置的登录项里管理。
+
+## 下载直链
+
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.1.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.1.zip>
+- 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
+
+首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
+
+## 本地构建
 
 ```bash
 git clone https://github.com/Steve233333/OpenCodeGoWidget.git
 cd OpenCodeGoWidget
 ./build.sh
-# 产物
-# build/OpenCodeGoWidget.app
-# dist/OpenCodeGoWidget-1.0.dmg  dist/OpenCodeGoWidget-1.0.zip
-open /Applications/OpenCodeGoWidget.app
 ```
 
-- 依赖：`Xcode Command Line Tools + swiftc + MacOSX SDK 14.0+`，无需 `SPM / CocoaPods`
-- 签名：优先 `Codex Patched Signing`，缺失则 `ad-hoc`
+构建产物会输出到：
 
-## ❓ 常见问题
+```text
+/Applications/OpenCode 小组件.app
+dist/OpenCode 小组件-1.1.1.dmg
+dist/OpenCode 小组件-1.1.1.zip
+dist/OpenCode 小组件.app
+```
 
-**小组件不出现？** `系统设置 → 桌面与程序坞 → 小组件` 确保已启用；`killall WidgetKit` 后重加
+依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。
 
-**柱状图一直“暂无”？** 检查设置中 `wrk_...` 为裸 ID（非全 URL）且 `auth` 为 `539B`，重新选一次 HAR 保存
+## 常见问题
 
-**点小组件其他区域也进 App？** 已修复为仅柱状图 `56 高` 矩形可点，其他区域 `contentShape` 已收紧
+**小组件搜不到？**  
+确认系统设置里小组件已启用；运行 `killall WidgetKit` 后重新添加。
 
-**刷新要按很准？** `v1.0` 已扩 `28pt` 圆命中并置顶 `zIndex`，点 `↻` 外沿亦可
+**费用图一直是空？**  
+说明 workspace 数据没配置成功。回到设置重新粘贴 workspace 全链接，或重新选择 HAR 文件保存。
 
-**如何关闭开机启动？** App `设置 → 开机自动启动` 关，或 `系统设置 → 通用 → 登录项 → 移除`
+**API Key 会泄露吗？**  
+不会上传到第三方。Key 只存在本机 Keychain，网络请求只发往 `opencode.ai`。
 
-## 🔐 隐私
+**怎么关闭开机启动？**  
+应用设置里关闭「开机自动启动」，或在系统设置 → 通用 → 登录项里移除。
 
-- 仅本地读取 `zen_api_key`（`Keychain`）与 `workspaceID/authCookie`（`App Group 2DC432GLL2.com.steve233.opencodego`）
-- 网络仅 `GET https://opencode.ai/zen/go/v1/usage` 与 `POST https://opencode.ai/_server`（带 `X-Server-Id` 分层重试），无第三方上报
-- `100_000_000` 除数与 `1e-8` 美元语义已按 `HAR 539B` 实测校准
+**为什么应用叫「OpenCode 小组件」，界面里又叫「OpenCode Go」？**  
+应用包名用于桌面识别，界面和小组件标题保留产品功能名「OpenCode Go」。
 
-## 📄 开源
+## 隐私
 
-MIT License · 欢迎 Issue / PR · `opencode go 套餐小组件` 独立社区项目，与 `OpenCode` 官方无关
+- 本地存储：Keychain、App Group `2DC432GLL2.com.steve233.opencodego`。
+- 网络请求：仅访问 `opencode.ai` 的 usage、models、docs 相关接口。
+- 无遥测、无广告、无第三方统计。
+
+## 许可
+
+MIT License。这是社区项目，与 OpenCode 官方无关。
 
 ---
 
-<p align="center"><sub>Built with SwiftUI + Charts + WidgetKit · 固定窗口 620×860 · 支持 macOS 14.0+</sub></p>
+<p align="center"><sub>SwiftUI · Charts · WidgetKit · macOS 14+</sub></p>
