@@ -11,7 +11,7 @@ struct OpenCodeGoWidgetApp: App {
     var body: some Scene {
         // This app has one dashboard. WindowGroup creates a new instance for
         // every external URL event, which is exactly what a widget tap sends.
-        Window("OpenCode Go", id: "main") {
+        Window("OpenCode 小组件", id: "main") {
             ContentView()
                 .frame(width: 620, height: 860)
                 .fixedSize()
@@ -67,7 +67,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HStack {
                 Label {
-                    Text("OpenCode Go")
+                    Text("OpenCode 小组件")
                 } icon: {
                     BrandIconView(size: 16)
                 }
