@@ -87,7 +87,7 @@ struct GoWidgetView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Label {
-                    Text("OpenCode 小组件")
+                    Text("OpenCode Go")
                 } icon: {
                     BrandIconView(size: 13)
                 }
@@ -346,7 +346,7 @@ struct OpenCodeGoWidget: Widget {
             GoWidgetView(entry: entry)
                 .containerBackground(for: .widget) { Color.clear }
         }
-        .configurationDisplayName("OpenCode 小组件")
+        .configurationDisplayName("OpenCode Go")
         .description("近7天堆叠 + 5h/周/月额度")
         .contentMarginsDisabled()
         .supportedFamilies([.systemSmall, .systemMedium])

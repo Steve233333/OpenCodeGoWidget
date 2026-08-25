@@ -37,7 +37,7 @@ cat > "build/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleExecutable</key><string>${APP_NAME}</string>
 	<key>CFBundleIdentifier</key><string>${APP_BUNDLE_ID}</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-	<key>CFBundleName</key><string>${APP_NAME}</string>
+	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>1.1.1</string>
@@ -57,7 +57,7 @@ cat > "build/${APP_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Info
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
-	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
+	<key>CFBundleDisplayName</key><string>OpenCode Go</string>
 	<key>CFBundleExecutable</key><string>${WIDGET_NAME}</string>
 	<key>CFBundleIdentifier</key><string>${WIDGET_BUNDLE_ID}</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
