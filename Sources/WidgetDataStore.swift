@@ -47,7 +47,8 @@ enum WidgetSnapshotRefresher {
         let usage = try await manager.fetchUsage()
         let cost = await manager.fetchCostToday()
         var entries: [String: Double] = [:]
-        for entry in cost.entries {
+        // 过滤零值：避免 total=0 但 entries 非空，CostBar 里 v/total 变 NaN 触发 Int() 崩溃
+        for entry in cost.entries where entry.cost > 0 {
             entries[entry.model] = entry.cost
         }
 

@@ -287,7 +287,7 @@ struct CostBar: View {
                 ForEach(sorted.prefix(3), id: \.0) { (k,v) in
                     HStack(spacing: 4) {
                         Circle().fill(colorFor(k)).frame(width: 6, height: 6)
-                        Text("\(short(k)) \(Int(v/total*100))%").font(.caption2).lineLimit(1)
+                        Text("\(short(k)) \(total > 0 ? Int(v / total * 100) : 0)%").font(.caption2).lineLimit(1)
                     }
                 }
                 Spacer()
