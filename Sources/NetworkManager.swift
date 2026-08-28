@@ -45,14 +45,33 @@ final class NetworkManager: @unchecked Sendable {
         }
     }
 
-    func fetchCostToday() async -> (total: Double, entries: [CostEntry], daily: [DailyCost]) {
+    func fetchCostToday() async -> (total: Double, entries: [CostEntry], daily: [DailyCost], dailyByKey: [String: [DailyCost]]) {
         if let mc = await CostCrawler.shared.fetchMonthlyCosts() {
             let today = mc.todayEntries
             let total = today.values.reduce(0, +)
             let entries = today.map { CostEntry(model: $0.key, cost: $0.value, percent: total > 0 ? $0.value / total * 100 : 0) }.sorted { $0.cost > $1.cost }
-            return (total, entries, mc.daily)
+            return (total, entries, mc.daily, mc.dailyByKey)
         }
-        return (0, [], [])
+        return (0, [], [], [:])
+    }
+
+    func fetchCostTodayPerKey() async -> [String: [CostEntry]] {
+        guard let mc = await CostCrawler.shared.fetchMonthlyCosts() else { return [:] }
+        var result: [String: [CostEntry]] = [:]
+        // 今日按 Asia/Shanghai 判定
+        let tz = TimeZone(identifier: "Asia/Shanghai")!
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = tz
+        let todayStr = fmt.string(from: Date())
+        for (keyId, arr) in mc.dailyByKey {
+            guard let dc = arr.first(where: { $0.date == todayStr }) else { result[keyId] = []; continue }
+            let tot = dc.entries.values.reduce(0,+)
+            let ents = dc.entries.map { CostEntry(model: $0.key, cost: $0.value, percent: tot > 0 ? $0.value/tot*100 : 0) }.sorted{ $0.cost > $1.cost }
+            result[keyId] = ents
+        }
+        return result
     }
 
     // Legacy wrapper for callers not yet migrated

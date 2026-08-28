@@ -62,6 +62,7 @@ struct ContentView: View {
     @State private var modelTick = 0 // 触发图例重算（ModelPalette.ordered 读 App Group 缓存）
     @State private var quotas: [GoQuota] = GoQuotaRegistry.cachedSync()
     @State private var quotaUpdatedAt: Date? = GoQuotaRegistry.cachedDate()
+    @State private var selectedKeyId: String? = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "selectedCostKeyId")
 
     var body: some View {
         VStack(spacing: 0) {
@@ -87,17 +88,38 @@ struct ContentView: View {
                         VStack(spacing: 12) {
                             // 月度堆叠柱状图（整月长度，如截图）
                             VStack(alignment: .leading, spacing: 6) {
-                                let monthlyTotal = snap.dailyCosts.reduce(0) { $0 + $1.total }
+                                let filteredDaily = snap.filteredDaily(for: selectedKeyId)
+                                let monthlyTotal = filteredDaily.reduce(0) { $0 + $1.total }
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                                     Text("本月花费").font(.caption).foregroundStyle(.secondary)
                                     Spacer()
                                     Text(String(format: "$%.2f USD", monthlyTotal)).font(.headline).monospacedDigit()
+                                    let keysForMenu: [ApiKeyInfo] = snap.availableKeys.isEmpty ? CostCrawler.shared.loadCachedKeys() : snap.availableKeys
+                                    if !keysForMenu.isEmpty {
+                                        Menu {
+                                            Button("所有密钥") { selectedKeyId = nil; UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.removeObject(forKey: "selectedCostKeyId") }
+                                            ForEach(keysForMenu) { k in
+                                                Button(k.displayName) { selectedKeyId = k.id; UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.set(k.id, forKey: "selectedCostKeyId") }
+                                            }
+                                        } label: {
+                                            HStack(spacing: 3) {
+                                                Text(selectedKeyId == nil ? "所有密钥" : (keysForMenu.first(where: { $0.id == selectedKeyId })?.displayName ?? "未知"))
+                                                    .font(.caption2).lineLimit(1)
+                                                Image(systemName: "chevron.up.chevron.down").font(.system(size: 7))
+                                            }
+                                            .padding(.horizontal, 6).padding(.vertical, 4)
+                                            .background(Color.primary.opacity(0.06))
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                        }
+                                        .menuStyle(.borderlessButton)
+                                        .fixedSize()
+                                    }
                                 }
-                                if snap.dailyCosts.isEmpty {
+                                if filteredDaily.isEmpty {
                                     VStack(spacing: 6) {
-                                        Text("暂无本月模型费用数据")
+                                        Text(selectedKeyId == nil ? "暂无本月模型费用数据" : "该 Key 本月暂无使用")
                                             .font(.caption2).foregroundStyle(.secondary)
-                                        Text("配置 workspace 后自动拉取按日堆叠真数据")
+                                        Text(selectedKeyId == nil ? "配置 workspace 后自动拉取按日堆叠真数据" : "新建的 Key 在产生调用前费用为 $0.00")
                                             .font(.system(size: 9)).foregroundStyle(.secondary).multilineTextAlignment(.center)
                                     }
                                     .frame(height: 120)
@@ -105,11 +127,11 @@ struct ContentView: View {
                                     .background(Color.primary.opacity(0.05))
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
                                 } else {
-                                    MonthChartView(dailyCosts: snap.dailyCosts)
+                                    MonthChartView(dailyCosts: filteredDaily)
                                         .frame(height: 160)
                                     // 图例：实时展示官方 Go 全量（已同步 29 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
                                     let _ = modelTick
-                                    let allModels = Set(snap.dailyCosts.flatMap { $0.entries.keys }.map { $0.lowercased() })
+                                    let allModels = Set(filteredDaily.flatMap { $0.entries.keys }.map { $0.lowercased() })
                                     let ordered = ModelPalette.ordered
                                     let orderedLower = Set(ordered.map { $0.lowercased() })
                                     let historicalExtra = allModels.filter { !orderedLower.contains($0) }.sorted()
@@ -118,24 +140,26 @@ struct ContentView: View {
                                         WrappingLegendView(models: legend)
                                     }
                                 }
-                                // 今日模型：当日无使用显示占位，避免回退到昨日
+                                // 今日模型：跟随 Key 筛选
+                                let filteredCostEntries = snap.filteredCostEntries(for: selectedKeyId)
+                                let filteredCostTotal = snap.filteredCostTotal(for: selectedKeyId)
                                 VStack(spacing: 4) {
                                     HStack {
                                         Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
                                         Spacer()
-                                        if snap.costEntries.isEmpty {
+                                        if filteredCostEntries.isEmpty {
                                             Text("今日暂无使用 · $0.00 USD").font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
                                         } else {
-                                            Text(String(format: "$%.2f USD", snap.costTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+                                            Text(String(format: "$%.2f USD", filteredCostTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
                                         }
                                     }
-                                    if snap.costEntries.isEmpty {
+                                    if filteredCostEntries.isEmpty {
                                         Capsule()
                                             .fill(Color.primary.opacity(0.08))
                                             .frame(height: 8)
                                             .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
                                     } else {
-                                        CostBar(entries: snap.costEntries, total: snap.costTotal)
+                                        CostBar(entries: filteredCostEntries, total: filteredCostTotal)
                                     }
                                 }
                                 .padding(.top, 4)

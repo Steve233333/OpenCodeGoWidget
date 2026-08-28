@@ -76,12 +76,12 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 PLIST
 
 echo "==> 编译 App"
-swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 \
+swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
   Sources/App.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"
-swiftc -parse-as-library -application-extension -target "$TARGET" -sdk "$SDK" -swift-version 5 \
+swiftc -parse-as-library -application-extension -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
   -Xlinker -e -Xlinker _NSExtensionMain \
   Widget/OpenCodeGoWidget.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS/${WIDGET_NAME}"
