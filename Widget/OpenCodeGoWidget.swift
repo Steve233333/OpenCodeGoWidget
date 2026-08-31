@@ -18,7 +18,17 @@ struct RefreshIntent: AppIntent {
         var didSave = false
         do {
             let snap = try await WidgetSnapshotRefresher.fetch()
-            WidgetDataStore.save(snap)
+            let toSave: WidgetSnapshot = {
+                guard let prev = WidgetDataStore.load(), snap.dailyCosts.isEmpty, !prev.dailyCosts.isEmpty else { return snap }
+                var r = snap
+                r.dailyCosts = prev.dailyCosts
+                r.dailyByKey = prev.dailyByKey
+                r.costEntries = prev.costEntries
+                r.costTotal = prev.costTotal
+                r.availableKeys = prev.availableKeys.isEmpty ? r.availableKeys : prev.availableKeys
+                return r
+            }()
+            WidgetDataStore.save(toSave)
             didSave = true
         } catch {
             if var s = WidgetDataStore.load() {
@@ -67,8 +77,20 @@ struct Provider: TimelineProvider {
             var snap = cached
             do {
                 let refreshed = try await WidgetSnapshotRefresher.fetch()
-                WidgetDataStore.save(refreshed)
-                snap = refreshed
+                // 保护：cost 拉取失败会导致 dailyCosts 为空，别用空覆盖已有数据（别让 7 天变 0）
+                let merged: WidgetSnapshot = {
+                    guard var prev = cached, refreshed.dailyCosts.isEmpty, !prev.dailyCosts.isEmpty else { return refreshed }
+                    // 保留上次可用的日费用，后端偶发失败时维持周图
+                    var r = refreshed
+                    r.dailyCosts = prev.dailyCosts
+                    r.dailyByKey = prev.dailyByKey
+                    r.costEntries = prev.costEntries
+                    r.costTotal = prev.costTotal
+                    r.availableKeys = prev.availableKeys.isEmpty ? r.availableKeys : prev.availableKeys
+                    return r
+                }()
+                WidgetDataStore.save(merged)
+                snap = merged
             } catch {
                 // Keep the last successful data when a scheduled fetch fails.
             }
@@ -122,7 +144,19 @@ struct GoWidgetView: View {
                         }
                         .frame(maxWidth: .infinity)
                         VStack(alignment: .leading, spacing: 4) {
-                            let weekTotal = s.dailyCosts.suffix(7).reduce(0) { $0 + $1.total }
+                            // 近7天按日历回溯统计，避免 suffix 7 在空窗期错位
+                            let weekTotal: Double = {
+                                let fmt = ChartFormatters.day
+                                let cal = Calendar(identifier: .gregorian)
+                                let today = cal.startOfDay(for: Date())
+                                var sum: Double = 0
+                                for off in 0..<7 {
+                                    guard let d = cal.date(byAdding: .day, value: -off, to: today) else { continue }
+                                    let k = fmt.string(from: d)
+                                    if let dc = s.dailyCosts.first(where: { $0.date == k }) { sum += dc.total }
+                                }
+                                return sum
+                            }()
                             HStack(spacing: 4) {
                                 Text("近7天").font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
@@ -135,11 +169,16 @@ struct GoWidgetView: View {
                                 .buttonStyle(.plain)
                                 .padding(.horizontal, 8)
                             } else {
-                                Text("暂无近7天费用").font(.system(size: 8)).foregroundStyle(.secondary)
-                                    .frame(height: 48)
-                                    .frame(maxWidth: .infinity)
-                                    .background(Color.primary.opacity(0.04))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                VStack(spacing: 2) {
+                                    Text(s.error ?? "暂无近7天费用").font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
+                                    if s.error == nil {
+                                        Text("请在主 App 配置 workspace").font(.system(size: 7)).foregroundStyle(.secondary.opacity(0.8)).lineLimit(1)
+                                    }
+                                }
+                                .frame(height: 48)
+                                .frame(maxWidth: .infinity)
+                                .background(Color.primary.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                         }
                         .frame(maxWidth: .infinity)

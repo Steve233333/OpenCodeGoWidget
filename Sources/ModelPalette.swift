@@ -92,6 +92,13 @@ enum ChartFormatters {
         f.timeZone = TimeZone(identifier: "Asia/Shanghai")
         return f
     }()
+    static let billingLabel: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "M/d"
+        f.locale = Locale(identifier: "zh_CN")
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        return f
+    }()
     static let weekLabel: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "M/dd"

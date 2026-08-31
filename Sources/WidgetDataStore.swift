@@ -93,7 +93,21 @@ enum WidgetSnapshotRefresher {
     static func fetch() async throws -> WidgetSnapshot {
         let manager = NetworkManager()
         let usage = try await manager.fetchUsage()
-        let cost = await manager.fetchCostToday()
+        // 账期模式：按月重置日对齐并跨月合并，避免月中开套餐被自然月切断
+        let alignment = BillingCycle.loadAlignment()
+        let cost: (total: Double, entries: [CostEntry], daily: [DailyCost], dailyByKey: [String: [DailyCost]])
+        if alignment == .billing {
+            if let bc = await CostCrawler.shared.fetchBillingCycleCosts(workspaceID: UserDefaults(suiteName: BillingCycle.suiteName)?.string(forKey: "workspaceID") ?? "", authCookie: UserDefaults(suiteName: BillingCycle.suiteName)?.string(forKey: "authCookie") ?? "", monthlyReset: usage.monthly.resetsAt) {
+                let todayEntries = bc.todayEntries
+                let tot = todayEntries.values.reduce(0,+)
+                let ents = todayEntries.map { CostEntry(model: $0.key, cost: $0.value, percent: tot>0 ? $0.value/tot*100:0) }.sorted{ $0.cost>$1.cost }
+                cost = (tot, ents, bc.daily, bc.dailyByKey)
+            } else {
+                cost = await manager.fetchCostToday()
+            }
+        } else {
+            cost = await manager.fetchCostToday()
+        }
         let costPerKey = await manager.fetchCostTodayPerKey()
         var entries: [String: Double] = [:]
         for entry in cost.entries where entry.cost > 0 {

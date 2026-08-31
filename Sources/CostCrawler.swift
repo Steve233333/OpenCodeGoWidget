@@ -102,6 +102,70 @@ final class CostCrawler: @unchecked Sendable {
         return await fetchWorkspaceCost(workspaceID: ws, authCookie: auth)
     }
 
+    /// 账期拉取：并发拉账期跨越的两个自然月并按 [cycleStart..<monthlyReset) 合并
+    func fetchBillingCycleCosts(workspaceID: String, authCookie: String, monthlyReset: Date) async -> MonthlyCost? {
+        // 无 workspace 凭据时别并发空请求，直接走本地缓存（fresh Mac 上避免 Widget 空刷成 0）
+        if workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || authCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let cached = await fetchHARFallback() { return filterToBilling(cached, monthlyReset: monthlyReset) }
+            logger.info("CostCrawler: billing fetch skipped — workspace credentials missing")
+            return nil
+        }
+        let months = BillingCycle.monthsInCycle(monthlyReset: monthlyReset)
+        guard !months.isEmpty else { return nil }
+        var fetched: [MonthlyCost] = []
+        await withTaskGroup(of: MonthlyCost?.self) { group in
+            for (y, m0) in months {
+                group.addTask {
+                    if let a = await self.fetchWorkspaceCostAttempt(workspaceID: workspaceID, authCookie: authCookie, year: y, month0: m0, includeServerHeader: true) { return a }
+                    return await self.fetchWorkspaceCostAttempt(workspaceID: workspaceID, authCookie: authCookie, year: y, month0: m0, includeServerHeader: false)
+                }
+            }
+            for await v in group { if let c = v { fetched.append(c) } }
+        }
+        if fetched.isEmpty {
+            if let cached = await fetchHARFallback() { return filterToBilling(cached, monthlyReset: monthlyReset) }
+            return nil
+        }
+        // 合并所有月 -> 再按账期过滤 + 按模型聚合去重
+        var byDate: [String: [String: Double]] = [:]
+        var byDateByKey: [String: [String: [String: Double]]] = [:]
+        var allKeys: [ApiKeyInfo] = []
+        var seenKeys = Set<String>()
+        for mc in fetched {
+            for k in mc.keys where seenKeys.insert(k.id).inserted { allKeys.append(k) }
+            for dc in mc.daily {
+                // 先合并，后过滤，避免跨月同一天被截
+                byDate[dc.date, default: [:]] = mergeModelDict(into: byDate[dc.date] ?? [:], from: dc.entries)
+            }
+            for (kid, arr) in mc.dailyByKey {
+                for dc in arr {
+                    byDateByKey[kid, default: [:]][dc.date, default: [:]] = mergeModelDict(into: byDateByKey[kid]?[dc.date] ?? [:], from: dc.entries)
+                }
+            }
+        }
+        let (startStr, endStr, _) = BillingCycle.billingDateStrings(monthlyReset: monthlyReset)
+        func inBilling(_ s: String) -> Bool { !s.isEmpty && s >= startStr && s < endStr }
+        let daily = byDate.filter { inBilling($0.key) }.map { DailyCost(date: $0.key, entries: $0.value) }.sorted { $0.date < $1.date }
+        var dailyByKey: [String: [DailyCost]] = [:]
+        for (k, dict) in byDateByKey {
+            dailyByKey[k] = dict.filter { inBilling($0.key) }.map { DailyCost(date: $0.key, entries: $0.value) }.sorted { $0.date < $1.date }
+        }
+        if daily.isEmpty { return nil }
+        return MonthlyCost(daily: daily, keys: allKeys, dailyByKey: dailyByKey)
+    }
+    private func mergeModelDict(into base: [String: Double], from add: [String: Double]) -> [String: Double] {
+        var r = base
+        for (k,v) in add { r[k, default: 0] += v }
+        return r
+    }
+    private func filterToBilling(_ mc: MonthlyCost, monthlyReset: Date) -> MonthlyCost? {
+        let (s, e, _) = BillingCycle.billingDateStrings(monthlyReset: monthlyReset)
+        let daily = mc.daily.filter { $0.date >= s && $0.date < e }
+        var byKey: [String: [DailyCost]] = [:]
+        for (k, arr) in mc.dailyByKey { byKey[k] = arr.filter { $0.date >= s && $0.date < e } }
+        guard !daily.isEmpty else { return nil }
+        return MonthlyCost(daily: daily, keys: mc.keys, dailyByKey: byKey)
+    }
     private func fetchWorkspaceCost(workspaceID: String, authCookie: String) async -> MonthlyCost? {
         let cal = Calendar.current
         let now = Date()

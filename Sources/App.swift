@@ -63,6 +63,7 @@ struct ContentView: View {
     @State private var quotas: [GoQuota] = GoQuotaRegistry.cachedSync()
     @State private var quotaUpdatedAt: Date? = GoQuotaRegistry.cachedDate()
     @State private var selectedKeyId: String? = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "selectedCostKeyId")
+    @State private var chartAlignment: ChartAlignment = BillingCycle.loadAlignment()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,14 +87,46 @@ struct ContentView: View {
                 VStack(spacing: 16) {
                     if let snap = snapshot {
                         VStack(spacing: 12) {
-                            // 月度堆叠柱状图（整月长度，如截图）
+                            // 账期/自然月堆叠柱状图 — 账期默认对齐 Go 月重置日，解决月中开套餐被自然月切断
                             VStack(alignment: .leading, spacing: 6) {
                                 let filteredDaily = snap.filteredDaily(for: selectedKeyId)
                                 let monthlyTotal = filteredDaily.reduce(0) { $0 + $1.total }
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Text("本月花费").font(.caption).foregroundStyle(.secondary)
+                                    let isBilling = chartAlignment == .billing
+                                    Text(isBilling ? BillingCycle.titleRange(monthlyReset: snap.monthlyReset) : "本月花费").font(.caption).foregroundStyle(.secondary)
                                     Spacer()
-                                    Text(String(format: "$%.2f USD", monthlyTotal)).font(.headline).monospacedDigit()
+                                }
+                                HStack(spacing: 8) {
+                                    if chartAlignment == .billing {
+                                        Text(BillingCycle.subtitleDetail(monthlyReset: snap.monthlyReset)).font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
+                                    } else {
+                                        Text("自然月 1日—月末").font(.system(size: 8)).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(String(format: "$%.2f USD", monthlyTotal)).font(.subheadline.weight(.semibold)).monospacedDigit()
+                                }
+                                HStack(alignment: .center, spacing: 8) {
+                                    // 自绘分段开关放左侧左对齐，密钥菜单放右侧右对齐
+                                    HStack(spacing: 0) {
+                                        Button { chartAlignment = .billing; BillingCycle.saveAlignment(.billing); Task { await refresh() } } label: {
+                                            Text("账期").font(.caption2.weight(chartAlignment == .billing ? .semibold : .regular))
+                                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                                .background(chartAlignment == .billing ? Color.accentColor : Color.clear)
+                                                .foregroundStyle(chartAlignment == .billing ? Color.white : Color.primary)
+                                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                        }.buttonStyle(.plain)
+                                        Button { chartAlignment = .calendar; BillingCycle.saveAlignment(.calendar); Task { await refresh() } } label: {
+                                            Text("自然月").font(.caption2.weight(chartAlignment == .calendar ? .semibold : .regular))
+                                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                                .background(chartAlignment == .calendar ? Color.accentColor : Color.clear)
+                                                .foregroundStyle(chartAlignment == .calendar ? Color.white : Color.primary)
+                                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                        }.buttonStyle(.plain)
+                                    }
+                                    .padding(2)
+                                    .background(Color.primary.opacity(0.08))
+                                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                                    Spacer()
                                     let keysForMenu: [ApiKeyInfo] = snap.availableKeys.isEmpty ? CostCrawler.shared.loadCachedKeys() : snap.availableKeys
                                     if !keysForMenu.isEmpty {
                                         Menu {
@@ -127,7 +160,7 @@ struct ContentView: View {
                                     .background(Color.primary.opacity(0.05))
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
                                 } else {
-                                    MonthChartView(dailyCosts: filteredDaily)
+                                    MonthChartView(dailyCosts: filteredDaily, monthlyReset: snap.monthlyReset, alignment: chartAlignment)
                                         .frame(height: 160)
                                     // 图例：实时展示官方 Go 全量（已同步 29 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
                                     let _ = modelTick
@@ -327,8 +360,21 @@ struct CostBar: View {
 
 struct MonthChartView: View {
     let dailyCosts: [DailyCost]
+    let monthlyReset: Date?
+    let alignment: ChartAlignment
 
-    private var monthDates: [Date] {
+    init(dailyCosts: [DailyCost], monthlyReset: Date? = nil, alignment: ChartAlignment = .billing) {
+        self.dailyCosts = dailyCosts
+        self.monthlyReset = monthlyReset
+        self.alignment = alignment
+    }
+
+    private var effectiveDates: [Date] {
+        if alignment == .billing, let reset = monthlyReset {
+            let d = BillingCycle.billingDates(monthlyReset: reset)
+            if !d.isEmpty { return d }
+        }
+        // calendar fallback — currentMonth by last daily or now
         let cal = Calendar(identifier: .gregorian)
         let refDate: Date = {
             if let last = dailyCosts.last?.date,
@@ -345,7 +391,7 @@ struct MonthChartView: View {
     private var flat: [DayModelCost] {
         let map: [String: DailyCost] = Dictionary(uniqueKeysWithValues: dailyCosts.map { ($0.date, $0) })
         var result: [DayModelCost] = []
-        for date in monthDates {
+        for date in effectiveDates {
             let key = ChartFormatters.day.string(from: date)
             if let dc = map[key] {
                 for (model, cost) in dc.entries where cost > 0 {
@@ -363,14 +409,22 @@ struct MonthChartView: View {
         return 0...capped
     }
 
-    private var allMonthStrings: [String] {
-        monthDates.map { ChartFormatters.monthLabel.string(from: $0) }
+    private var allXStrings: [String] {
+        if alignment == .billing {
+            return effectiveDates.map { ChartFormatters.billingLabel.string(from: $0) }
+        }
+        return effectiveDates.map { ChartFormatters.monthLabel.string(from: $0) }
+    }
+
+    private func xString(for date: Date) -> String {
+        if alignment == .billing { return ChartFormatters.billingLabel.string(from: date) }
+        return ChartFormatters.monthLabel.string(from: date)
     }
 
     var body: some View {
         Chart(flat) { item in
             BarMark(
-                x: .value("Date", ChartFormatters.monthLabel.string(from: item.date)),
+                x: .value("Date", xString(for: item.date)),
                 y: .value("Cost", item.cost),
                 stacking: .standard
             )
@@ -381,7 +435,7 @@ struct MonthChartView: View {
             if model == "__empty__" { return Color.clear }
             return ModelPalette.color(for: model)
         }
-        .chartXScale(domain: allMonthStrings)
+        .chartXScale(domain: allXStrings)
         .chartYScale(domain: yDomain)
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { val in
@@ -394,7 +448,10 @@ struct MonthChartView: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: allMonthStrings.enumerated().filter { $0.offset % 3 == 0 }.map { $0.element }) { val in
+            // billing: ~31 ticks, subsample every ~5d; calendar: every 3d
+            let stride = alignment == .billing ? 5 : 3
+            let ticks = allXStrings.enumerated().filter { $0.offset % stride == 0 }.map { $0.element }
+            AxisMarks(values: ticks) { val in
                 AxisGridLine().foregroundStyle(Color.clear)
                 AxisValueLabel(centered: true) {
                     if let s = val.as(String.self) {
@@ -412,6 +469,7 @@ struct MonthChartView: View {
         .padding(.top, 4)
     }
 }
+
 
 struct SettingsView: View {
     @Binding var apiKey: String
@@ -540,10 +598,17 @@ struct SettingsView: View {
                 Spacer()
                 Text("可在系统设置 → 通用 → 登录项管理").font(.system(size: 9)).foregroundStyle(.secondary)
             }
+            Divider()
+            HStack {
+                Text("版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "-") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "-"))")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                Spacer()
+                Text("OpenCode 小组件").font(.system(size: 9)).foregroundStyle(.secondary)
+            }
             Spacer()
         }
         .padding(20)
-        .frame(width: 520, height: 400)
+        .frame(width: 520, height: 420)
         .onAppear {
             draft = apiKey
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
