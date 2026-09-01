@@ -44,7 +44,7 @@ struct Provider: TimelineProvider {
         // 主 App 的 ContentView.refresh() 是唯一真源（会并发拉 8/9 月并做账期合并）
         let cached = WidgetDataStore.load()
         let now = Date()
-        let staleAfter: TimeInterval = 5 * 60
+        let staleAfter: TimeInterval = 2 * 60
         // 轻量刷新模型列表（无鉴权，不影响费用）
         Task { _ = await ModelRegistry.refreshIfNeeded() }
         let next = (cached?.updatedAt ?? now).addingTimeInterval(staleAfter)

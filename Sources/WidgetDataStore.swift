@@ -66,20 +66,34 @@ struct WidgetSnapshot: Codable {
 enum WidgetDataStore {
     static let suiteName = "2DC432GLL2.com.steve233.opencodego"
     static let snapshotKey = "widget_snapshot"
-
+    // 文件直通：Group Container 下 Application Support/widget_snapshot.json，Widget 扩展立即可见，不走 cfprefsd
+    static var fileURL: URL? {
+        guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName) else { return nil }
+        return url.appendingPathComponent("widget_snapshot.json")
+    }
     static var defaults: UserDefaults? { UserDefaults(suiteName: suiteName) }
 
     static func save(_ snap: WidgetSnapshot) {
-        guard let d = defaults else { return }
-        if let data = try? JSONEncoder().encode(snap) {
+        guard let data = try? JSONEncoder().encode(snap) else { return }
+        // 1) 写文件（主路径）
+        if let url = fileURL {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: url, options: .atomic)
+        }
+        // 2) 双写 UserDefaults（兼容旧版 + 调试）
+        if let d = defaults {
             d.set(data, forKey: snapshotKey)
-            // 跨进程同步：UserDefaults(suite:) 走 cfprefsd，synchronize 已废弃，显式落盘 + 通知
             d.synchronize()
-            CFPreferencesAppSynchronize(WidgetDataStore.suiteName as CFString)
+            CFPreferencesAppSynchronize(suiteName as CFString)
         }
     }
 
     static func load() -> WidgetSnapshot? {
+        // 优先读文件（最新），失败回退 UserDefaults
+        if let url = fileURL, let data = try? Data(contentsOf: url),
+           let snap = try? JSONDecoder().decode(WidgetSnapshot.self, from: data) {
+            return snap
+        }
         guard let d = defaults, let data = d.data(forKey: snapshotKey) else { return nil }
         return try? JSONDecoder().decode(WidgetSnapshot.self, from: data)
     }

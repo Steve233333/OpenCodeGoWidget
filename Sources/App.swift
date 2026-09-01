@@ -271,10 +271,13 @@ struct ContentView: View {
             }
             WidgetDataStore.save(snap)
             snapshot = snap
-            // 给 cfprefsd 100ms 落盘窗口，避免 Widget 进程读到 1:46 旧快照
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            // 文件已原子写入，UserDefaults 也已同步，稍作延迟确保 Widget 扩展的 containerURL 可见
+            try? await Task.sleep(nanoseconds: 200_000_000)
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
             WidgetCenter.shared.reloadAllTimelines()
+            // 再补一次，规避 WidgetKit 节流对单次 reload 的限频
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         } catch {
             let models = await modelRefresh
             let q = await quotaRefresh
