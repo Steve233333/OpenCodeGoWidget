@@ -271,7 +271,10 @@ struct ContentView: View {
             }
             WidgetDataStore.save(snap)
             snapshot = snap
+            // 给 cfprefsd 100ms 落盘窗口，避免 Widget 进程读到 1:46 旧快照
+            try? await Task.sleep(nanoseconds: 100_000_000)
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
+            WidgetCenter.shared.reloadAllTimelines()
         } catch {
             let models = await modelRefresh
             let q = await quotaRefresh

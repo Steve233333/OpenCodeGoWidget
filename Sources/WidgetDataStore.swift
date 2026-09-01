@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 struct WidgetSnapshot: Codable {
     var rolling: Int
@@ -72,10 +73,9 @@ enum WidgetDataStore {
         guard let d = defaults else { return }
         if let data = try? JSONEncoder().encode(snap) {
             d.set(data, forKey: snapshotKey)
-            // The App and the widget are separate processes. Force this write
-            // through before asking WidgetKit for a new timeline, otherwise an
-            // intent can be rendered once more with the previous snapshot.
+            // 跨进程同步：UserDefaults(suite:) 走 cfprefsd，synchronize 已废弃，显式落盘 + 通知
             d.synchronize()
+            CFPreferencesAppSynchronize(WidgetDataStore.suiteName as CFString)
         }
     }
 
