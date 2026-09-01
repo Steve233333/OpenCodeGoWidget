@@ -44,7 +44,7 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleShortVersionString</key><string>1.1.4</string>
 	<key>CFBundleVersion</key><string>6</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
-	<key>LSUIElement</key><false/>
+	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.steve233.opencodego</string><key>CFBundleURLSchemes</key><array><string>opencodego</string></array></dict></array>
