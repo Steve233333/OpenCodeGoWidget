@@ -64,6 +64,7 @@ struct ContentView: View {
     @State private var quotaUpdatedAt: Date? = GoQuotaRegistry.cachedDate()
     @State private var selectedKeyId: String? = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "selectedCostKeyId")
     @State private var chartAlignment: ChartAlignment = BillingCycle.loadAlignment()
+    @State private var autoTimer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -245,6 +246,10 @@ struct ContentView: View {
                 }
             }
             if snapshot == nil { await refresh() }
+        }
+        .onReceive(autoTimer) { _ in
+            guard !loading else { return }
+            Task { await refresh() }
         }
         .onOpenURL { url in
             if url.scheme == "opencodego" {
