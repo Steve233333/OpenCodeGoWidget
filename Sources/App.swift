@@ -108,14 +108,14 @@ struct ContentView: View {
                                 HStack(alignment: .center, spacing: 8) {
                                     // 自绘分段开关放左侧左对齐，密钥菜单放右侧右对齐
                                     HStack(spacing: 0) {
-                                        Button { chartAlignment = .billing; BillingCycle.saveAlignment(.billing); Task { await refresh() } } label: {
+                                        Button { chartAlignment = .billing; BillingCycle.saveAlignment(.billing) } label: {
                                             Text("账期").font(.caption2.weight(chartAlignment == .billing ? .semibold : .regular))
                                                 .padding(.horizontal, 10).padding(.vertical, 4)
                                                 .background(chartAlignment == .billing ? Color.accentColor : Color.clear)
                                                 .foregroundStyle(chartAlignment == .billing ? Color.white : Color.primary)
                                                 .clipShape(RoundedRectangle(cornerRadius: 5))
                                         }.buttonStyle(.plain)
-                                        Button { chartAlignment = .calendar; BillingCycle.saveAlignment(.calendar); Task { await refresh() } } label: {
+                                        Button { chartAlignment = .calendar; BillingCycle.saveAlignment(.calendar) } label: {
                                             Text("自然月").font(.caption2.weight(chartAlignment == .calendar ? .semibold : .regular))
                                                 .padding(.horizontal, 10).padding(.vertical, 4)
                                                 .background(chartAlignment == .calendar ? Color.accentColor : Color.clear)

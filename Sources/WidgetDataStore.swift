@@ -102,11 +102,44 @@ enum WidgetSnapshotRefresher {
                 let tot = todayEntries.values.reduce(0,+)
                 let ents = todayEntries.map { CostEntry(model: $0.key, cost: $0.value, percent: tot>0 ? $0.value/tot*100:0) }.sorted{ $0.cost>$1.cost }
                 cost = (tot, ents, bc.daily, bc.dailyByKey)
+            } else if let cached = WidgetDataStore.load(), !cached.dailyCosts.isEmpty {
+                // 账期拉取偶发失败时保旧，避免“自然月”那次单月数据把 30 天账期覆盖掉
+                let fmt = ChartFormatters.day
+                let todayStr = fmt.string(from: Date())
+                let todayEntries: [String: Double] = {
+                    if let dc = cached.dailyCosts.first(where: { $0.date == todayStr }) { return dc.entries }
+                    return cached.costEntries
+                }()
+                let tot = todayEntries.values.reduce(0,+)
+                let ents = todayEntries.map { CostEntry(model: $0.key, cost: $0.value, percent: tot>0 ? $0.value/tot*100:0) }.sorted{ $0.cost>$1.cost }
+                cost = (tot, ents, cached.dailyCosts, cached.dailyByKey)
             } else {
                 cost = await manager.fetchCostToday()
             }
         } else {
-            cost = await manager.fetchCostToday()
+            // 自然月视图直接从账期缓存派生，不再单拉单月，避免切回账期时数据被截断
+            if let cached = WidgetDataStore.load(), !cached.dailyCosts.isEmpty,
+               let monthInterval = BillingCycle.calendar.dateInterval(of: .month, for: Date()) {
+                let cal = BillingCycle.calendar
+                let startStr = ChartFormatters.day.string(from: monthInterval.start)
+                let days = Int(monthInterval.duration/86400)
+                let endDate = cal.date(byAdding: .day, value: max(0, days - 1), to: monthInterval.start) ?? Date()
+                let endStr = ChartFormatters.day.string(from: endDate)
+                let filtered = cached.dailyCosts.filter { $0.date >= startStr && $0.date <= endStr }
+                if !filtered.isEmpty {
+                    var byKey: [String: [DailyCost]] = [:]
+                    for (k, arr) in cached.dailyByKey { byKey[k] = arr.filter { $0.date >= startStr && $0.date <= endStr } }
+                    let todayStr = ChartFormatters.day.string(from: Date())
+                    let todayEntries = filtered.first(where: { $0.date == todayStr })?.entries ?? [:]
+                    let tot = todayEntries.values.reduce(0,+)
+                    let ents: [CostEntry] = todayEntries.map { kv in CostEntry(model: kv.key, cost: kv.value, percent: tot>0 ? kv.value/tot*100:0) }.sorted{ $0.cost>$1.cost }
+                    cost = (tot, ents, filtered, byKey)
+                } else {
+                    cost = await manager.fetchCostToday()
+                }
+            } else {
+                cost = await manager.fetchCostToday()
+            }
         }
         let costPerKey = await manager.fetchCostTodayPerKey()
         var entries: [String: Double] = [:]
