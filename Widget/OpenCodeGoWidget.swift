@@ -69,8 +69,18 @@ struct GoWidgetView: View {
                 }
                 .font(.caption2.weight(.semibold))
                 Spacer()
-                Color.clear.frame(width: 28, height: 28)
-}
+                Button(intent: RefreshIntent()) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .medium))
+                        // WidgetKit shows this as waiting while the intent
+                        // runs, then bounces it once when updated data arrives.
+                        .invalidatableContent()
+                        .symbolEffect(.bounce, options: .speed(1.25), value: snap?.updatedAt ?? entry.date)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .controlSize(.mini)
+            }
 
             if let s = snap {
                 if family == .systemSmall {
