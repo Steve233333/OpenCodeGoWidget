@@ -21,7 +21,7 @@ struct OpenCodeGoWidgetApp: App {
         .windowResizability(.contentSize)
 
         // 菜单栏常驻：像 DeepSeekMonitor 一样即使用户关掉窗口也继续 5 分钟后台刷
-        MenuBarExtra("OpenCode Go", systemImage: "chart.bar.fill") {
+        MenuBarExtra {
             Button("打开主面板") {
                 NSApp.activate(ignoringOtherApps: true)
                 if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) ?? NSApp.keyWindow ?? NSApp.windows.first {
@@ -39,6 +39,8 @@ struct OpenCodeGoWidgetApp: App {
                 NSApplication.shared.terminate(nil)
             }
             .keyboardShortcut("q")
+        } label: {
+            BrandIconView(size: 16)
         }
     }
 }
