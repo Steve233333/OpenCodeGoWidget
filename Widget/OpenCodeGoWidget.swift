@@ -9,44 +9,25 @@ struct GoUsageEntry: TimelineEntry {
 
 struct RefreshIntent: AppIntent {
     static var title: LocalizedStringResource = "刷新 OpenCode Go"
-    static var description = IntentDescription("立即刷新用量")
+    static var description = IntentDescription("显示主 App 已拉取的最新用量（Widget 不再直连网络）")
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult {
-        // 实时同步 Go 模型列表（不阻塞主刷新，失败静默）
+        // Widget 纯展示：只读主 App 写入的缓存，不再直连 /_server，避免沙盒 502 覆盖主 App 的 30 天
+        // 轻量同步模型列表（无鉴权）可保留
         _ = await ModelRegistry.refreshIfNeeded()
-        var didSave = false
-        do {
-            let snap = try await WidgetSnapshotRefresher.fetch()
-            let toSave: WidgetSnapshot = {
-                guard let prev = WidgetDataStore.load(), snap.dailyCosts.isEmpty, !prev.dailyCosts.isEmpty else { return snap }
-                var r = snap
-                r.dailyCosts = prev.dailyCosts
-                r.dailyByKey = prev.dailyByKey
-                r.costEntries = prev.costEntries
-                r.costTotal = prev.costTotal
-                r.availableKeys = prev.availableKeys.isEmpty ? r.availableKeys : prev.availableKeys
-                return r
-            }()
-            WidgetDataStore.save(toSave)
-            didSave = true
-        } catch {
-            if var s = WidgetDataStore.load() {
-                s.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                s.updatedAt = Date()
-                WidgetDataStore.save(s)
-                didSave = true
-            }
-        }
-        // Always bump updatedAt even on total failure so user sees refresh happened
-        if !didSave {
-            var snap = WidgetDataStore.load() ?? WidgetSnapshot(rolling: 0, weekly: 0, monthly: 0, rollingReset: Date(), weeklyReset: Date(), monthlyReset: Date(), costTotal: 0, costEntries: [:], dailyCosts: [], updatedAt: Date(), error: "刷新失败")
-            snap.updatedAt = Date()
+        // 若缓存为空，提示去主 App 刷新
+        if var snap = WidgetDataStore.load() {
+            // 仅更新时间戳以给用户反馈，不改 dailyCosts
+            // 不做网络请求，避免用空覆盖主 App 的完整快照
+            snap.error = snap.dailyCosts.isEmpty ? "暂无近7天费用，请在主 App 点刷新" : nil
+            // 不改 updatedAt，避免误导 stale 判断；仅触发重绘
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
+        } else {
+            var snap = WidgetSnapshot(rolling: 0, weekly: 0, monthly: 0, rollingReset: Date(), weeklyReset: Date(), monthlyReset: Date(), costTotal: 0, costEntries: [:], dailyCosts: [], updatedAt: Date(), error: "暂无数据，请在主 App 配置 workspace 后刷新")
             WidgetDataStore.save(snap)
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         }
-        // save() synchronizes the App Group first; the provider now uses this
-        // fresh snapshot instead of starting another network request.
-        WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         return .result()
     }
 }
@@ -59,44 +40,15 @@ struct Provider: TimelineProvider {
         completion(GoUsageEntry(date: Date(), snapshot: WidgetDataStore.load()))
     }
     func getTimeline(in context: Context, completion: @escaping (Timeline<GoUsageEntry>) -> Void) {
+        // 纯展示：Widget 不再直连网络，完全复用主 App 写入的 widget_snapshot
+        // 主 App 的 ContentView.refresh() 是唯一真源（会并发拉 8/9 月并做账期合并）
         let cached = WidgetDataStore.load()
         let now = Date()
         let staleAfter: TimeInterval = 15 * 60
-
-        // A manual RefreshIntent has just stored a fresh snapshot. Return it
-        // directly so the widget changes as soon as WidgetKit reloads it.
-        guard cached == nil || now.timeIntervalSince(cached!.updatedAt) >= staleAfter else {
-            let next = cached!.updatedAt.addingTimeInterval(staleAfter)
-            completion(Timeline(entries: [GoUsageEntry(date: now, snapshot: cached)], policy: .after(next)))
-            return
-        }
-
-        Task {
-            // 后台刷新 Go 模型列表（TTL 24h，轻量无鉴权）
-            _ = await ModelRegistry.refreshIfNeeded()
-            var snap = cached
-            do {
-                let refreshed = try await WidgetSnapshotRefresher.fetch()
-                // 保护：cost 拉取失败会导致 dailyCosts 为空，别用空覆盖已有数据（别让 7 天变 0）
-                let merged: WidgetSnapshot = {
-                    guard var prev = cached, refreshed.dailyCosts.isEmpty, !prev.dailyCosts.isEmpty else { return refreshed }
-                    // 保留上次可用的日费用，后端偶发失败时维持周图
-                    var r = refreshed
-                    r.dailyCosts = prev.dailyCosts
-                    r.dailyByKey = prev.dailyByKey
-                    r.costEntries = prev.costEntries
-                    r.costTotal = prev.costTotal
-                    r.availableKeys = prev.availableKeys.isEmpty ? r.availableKeys : prev.availableKeys
-                    return r
-                }()
-                WidgetDataStore.save(merged)
-                snap = merged
-            } catch {
-                // Keep the last successful data when a scheduled fetch fails.
-            }
-            let entry = GoUsageEntry(date: now, snapshot: snap)
-            completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(staleAfter))))
-        }
+        // 轻量刷新模型列表（无鉴权，不影响费用）
+        Task { _ = await ModelRegistry.refreshIfNeeded() }
+        let next = (cached?.updatedAt ?? now).addingTimeInterval(staleAfter)
+        completion(Timeline(entries: [GoUsageEntry(date: now, snapshot: cached)], policy: .after(next)))
     }
 }
 
