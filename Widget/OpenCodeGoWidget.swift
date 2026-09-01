@@ -69,6 +69,7 @@ struct GoWidgetView: View {
                 }
                 .font(.caption2.weight(.semibold))
                 Spacer()
+                Color.clear.frame(width: 28, height: 28)
 }
 
             if let s = snap {
