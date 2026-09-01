@@ -23,6 +23,8 @@ echo "==> 拷贝资源"
 cp Resources/AppIcon.icns "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
 cp Resources/BrandLight.png "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
 cp Resources/BrandDark.png "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
+cp Resources/MenuBarIcon.png "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
+cp Resources/MenuBarIcon@2x.png "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
 cp Resources/BrandLight.png "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
 cp Resources/BrandDark.png "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
 

@@ -40,8 +40,34 @@ struct OpenCodeGoWidgetApp: App {
             }
             .keyboardShortcut("q")
         } label: {
-            BrandIconView(size: 16)
+            MenuBarIconView()
         }
+    }
+}
+
+
+struct MenuBarIconView: View {
+    var body: some View {
+        Group {
+            if let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
+               let img = NSImage(contentsOf: url) {
+                let _ = img.isTemplate = true
+                Image(nsImage: img)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 16, height: 16)
+            } else if let nsImg = NSImage(named: "MenuBarIcon") {
+                let _ = nsImg.isTemplate = true
+                Image(nsImage: nsImg)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "chart.bar.fill")
+            }
+        }
+        .frame(width: 16, height: 16)
     }
 }
 

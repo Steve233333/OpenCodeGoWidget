@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.3.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.4.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.3.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.4.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -93,20 +93,27 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.3.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.3.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.4.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.4.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
 
+### v1.1.4 — 菜单栏常驻与图标修复（2026-09-01）
+
+- 菜单栏常驻：`LSUIElement` + `MenuBarExtra`，关掉主窗口仍 5 分钟后台自刷（跟 DeepSeekMonitor 一致），支持开机自启。
+- 菜单栏图标重做为 HIG 模板：`16pt (16px/32px)` 纯黑+透明，`isTemplate=true`，浅/深色自动适配，不再出现巨大白底块。
+- 小组件纯展示化：不再直连 `/_server`，只读主 App 的 `widget_snapshot`，避免沙盒 502 用空覆盖。
+- 设置页底部显示 **版本 1.1.4 (6)**。
+
 ### v1.1.3 — 账期对齐与小组件修复（2026-08-31）
 
 - 主仪表盘图表新增 **账期 / 自然月** 切换，默认 **账期**：按 `monthlyResetsAt` 对齐 Go 月重置日（本期 8/18 13:51 — 9/18 13:51），解决月中开通套餐被自然月切断、后半月柱子缺失的问题；来回横跨两自然月时自动双月合并拉取。
 - 账期标题区排版重做：`8月18日-9月17日` 置顶、第二行 `套餐生效 … — …` 与 `$13.33 USD` 同行、第三行自绘分段开关左置与 `所有密钥 ▾` 右置，左侧纵向对齐柱状图 Y 轴。
 - 小组件近 7 天修复：/widget 扩展识别为空 `dailyCosts` 时不再覆盖非空快照、额度服务端先按日历回溯统计、空态提示 `请在主 App 配置 workspace`。
-- 设置页底部显示 **版本 1.1.3 (5)**。
+- 设置页底部显示 **版本 1.1.4 (6)**。
 
 ## 本地构建
 
@@ -120,8 +127,8 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.3.dmg
-dist/OpenCode 小组件-1.1.3.zip
+dist/OpenCode 小组件-1.1.4.dmg
+dist/OpenCode 小组件-1.1.4.zip
 dist/OpenCode 小组件.app
 ```
 
