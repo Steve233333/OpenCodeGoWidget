@@ -13,15 +13,17 @@ struct RefreshIntent: AppIntent {
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult {
-        // Widget 纯展示：只读主 App 写入的缓存，不再直连 /_server，避免沙盒 502 覆盖主 App 的 30 天
-        // 轻量同步模型列表（无鉴权）可保留
+        // Widget 纯展示：数据唯一真源是主 App 的 widget_snapshot.json
+        // 按钮仅做可见反馈 + 触发重绘，不直连 /_server，避免沙盒 502 用空覆盖主 App 的 30 天
         _ = await ModelRegistry.refreshIfNeeded()
-        // 若缓存为空，提示去主 App 刷新
         if var snap = WidgetDataStore.load() {
-            // 仅更新时间戳以给用户反馈，不改 dailyCosts
-            // 不做网络请求，避免用空覆盖主 App 的完整快照
+            // 给用户可见反馈：更新时间戳并触发 bounce 动画
+            snap.updatedAt = Date()
             snap.error = snap.dailyCosts.isEmpty ? "暂无近7天费用，请在主 App 点刷新" : nil
-            // 不改 updatedAt，避免误导 stale 判断；仅触发重绘
+            WidgetDataStore.save(snap)
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
+            // 双发规避 WidgetKit 限频
+            try? await Task.sleep(nanoseconds: 200_000_000)
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         } else {
             var snap = WidgetSnapshot(rolling: 0, weekly: 0, monthly: 0, rollingReset: Date(), weeklyReset: Date(), monthlyReset: Date(), costTotal: 0, costEntries: [:], dailyCosts: [], updatedAt: Date(), error: "暂无数据，请在主 App 配置 workspace 后刷新")
