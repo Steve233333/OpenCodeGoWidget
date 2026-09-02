@@ -2382,7 +2382,23 @@ class Proxy:
                         _log(f"[vision-proxy] sidecar check model={model} go={go_changed} has_synth={has_synth} has_native={has_native} text='{last_text[:30]}' stream={parsed.get('stream')}")
                         if last_text and (has_synth or has_native) and any(kw in last_text.lower() for kw in ["搜", "搜索", "新闻", "search", "news", "天气", "weather", "热点", "热榜", "today"]):
                             try:
-                                if not parsed.get("stream"):
+                                # REAL search for BOTH stream and non-stream: inject results before upstream so
+                                # the model answers directly instead of calling web_search (which would 400 / sandbox-fail).
+                                zen_key = os.environ.get("ZEN_API_KEY")
+                                try:
+                                    search_res = await asyncio.wait_for(_perform_web_search(last_text, zen_key), timeout=5.0)
+                                except asyncio.TimeoutError:
+                                    _log(f"[vision-proxy] proactive real search timeout for {model}, using hint")
+                                    search_res = ""
+                                if search_res and len(search_res) > 60:
+                                    parsed["input"].append({
+                                        "type": "message",
+                                        "role": "user",
+                                        "content": [{"type": "input_text", "text": f"[web_search sidecar] 已为你实时搜索完成，直接基于以下搜索结果回答：\n{search_res[:4000]}"}]
+                                    })
+                                    proactive_changed = True
+                                    _log(f"[vision-proxy] proactive REAL search injected for {model} query='{last_text[:30]}' len={len(search_res)}")
+                                else:
                                     placeholder = f"Web search is available for '{last_text[:50]}'. You have real-time search capability via the web_search tool. Please use web_search to search and then summarize. Do not claim you have no search ability."
                                     parsed["input"].append({
                                         "type": "message",
@@ -2390,7 +2406,7 @@ class Proxy:
                                         "content": [{"type": "input_text", "text": f"[web_search sidecar] {placeholder}"}]
                                     })
                                     proactive_changed = True
-                                    _log(f"[vision-proxy] proactive sidecar hint injected for {model} query='{last_text[:30]}'")
+                                    _log(f"[vision-proxy] proactive sidecar hint injected for {model} query='{last_text[:30]}' (search empty)")
                             except Exception as e:
                                 _log(f"[vision-proxy] proactive sidecar failed: {e!r}")
                 wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)
