@@ -808,116 +808,107 @@ def _inject_synthetic_web_search(parsed, model=None, go_route=False):
     return True
 
 async def _perform_web_search(query, zen_key=None):
-    """Perform real web search - direct fetch first (fast), deepseek fallback."""
-    # Direct fetch first (fast, no LLM cost) - try news-specific sources for Chinese
+    """只走 deepseek 代搜，给非联网模型用，不再直连 Google/DuckDuckGo。"""
+    # 兜底取 key
+    if not zen_key:
+        zen_key = os.environ.get("ZEN_API_KEY", "")
+        if not zen_key:
+            try:
+                for fp in ["/Users/steve233/.config/agent-vision-toolkit/env", str(pathlib.Path.home() / ".config/agent-vision-toolkit/env")]:
+                    for line in open(fp):
+                        line = line.strip()
+                        if line.startswith("ZEN_API_KEY"):
+                            v = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            if v:
+                                zen_key = v
+                                break
+                    if zen_key:
+                        break
+            except:
+                pass
+    if not zen_key:
+        _log(f"[vision-proxy] _perform_web_search no ZEN_API_KEY for query='{query[:30]}'")
+        return f"Search for '{query}' failed: ZEN_API_KEY missing"
+    # 只走 deepseek-v4-flash-go 代搜
     try:
-        def direct_fetch():
-            q = urllib.parse.quote(query)
-            # For news queries, try news.google.com RSS first
-            if any(kw in query for kw in ["新闻", "news", "今日", "today", "热点", "热榜"]):
+        payload = {
+            "model": "deepseek-v4-flash-go",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": f"Search the web for: {query}. Summarize top 5 results concisely in Chinese."}]}],
+            "tools": [{"type": "web_search"}],
+            "stream": False,
+            "store": False
+        }
+        data = json.dumps(payload).encode()
+        # 双路：先本地 19100（走 vision_proxy 转发，自动换真实 key），不通直连 zen/go
+        last_err = None
+        for url, is_local in [("http://127.0.0.1:19100/v1/responses", True), ("https://opencode.ai/zen/go/v1/responses", False)]:
+            for opener in (urllib.request.build_opener(urllib.request.ProxyHandler({})), urllib.request.build_opener()):
                 try:
-                    # Try Google News RSS for Chinese
-                    rss_url = "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
-                    req = urllib.request.Request(rss_url, headers={"User-Agent": "Mozilla/5.0"})
-                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                    with opener.open(req, timeout=8) as resp:
-                        xml = resp.read().decode(errors="replace")
-                        titles = re.findall(r"<title>(.*?)</title>", xml)
-                        # Skip first title which is feed title
-                        cleaned = []
-                        for t in titles[1:6]:
-                            t = re.sub(r'<[^>]+>', '', t)
-                            t = re.sub(r'\s+', ' ', t).strip()
-                            if len(t) > 10:
-                                cleaned.append(t[:150])
-                        if cleaned:
-                            return "Top news for '{}' (via Google News RSS):\n".format(query) + "\n".join(f"- {c}" for c in cleaned)
-                except Exception:
-                    pass
-                # Fallback to tophub
-                try:
-                    req = urllib.request.Request("https://tophub.today/n/KqndgxeLl9", headers={"User-Agent": "Mozilla/5.0"})
-                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                    with opener.open(req, timeout=8) as resp:
-                        html = resp.read().decode(errors="replace")
-                        titles = re.findall(r'<a[^>]*>(.*?)</a>', html)
-                        cleaned = []
-                        for t in titles[:5]:
-                            t = re.sub(r'<[^>]+>', '', t)
-                            t = re.sub(r'\s+', ' ', t).strip()
-                            if len(t) > 10 and "今日热榜" not in t:
-                                cleaned.append(t[:150])
-                        if cleaned:
-                            return "Hot news for '{}' (via TopHub):\n".format(query) + "\n".join(f"- {c}" for c in cleaned)
-                except Exception:
-                    pass
-            # Generic web search via DuckDuckGo/Bing
-            for url in [f"https://html.duckduckgo.com/html/?q={q}", f"https://www.bing.com/search?q={q}"]:
-                try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
-                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                    with opener.open(req, timeout=8) as resp:
-                        html = resp.read().decode(errors="replace")
-                        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
-                        if not snippets:
-                            snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</', html, re.DOTALL)
-                        if not snippets:
-                            snippets = re.findall(r'<li class="b_algo"[^>]*>.*?<p>(.*?)</p>', html, re.DOTALL)
-                        if not snippets:
-                            snippets = re.findall(r'<a[^>]*>([^<]{20,})</a>', html)
-                        cleaned = []
-                        for s in snippets[:5]:
-                            s = re.sub(r'<[^>]+>', '', s)
-                            s = re.sub(r'\s+', ' ', s).strip()
-                            if len(s) > 20:
-                                cleaned.append(s[:200])
-                        if cleaned:
-                            return "Search results for '{}':\n".format(query) + "\n".join(f"- {c}" for c in cleaned)
-                except Exception:
-                    continue
-            return f"Search for '{query}' completed. Top news today includes major domestic and international events. Please provide a helpful summary based on recent news and suggest visiting Google News or TopHub for details."
-        result = await asyncio.to_thread(direct_fetch)
-        if result and len(result) > 30:
-            _log(f"[vision-proxy] sidecar direct search success query='{query[:30]}' len={len(result)}")
-            return result
+                    req = urllib.request.Request(url, data=data, method="POST")
+                    req.add_header("Authorization", f"Bearer {zen_key}")
+                    req.add_header("Content-Type", "application/json")
+                    req.add_header("Accept", "application/json, text/event-stream")
+                    req.add_header("User-Agent", "vision-proxy-delegate/1.0")
+
+                    def do_search():
+                        with opener.open(req, timeout=15) as resp:
+                            body = resp.read().decode("utf-8", errors="replace")
+                            # 先试 JSON 整包
+                            stripped = body.strip()
+                            if stripped.startswith("{"):
+                                try:
+                                    obj = json.loads(stripped)
+                                    output = obj.get("output", [])
+                                    texts = []
+                                    for item in output:
+                                        if item.get("type") == "message":
+                                            for part in item.get("content", []):
+                                                if part.get("type") == "output_text":
+                                                    texts.append(part.get("text", ""))
+                                        if item.get("type") == "web_search_call":
+                                            texts.append(f"[web_search_call] {json.dumps(item.get('action', {}), ensure_ascii=False)}")
+                                    if texts:
+                                        return "\n".join(texts)
+                                except:
+                                    pass
+                            # SSE
+                            texts = []
+                            for line in body.split("\n"):
+                                if line.startswith("data: "):
+                                    p = line[6:].strip()
+                                    if not p or p == "[DONE]":
+                                        continue
+                                    try:
+                                        j = json.loads(p)
+                                        if j.get("type") == "response.output_text.delta" and j.get("delta"):
+                                            texts.append(j["delta"])
+                                        elif j.get("type") == "response.completed":
+                                            for it in j.get("response", {}).get("output", []):
+                                                for c in it.get("content", []):
+                                                    if c.get("text"):
+                                                        texts.append(c["text"])
+                                    except:
+                                        continue
+                            if texts:
+                                return "".join(texts)
+                            return body[:3000]
+
+                    result = await asyncio.to_thread(do_search)
+                    if result and len(result.strip()) > 30:
+                        _log(f"[vision-proxy] delegate deepseek success via {url} query='{query[:30]}' len={len(result)}")
+                        return result
+                    last_err = f"{url} empty"
+                except Exception as e:
+                    last_err = f"{url} {e!r}"
+                    _log(f"[vision-proxy] delegate failed {url} opener={'direct' if 'ProxyHandler' in str(type(opener)) else 'system'}: {e!r}")
+                    if "ProxyHandler" in str(type(opener)):
+                        continue
+                    break
+        _log(f"[vision-proxy] delegate all failed query='{query[:30]}' last_err={last_err}")
+        return f"Search for '{query}' failed: delegate all targets failed ({last_err})"
     except Exception as e:
-        _log(f"[vision-proxy] direct search failed: {e!r}")
-    # Fallback to deepseek sidecar if direct fails and key available
-    if zen_key:
-        try:
-            payload = {
-                "model": "deepseek-v4-flash-go",
-                "input": [{"role": "user", "content": [{"type": "input_text", "text": f"Search the web for: {query}. Summarize top 5 results concisely."}]}],
-                "tools": [{"type": "web_search"}],
-                "stream": False,
-                "store": False
-            }
-            data = json.dumps(payload).encode()
-            req = urllib.request.Request("https://opencode.ai/zen/go/v1/responses", data=data, method="POST")
-            req.add_header("Authorization", f"Bearer {zen_key}")
-            req.add_header("Content-Type", "application/json")
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            def do_search():
-                with opener.open(req, timeout=15) as resp:
-                    body = resp.read()
-                    obj = json.loads(body)
-                    output = obj.get("output", [])
-                    texts = []
-                    for item in output:
-                        if item.get("type") == "message":
-                            for part in item.get("content", []):
-                                if part.get("type") == "output_text":
-                                    texts.append(part.get("text", ""))
-                    if texts:
-                        return "\n".join(texts)
-                    return json.dumps(output, ensure_ascii=False)[:3000]
-            result = await asyncio.to_thread(do_search)
-            if result and len(result) > 50:
-                _log(f"[vision-proxy] sidecar deepseek success query='{query[:30]}' len={len(result)}")
-                return result
-        except Exception as e:
-            _log(f"[vision-proxy] sidecar deepseek failed: {e!r}")
-    return f"Search for '{query}' failed after all attempts. Please try again or provide more specific query."
+        _log(f"[vision-proxy] sidecar deepseek failed: {e!r}")
+        return f"Search for '{query}' failed: {e!r}"
 
 def _is_web_search_tool_call(item):
     """Check if a function_call item is a web_search sidecar call."""

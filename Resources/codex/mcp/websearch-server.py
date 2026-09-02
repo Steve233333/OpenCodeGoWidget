@@ -172,46 +172,20 @@ def mcp_call(url: str, tool: str, args: dict, timeout=10, extra_headers=None):
     return None
 
 def do_websearch(params: dict, session_id="default"):
+    """只走 deepseek 代搜，给 24 个没原生联网的模型用，不回退双路。"""
     query = params.get("query") or params.get("objective") or ""
     if not query:
         raise ValueError("query required")
     numResults = int(params.get("numResults", 8))
-    livecrawl = params.get("livecrawl", "fallback")
-    typ = params.get("type", "auto")
-    ctxMax = params.get("contextMaxCharacters")
-    # 1) opencodex 代搜：让 deepseek-v4-flash-go 代搜，解决 24 个无原生模型问题
-    try:
-        d_query = f"Search the web for: {query}. Summarize top {numResults} results with titles, URLs, and snippets in Chinese."
-        delegated, d_err = _delegate_via_deepseek(d_query)
-        if delegated and len(delegated.strip()) > 30:
-            return f"[delegate deepseek-v4-flash-go] {delegated.strip()}"
-    except Exception as e:
-        d_err = str(e)
-        delegated = None
-    # 2) 回退 Exa/Parallel 双路
-    provider = select_provider(session_id)
-    providers = [provider, "parallel" if provider=="exa" else "exa"]
-    last_err = locals().get("d_err", "")
-    for prov in providers:
-        try:
-            if prov == "parallel":
-                result = mcp_call(PARALLEL_URL, "web_search", {
-                    "objective": query,
-                    "search_queries": [query],
-                    "session_id": session_id,
-                }, timeout=10, extra_headers={"User-Agent":"opencode/1.0"})
-            else:
-                args = {"query": query, "type": typ, "numResults": numResults, "livecrawl": livecrawl}
-                if ctxMax is not None:
-                    args["contextMaxCharacters"] = int(ctxMax)
-                result = mcp_call(EXA_URL, "web_search_exa", args, timeout=10)
-            if result:
-                return f"[{prov}] {result}"
-            last_err = f"{prov} returned empty; delegate: {d_err}" if 'd_err' in locals() and d_err else f"{prov} returned empty"
-        except Exception as e:
-            last_err = str(e) + (f"; delegate: {d_err}" if 'd_err' in locals() and d_err else "")
-            continue
-    return f"No search results found. Last error: {last_err}"
+    # 只走 delegate
+    d_query = f"Search the web for: {query}. Summarize top {numResults} results with titles, URLs, and snippets in Chinese."
+    delegated, d_err = _delegate_via_deepseek(d_query)
+    if delegated and len(delegated.strip()) > 30:
+        return f"[delegate deepseek-v4-flash-go] {delegated.strip()}"
+    # 失败就直接报错，不回退 Exa/Parallel
+    if d_err:
+        return f"No search results found. Delegate failed: {d_err}"
+    return "No search results found. Delegate returned empty."
 
 def do_webfetch(params: dict):
     # simple fetch via exa web_search_exa fallback to direct HTTP
