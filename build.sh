@@ -38,6 +38,16 @@ if [ -d "Resources/codex" ]; then
   chmod +x "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex/scripts/"*.sh 2>/dev/null || true
 fi
 
+echo "==> 检查电脑和小组件是不是一样（不一样就停）"
+if [ "${SKIP_DRIFT_CHECK:-0}" != "1" ]; then
+  if [ -x "Resources/codex/skills/codex-widget-sync/scripts/check-drift.sh" ]; then
+    if ! "Resources/codex/skills/codex-widget-sync/scripts/check-drift.sh"; then
+      echo "!! 检查没过，先去把两边弄成一样再打包（或 SKIP_DRIFT_CHECK=1 ./build.sh 跳过）"
+      exit 1
+    fi
+  fi
+fi
+
 echo "==> 编写 Info.plist"
 cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -53,8 +63,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.1.5</string>
-	<key>CFBundleVersion</key><string>7</string>
+	<key>CFBundleShortVersionString</key><string>1.1.6</string>
+	<key>CFBundleVersion</key><string>8</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
@@ -76,8 +86,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.1.5</string>
-	<key>CFBundleVersion</key><string>7</string>
+	<key>CFBundleShortVersionString</key><string>1.1.6</string>
+	<key>CFBundleVersion</key><string>8</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
 	<key>NSExtension</key><dict>
@@ -163,6 +173,11 @@ fi
 # 也保留未压缩的 .app 到 dist 供直接分发
 ditto "build/${APP_BUNDLE_NAME}.app" "$DIST_DIR/${APP_BUNDLE_NAME}.app"
 echo "APP 已复制: $DIST_DIR/${APP_BUNDLE_NAME}.app"
+# 顺手拷一份到桌面，方便发
+DESKTOP_DMG="$HOME/Desktop/${APP_BUNDLE_NAME}-${VERSION}.dmg"
+DESKTOP_ZIP="$HOME/Desktop/${APP_BUNDLE_NAME}-${VERSION}.zip"
+if [ -f "build/${DMG_NAME}" ]; then ditto "build/${DMG_NAME}" "$DESKTOP_DMG" 2>/dev/null && echo "已拷到桌面: $DESKTOP_DMG" || true; fi
+if [ -f "build/${ZIP_NAME}" ]; then ditto "build/${ZIP_NAME}" "$DESKTOP_ZIP" 2>/dev/null && echo "已拷到桌面: $DESKTOP_ZIP" || true; fi
 # 清理 build 中间产物（保留 dist）
 rm -rf build
 # 注册系统服务

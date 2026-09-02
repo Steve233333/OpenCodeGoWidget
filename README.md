@@ -101,6 +101,12 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.6 — 停用大对话自动搬走 + 防漂移（2026-09-02）
+
+- 不再自动搬走大对话：原来超过 8MB 就搬到 `failed_rollouts/` 会导致恢复时报错 `file does not exist`（如 `2026-09-02 17:10` 的 8M 对话），现在直接关掉，更新时还会自动把之前搬走的 10 个对话搬回来。
+- 加了个小规矩：电脑上的配置是老大，小组件里的是小弟，打包前会自动比一下，不一样就停住不让打包，避免以后改了电脑忘了改小组件。
+- 版本 **1.1.6 (8)**。
+
 ### v1.1.5 — 联网修复与设置整合（2026-09-02）
 
 - 不联网模型真实联网：`mimo/glm` 等 `web_search` 由 `deepseek-v4-flash` 边车真搜（直接 DuckDuckGo 3s 优先），不再报 `sandbox 无网络`。
@@ -134,9 +140,10 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.5.dmg
-dist/OpenCode 小组件-1.1.5.zip
+dist/OpenCode 小组件-1.1.6.dmg
+dist/OpenCode 小组件-1.1.6.zip
 dist/OpenCode 小组件.app
+~/Desktop/OpenCode 小组件-1.1.6.dmg  # build.sh 会自动拷一份到桌面
 ```
 
 依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。

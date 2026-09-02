@@ -726,34 +726,50 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 9b. 超大对话自动归档（>8MB 防重试，skill §25）
+# 9b. 已停用：超大对话自动归档（原来 >8MB 搬走导致恢复失败，2026-09-02 起停用）
+#     更新时会清理旧的定时任务，并把之前搬走的对话搬回来
 # ---------------------------------------------------------------------------
+ARCHIVE_PLIST="$HOME/Library/LaunchAgents/com.steve233.codex-archive-rollouts.plist"
+if [ -f "$ARCHIVE_PLIST" ]; then
+  launchctl bootout "gui/$(id -u)" "$ARCHIVE_PLIST" 2>/dev/null || launchctl unload "$ARCHIVE_PLIST" 2>/dev/null || true
+  rm -f "$ARCHIVE_PLIST"
+  log "已清理旧的自动归档定时任务（>8MB 已停用）"
+fi
+# 也同步更新脚本为停用版（防止旧脚本残留继续搬）
 ARCHIVE_SCRIPT="$CODEX_HOME/scripts/archive-large-rollouts.sh"
 mkdir -p "$CODEX_HOME/scripts" "$CODEX_HOME/failed_rollouts"
 if [ -f "$SCRIPT_DIR/resources/scripts/archive-large-rollouts.sh" ]; then
   cp -p "$SCRIPT_DIR/resources/scripts/archive-large-rollouts.sh" "$ARCHIVE_SCRIPT"
   chmod +x "$ARCHIVE_SCRIPT"
-  # 立即归档一次历史超大文件
-  bash "$ARCHIVE_SCRIPT" 2>/dev/null || true
 fi
-ARCHIVE_PLIST="$HOME/Library/LaunchAgents/com.steve233.codex-archive-rollouts.plist"
-cat > "$ARCHIVE_PLIST" <<PLISTEOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.steve233.codex-archive-rollouts</string>
-  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$ARCHIVE_SCRIPT</string></array>
-  <key>StartInterval</key><integer>3600</integer>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>$CODEX_HOME/failed_rollouts/archive.log</string>
-  <key>StandardErrorPath</key><string>$CODEX_HOME/failed_rollouts/archive.log</string>
-</dict>
-</plist>
-PLISTEOF
-launchctl bootout "gui/$(id -u)" "$ARCHIVE_PLIST" 2>/dev/null || launchctl unload "$ARCHIVE_PLIST" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$ARCHIVE_PLIST" 2>/dev/null || launchctl load "$ARCHIVE_PLIST" 2>/dev/null || true
-log "超大对话自动归档已安装（>8MB → failed_rollouts/，1h/次）"
+# 把之前被搬走的对话搬回来（有就搬，没有就跳过）
+if [ -d "$CODEX_HOME/failed_rollouts" ]; then
+  restored=0
+  for f in "$CODEX_HOME"/failed_rollouts/*.archived-*.jsonl; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    orig="${base%%.archived-*.jsonl}.jsonl"
+    # 从文件名里取日期 2026-09-02
+    if [[ "$orig" =~ rollout-([0-9]{4})-([0-9]{2})-([0-9]{2})T ]]; then
+      y="${BASH_REMATCH[1]}"; m="${BASH_REMATCH[2]}"; d="${BASH_REMATCH[3]}"
+      dst_dir="$CODEX_HOME/sessions/$y/$m/$d"
+      mkdir -p "$dst_dir"
+      dst="$dst_dir/$orig"
+      if [ ! -f "$dst" ]; then
+        cp -p "$f" "$dst" 2>/dev/null && restored=$((restored+1))
+        log "已恢复对话：$orig"
+      fi
+      # 搬回来后把旧的存档另存一份再删，避免重复
+      mkdir -p "$CODEX_HOME/failed_rollouts.bak.$(date +%Y%m%d)"
+      cp -p "$f" "$CODEX_HOME/failed_rollouts.bak.$(date +%Y%m%d)/" 2>/dev/null || true
+      rm -f "$f"
+    fi
+  done
+  if [ "$restored" -gt 0 ]; then
+    log "共恢复 $restored 个之前被搬走的对话"
+  fi
+fi
+log "自动归档已停用（>8MB 不再搬走）"
 
 # ---------------------------------------------------------------------------
 # 10. 汇总
