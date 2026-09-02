@@ -537,27 +537,42 @@ struct MonthChartView: View {
 struct SettingsView: View {
     @Binding var apiKey: String
     @Environment(\.dismiss) var dismiss
-    @State private var selectedTab: Int = 0
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $selectedTab) {
-                Text("Go 额度").tag(0)
-                Text("Codex 一键配置").tag(1)
+            // 顶部标题 + 退出
+            HStack {
+                Text("设置").font(.headline)
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 20))
+                }
+                .buttonStyle(.plain)
+                .help("关闭")
+                .keyboardShortcut(.cancelAction)
             }
-            .pickerStyle(.segmented)
             .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-
+            .padding(.vertical, 10)
             Divider()
-
-            if selectedTab == 0 {
-                GoSettingsContent(apiKey: $apiKey, dismiss: dismiss)
-            } else {
-                CodexSetupView()
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 20) {
+                    GoSettingsContent(apiKey: $apiKey, dismiss: dismiss)
+                    Divider()
+                    CodexSetupView()
+                    // 底部统一退出
+                    HStack {
+                        Spacer()
+                        Button("关闭") { dismiss() }
+                            .buttonStyle(.bordered)
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(16)
             }
         }
-        .frame(width: selectedTab == 0 ? 520 : 560, height: selectedTab == 0 ? 520 : 620)
+        .frame(width: 560, height: 680)
     }
 }
 
@@ -697,10 +712,11 @@ struct GoSettingsContent: View {
                 Spacer()
                 Text("OpenCode 小组件").font(.system(size: 9)).foregroundStyle(.secondary)
             }
-            Spacer()
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(12)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.06), lineWidth: 1))
         .onAppear {
             draft = apiKey
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")

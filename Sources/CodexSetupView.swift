@@ -80,8 +80,10 @@ struct CodexSetupView: View {
                 Button("取消") { installer.cancel() }.controlSize(.small).frame(maxWidth: .infinity)
             }
         }
-        .padding(20)
-        .frame(width: 520)
+        .padding(12)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.06), lineWidth: 1))
         .onAppear {
             installer.refreshStatus()
             // 缓存已存值，避免 body 每次重算时同步读文件
