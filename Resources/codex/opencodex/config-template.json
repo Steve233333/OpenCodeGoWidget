@@ -1,0 +1,51 @@
+{
+  "providers": {
+    "opencode-go": {
+      "id": "opencode-go",
+      "displayName": "OpenCode Go",
+      "adapter": "openai-chat",
+      "baseUrl": "https://opencode.ai/zen/go",
+      "authMode": "key",
+      "apiKey": "__GO_KEY__",
+      "models": []
+    },
+    "opencode-zen": {
+      "id": "opencode-zen",
+      "displayName": "OpenCode Zen Free",
+      "adapter": "openai-chat",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "authMode": "key",
+      "apiKey": "__GO_KEY__",
+      "models": []
+    },
+    "deepseek": {
+      "id": "deepseek",
+      "displayName": "DeepSeek",
+      "adapter": "openai-chat",
+      "baseUrl": "https://api.deepseek.com",
+      "authMode": "key",
+      "apiKey": "__DS_KEY__",
+      "models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]
+    },
+    "zhipu-vision": {
+      "id": "zhipu-vision",
+      "displayName": "GLM Vision",
+      "adapter": "openai-chat",
+      "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+      "authMode": "key",
+      "apiKey": "__GLM_KEY__",
+      "models": ["glm-4v-flash"]
+    }
+  },
+  "routing": {
+    "defaultProvider": "opencode-go",
+    "rules": [
+      {"pattern": "deepseek-*", "provider": "deepseek"},
+      {"pattern": "glm-4v-*", "provider": "zhipu-vision"}
+    ]
+  },
+  "server": {
+    "port": 19100,
+    "host": "127.0.0.1"
+  }
+}

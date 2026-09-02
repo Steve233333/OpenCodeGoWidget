@@ -623,8 +623,85 @@ EOF2
     launchctl bootout "gui/$(id -u)" "$DISCOVERY_PLIST" 2>/dev/null || launchctl unload "$DISCOVERY_PLIST" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$DISCOVERY_PLIST" 2>/dev/null || launchctl load "$DISCOVERY_PLIST" 2>/dev/null || true
     log "Go 模型自动发现已安装（6h + 启动，跟配额表自动同步）"
-    # 立即同步一次（quota表 -> models.json）
+    # 立即同步一次（quota表 -> models.json，含 opencodex 上下文/档位自动匹配）
     "$PY_BIN" "$VISION_DIR/model_discovery.py" --sync --force >>"$LOG" 2>&1 || log "WARN: 首次 Go 模型同步失败，详见 $VISION_DIR/discovery.err.log"
+  fi
+
+  # --- opencodex 转接层（本地内嵌，无需全局 npm，点开即用；替代手写 vision_proxy 桥）---
+  # 上下文与档位已由上面的 model_discovery --sync 通过 opencodex 上游自动匹配
+  OPX_PREFIX="$HOME/.local/share/opencodex"
+  OPX_TEMPLATE="$SCRIPT_DIR/resources/opencodex/config-template.json"
+  OPX_CONF_DIR="$HOME/.opencodex"
+  if [ -f "$OPX_TEMPLATE" ]; then
+    mkdir -p "$OPX_CONF_DIR"
+    sed -e "s|__GO_KEY__|$GO_KEY|g" -e "s|__DS_KEY__|$DS_KEY|g" -e "s|__GLM_KEY__|$GLM_KEY|g" "$OPX_TEMPLATE" > "$OPX_CONF_DIR/config.json.tmp" && mv "$OPX_CONF_DIR/config.json.tmp" "$OPX_CONF_DIR/config.json" && chmod 600 "$OPX_CONF_DIR/config.json" && log "opencodex 配置已生成 $OPX_CONF_DIR/config.json (上下文/档位来自 opencodex 上游，点开即用)"
+    # 本地安装 opencodex（用户级 ~/.local/share/opencodex，无需 sudo）
+    if [ -f "$SCRIPT_DIR/resources/opencodex/install.sh" ]; then
+      bash "$SCRIPT_DIR/resources/opencodex/install.sh" >>"$LOG" 2>&1 || log "WARN: opencodex 本地安装失败，将回退到 vision_proxy（功能不受影响）"
+    fi
+    # 创建 opencodex launchd，优先占 19100；vision_proxy 若同时启动会因端口占用而优雅退场
+    OPX_PLIST="$HOME/Library/LaunchAgents/com.steve233.opencodex.plist"
+    OCX_BIN="$OPX_PREFIX/node_modules/.bin/ocx"
+    # 选择可执行：优先本地 ocx，其次 npx
+    OPX_EXEC=""
+    if [ -x "$OCX_BIN" ]; then
+      OPX_EXEC="$OCX_BIN"
+    elif command -v npx >/dev/null 2>&1; then
+      OPX_EXEC="npx"
+    fi
+    if [ -n "$OPX_EXEC" ]; then
+      mkdir -p "$HOME/Library/LaunchAgents"
+      if [ "$OPX_EXEC" = "npx" ]; then
+        cat > "$OPX_PLIST" <<EOF2
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.steve233.opencodex</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>npx</string>
+    <string>--yes</string>
+    <string>@bitkyc08/opencodex</string>
+    <string>start</string>
+    <string>--port</string><string>19100</string>
+    <string>--host</string><string>127.0.0.1</string>
+  </array>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$HOME/.local/share/opencodex/ocx.log</string>
+  <key>StandardErrorPath</key><string>$HOME/.local/share/opencodex/ocx.err.log</string>
+</dict>
+</plist>
+EOF2
+      else
+        cat > "$OPX_PLIST" <<EOF2
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.steve233.opencodex</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$OCX_BIN</string>
+    <string>start</string>
+    <string>--port</string><string>19100</string>
+    <string>--host</string><string>127.0.0.1</string>
+  </array>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$HOME/.local/share/opencodex/ocx.log</string>
+  <key>StandardErrorPath</key><string>$HOME/.local/share/opencodex/ocx.err.log</string>
+</dict>
+</plist>
+EOF2
+      fi
+      launchctl bootout "gui/$(id -u)" "$OPX_PLIST" 2>/dev/null || launchctl unload "$OPX_PLIST" 2>/dev/null || true
+      launchctl bootstrap "gui/$(id -u)" "$OPX_PLIST" 2>/dev/null || launchctl load "$OPX_PLIST" 2>/dev/null || true
+      log "opencodex 转接层已安装（19100，上下文/档位自动，Widget 额度不受影响）"
+    else
+      log "opencodex 未找到可执行，将继续使用 vision_proxy"
+    fi
   fi
 else
   log "无需视觉代理（纯官方 DeepSeek 直连）"
