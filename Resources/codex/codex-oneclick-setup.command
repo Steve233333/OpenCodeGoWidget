@@ -669,6 +669,11 @@ EOF2
   </array>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>$HOME</string>
+  </dict>
   <key>StandardOutPath</key><string>$HOME/.local/share/opencodex/ocx.log</string>
   <key>StandardErrorPath</key><string>$HOME/.local/share/opencodex/ocx.err.log</string>
 </dict>
@@ -690,6 +695,11 @@ EOF2
   </array>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>$HOME</string>
+  </dict>
   <key>StandardOutPath</key><string>$HOME/.local/share/opencodex/ocx.log</string>
   <key>StandardErrorPath</key><string>$HOME/.local/share/opencodex/ocx.err.log</string>
 </dict>

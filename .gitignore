@@ -5,3 +5,4 @@ dist/
 *.xcworkspace
 xcuserdata/
 DerivedData/
+ignore pyc

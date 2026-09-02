@@ -982,11 +982,11 @@ def _fix_tool_required(parsed):
     """Fix Zen/Go gateway 400 for strict JSON-schema validation.
 
     OpenAI strict mode requires every key in `properties` to appear in
-    `required` (and `additionalProperties: false`). Codex emits built-in tools
-    like `list_threads` with `properties:{limit:{...}}` but `required:[]` or
-    missing, which DeepSeek tolerates but Luna/Muse (and Zen free models via
-    Go/Zen gateway) reject with 400 'Missing limit'. Patch the schema in-place
-    for zen/go routes. Generalized: cover all properties, not just `limit`.
+    `required` (and `additionalProperties: false`). Codex emits `list_threads`
+    with `properties:{limit:{...}}` but `required:[]`, which Luna/Muse reject
+    with 400 'Missing limit'. Patch only that case; previous generalized
+    patch made shell's optional `budget/workdir/timeout` required and broke
+    Muse (loop on integer budget).
     """
     tools = parsed.get("tools")
     if not isinstance(tools, list):
@@ -995,7 +995,6 @@ def _fix_tool_required(parsed):
     for tool in tools:
         if not isinstance(tool, dict):
             continue
-        # Responses API tools can be {type:function, function:{...}} or flat {type:function, name, parameters}
         for holder in (tool, tool.get("function") if isinstance(tool.get("function"), dict) else None):
             if not isinstance(holder, dict):
                 continue
@@ -1005,21 +1004,22 @@ def _fix_tool_required(parsed):
             props = params.get("properties")
             if not isinstance(props, dict) or not props:
                 continue
-            # strict requires required == all property keys
-            all_keys = list(props.keys())
+            # Only patch the known strict case: `limit` missing
+            if "limit" not in props:
+                continue
             req = params.get("required")
             if not isinstance(req, list):
-                params["required"] = all_keys
-                changed = True
-            else:
-                # add any missing keys, keep original order + append missing
-                missing = [k for k in all_keys if k not in req]
-                if missing:
-                    req.extend(missing)
+                # Keep original required if missing, but ensure limit is present
+                # Most tools have required = ["limit"] or [], we set to ["limit"]
+                if "limit" in props:
+                    params["required"] = ["limit"]
                     changed = True
-                # also handle case where required has extra keys not in properties? keep as-is
+            else:
+                if "limit" not in req:
+                    req.append("limit")
+                    changed = True
     if changed:
-        _log("[vision-proxy] patched tool required[] to include all properties for Zen/Go strict 400")
+        _log("[vision-proxy] patched tool required[] to include limit for Zen/Go strict 400")
     return changed
 
 
