@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.4.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.5.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.4.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.5.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -93,13 +93,20 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.4.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.4.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.5.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.5.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.5 — 联网修复与设置整合（2026-09-02）
+
+- 不联网模型真实联网：`mimo/glm` 等 `web_search` 由 `deepseek-v4-flash` 边车真搜（直接 DuckDuckGo 3s 优先），不再报 `sandbox 无网络`。
+- 上下文/档位自动：`context_window` 与 `supported_reasoning_levels`（含 `ultra`）从 `opencodex` 上游 24h 自动同步，一键更新即生效。
+- 设置页整合：`Go 额度` 与 `Codex 一键配置` 合并单页滚动，`Codex` 4 栏 `Go* / DeepSeek / 视觉 / 签名密码*` 单按钮 `配置`，异常 `muse` 的 `budget` 必填死循环已修。
+- 设置页底部显示 **版本 1.1.5 (7)**。
 
 ### v1.1.4 — 菜单栏常驻与图标修复（2026-09-01）
 
@@ -127,8 +134,8 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.4.dmg
-dist/OpenCode 小组件-1.1.4.zip
+dist/OpenCode 小组件-1.1.5.dmg
+dist/OpenCode 小组件-1.1.5.zip
 dist/OpenCode 小组件.app
 ```
 
