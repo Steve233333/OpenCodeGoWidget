@@ -6,3 +6,4 @@ dist/
 xcuserdata/
 DerivedData/
 ignore pyc
+__pycache__/

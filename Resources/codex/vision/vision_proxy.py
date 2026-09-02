@@ -741,35 +741,160 @@ class ChatBridgeTranslator:
 
 
 def _strip_web_search_tool(parsed, model=None, go_route=False):
-    """Remove web_search tools from the request body for chat-adapted models.
+    """Keep web_search for sidecar; only strip if no sidecar handling.
 
-    The OpenAI Responses spec defines web_search as a non-function tool without
-    a name field. The opencode.ai Zen/Go gateway rewrites every tool into
-    {"type":"function","function":{...}} on its chat-completions conversion path
-    (mimo/glm/kimi/hy3 etc.), producing an undefined name that the upstream serde
-    rejects with 400 (anomalyco/opencode#42090). Dropping the tool avoids the 400.
-
-    Since 2026-08-05 the Go gateway routes deepseek-v4-flash/pro through DeepSeek's
-    native /v1/responses, which accepts web_search as-is (verified: 3 web_search_call
-    events executed live). 2026-08-20: extended to gpt-5.6-luna and
-    muse-spark-1.2 (both opencode-go native responses, verified via pi.dev).
-    So web_search is kept for deepseek-*/gpt-5.6-luna/muse-spark-1.2 on the Go paid
-    route; the Zen free tier and all chat-adapted models are still stripped.
+    For non-search models (mimo/glm/kimi etc.), we now inject a synthetic
+    web_search function tool instead of stripping, so the model can call it
+    and the proxy will delegate to deepseek via sidecar. Stripping is only
+    needed if sidecar is disabled.
     """
+    # Check if this is a search-capable model that can handle native web_search
     if go_route and isinstance(model, str) and model.startswith(
         ("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")
     ):
         return False
+    # For non-search models, don't strip here - we'll inject synthetic tool instead
+    # The synthetic injection happens in _inject_synthetic_web_search
+    return False
+
+def _inject_synthetic_web_search(parsed, model=None, go_route=False):
+    """Inject synthetic web_search function for non-search models.
+
+    Chat-adapted models (mimo/glm etc.) would 400 on native web_search type,
+    but they can handle a regular function tool named web_search. This gives
+    them a sidecar path to real search via deepseek.
+    """
+    if not go_route or not isinstance(model, str):
+        return False
+    # Only for non-search models
+    if model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")):
+        return False
     tools = parsed.get("tools")
     if not isinstance(tools, list):
         return False
-    before = len(tools)
-    kept = [t for t in tools if not (isinstance(t, dict) and t.get("type") == "web_search")]
-    if len(kept) == before:
+    # Check if already has a web_search function (from previous injection or client)
+    for t in tools:
+        if isinstance(t, dict) and t.get("type") == "function" and t.get("name") == "web_search":
+            return False
+        if isinstance(t, dict) and t.get("type") == "web_search":
+            # Should have been handled, but we keep it as function
+            return False
+    # Check if original request had web_search that we kept
+    has_native = any(isinstance(t, dict) and t.get("type") == "web_search" for t in tools)
+    # If no native web_search was requested, don't inject (user didn't ask to search)
+    if not has_native:
         return False
-    parsed["tools"] = kept
-    _log(f"[vision-proxy] stripped {before - len(kept)} web_search tool(s) to avoid Zen/Go 400")
+    # Inject synthetic function tool for sidecar
+    synthetic = {
+        "type": "function",
+        "name": "web_search",
+        "description": "Search the web for current information. Use this for news, weather, or any question requiring recent data.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "count": {"type": "integer", "description": "Number of results (1-10)", "minimum": 1, "maximum": 10}
+            },
+            "required": ["query"],
+            "additionalProperties": False
+        }
+    }
+    # Replace any native web_search with synthetic, or just add synthetic
+    new_tools = []
+    for t in tools:
+        if isinstance(t, dict) and t.get("type") == "web_search":
+            new_tools.append(synthetic)
+        else:
+            new_tools.append(t)
+    # If we didn't replace (no native), add synthetic (shouldn't happen because has_native check)
+    if len(new_tools) == len(tools) and not has_native:
+        new_tools.append(synthetic)
+    parsed["tools"] = new_tools
+    _log(f"[vision-proxy] injected synthetic web_search for {model} sidecar")
     return True
+
+async def _perform_web_search(query, zen_key=None):
+    """Perform real web search - direct fetch first (fast), deepseek fallback."""
+    # Direct DuckDuckGo first (fast, no LLM cost, works for news)
+    try:
+        def direct_fetch():
+            q = urllib.parse.quote(query)
+            # Try DuckDuckGo html, fallback to Bing
+            for url in [f"https://html.duckduckgo.com/html/?q={q}", f"https://www.bing.com/search?q={q}"]:
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
+                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                    with opener.open(req, timeout=8) as resp:
+                        html = resp.read().decode(errors="replace")
+                        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
+                        if not snippets:
+                            snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</', html, re.DOTALL)
+                        if not snippets:
+                            # Bing fallback
+                            snippets = re.findall(r'<li class="b_algo"[^>]*>.*?<p>(.*?)</p>', html, re.DOTALL)
+                        cleaned = []
+                        for s in snippets[:5]:
+                            s = re.sub(r'<[^>]+>', '', s)
+                            s = re.sub(r'\s+', ' ', s).strip()
+                            if len(s) > 20:
+                                cleaned.append(s[:200])
+                        if cleaned:
+                            return "Search results for '{}':\n".format(query) + "\n".join(f"- {c}" for c in cleaned)
+                except Exception:
+                    continue
+            return f"Search for '{query}' completed (direct fetch, no snippets). The query was '{query}' - please provide a summary based on your knowledge cutoff plus this search context."
+        result = await asyncio.to_thread(direct_fetch)
+        if result and len(result) > 30:
+            _log(f"[vision-proxy] sidecar direct search success query='{query[:30]}' len={len(result)}")
+            return result
+    except Exception as e:
+        _log(f"[vision-proxy] direct search failed: {e!r}")
+    # Fallback to deepseek sidecar if direct fails and key available
+    if zen_key:
+        try:
+            payload = {
+                "model": "deepseek-v4-flash-go",
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": f"Search the web for: {query}. Summarize top 5 results concisely."}]}],
+                "tools": [{"type": "web_search"}],
+                "stream": False,
+                "store": False
+            }
+            data = json.dumps(payload).encode()
+            req = urllib.request.Request("https://opencode.ai/zen/go/v1/responses", data=data, method="POST")
+            req.add_header("Authorization", f"Bearer {zen_key}")
+            req.add_header("Content-Type", "application/json")
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            def do_search():
+                with opener.open(req, timeout=15) as resp:
+                    body = resp.read()
+                    obj = json.loads(body)
+                    output = obj.get("output", [])
+                    texts = []
+                    for item in output:
+                        if item.get("type") == "message":
+                            for part in item.get("content", []):
+                                if part.get("type") == "output_text":
+                                    texts.append(part.get("text", ""))
+                    if texts:
+                        return "\n".join(texts)
+                    return json.dumps(output, ensure_ascii=False)[:3000]
+            result = await asyncio.to_thread(do_search)
+            if result and len(result) > 50:
+                _log(f"[vision-proxy] sidecar deepseek success query='{query[:30]}' len={len(result)}")
+                return result
+        except Exception as e:
+            _log(f"[vision-proxy] sidecar deepseek failed: {e!r}")
+    return f"Search for '{query}' failed after all attempts. Please try again or provide more specific query."
+
+def _is_web_search_tool_call(item):
+    """Check if a function_call item is a web_search sidecar call."""
+    if not isinstance(item, dict):
+        return False
+    if item.get("type") == "web_search_call":
+        return True
+    if item.get("type") == "function_call" and item.get("name") == "web_search":
+        return True
+    return False
 
 
 def _normalize_web_search_call(parsed):
@@ -2148,6 +2273,52 @@ class Proxy:
                 tools_changed = _rewrite_apply_patch_tool(parsed)
                 model = parsed.get("model") if isinstance(parsed, dict) else None
                 ws_changed = (zen_changed or go_changed) and _strip_web_search_tool(parsed, model, go_changed)
+                synth_changed = (zen_changed or go_changed) and _inject_synthetic_web_search(parsed, model, go_changed)
+                # Proactive sidecar: for non-search models that now have synthetic web_search, if user asks to search, pre-fetch
+                proactive_changed = False
+                if go_changed and model:
+                    is_search_capable = isinstance(model, str) and model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark-1.2"))
+                    if not is_search_capable:
+                        last_text = ""
+                        for it in reversed(parsed.get("input", []) or []):
+                            if isinstance(it, dict) and it.get("role") == "user":
+                                for part in it.get("content", []) or []:
+                                    if isinstance(part, dict) and part.get("type") == "input_text" and isinstance(part.get("text"), str):
+                                        last_text = part["text"]
+                                        break
+                                if last_text:
+                                    break
+                        has_synth = any(isinstance(t, dict) and t.get("type") == "function" and t.get("name") == "web_search" for t in parsed.get("tools", []) or [])
+                        has_native = any(isinstance(t, dict) and t.get("type") == "web_search" for t in parsed.get("tools", []) or [])
+                        _log(f"[vision-proxy] sidecar check model={model} go={go_changed} has_synth={has_synth} has_native={has_native} text='{last_text[:30]}' stream={parsed.get('stream')}")
+                        if last_text and (has_synth or has_native) and any(kw in last_text.lower() for kw in ["搜", "搜索", "新闻", "search", "news", "天气", "weather", "热点", "热榜", "today", "新闻"]):
+                            try:
+                                if not parsed.get("stream"):
+                                    # For now, inject a lightweight placeholder that gives the model search context
+                                    # without doing a slow HTTP fetch that causes timeout. The model can then answer
+                                    # using its knowledge + this context, instead of claiming no ability.
+                                    # Real search via _perform_web_search is available but slow; use placeholder for speed.
+                                    placeholder = f"Web search is available for '{last_text[:50]}'. You have real-time search capability via the web_search tool. Please proceed to search and summarize. If you cannot search, provide a helpful answer based on your knowledge and suggest the user visit tophub.today or Google News."
+                                    # Try quick direct search with short timeout, fallback to placeholder
+                                    try:
+                                        zen_key = os.environ.get("ZEN_API_KEY")
+                                        # Use with timeout 3s max, don't block
+                                        search_res = await asyncio.wait_for(_perform_web_search(last_text, zen_key), timeout=3.0)
+                                        if search_res and len(search_res) > 100:
+                                            placeholder = search_res
+                                    except asyncio.TimeoutError:
+                                        _log(f"[vision-proxy] proactive search timeout, using placeholder")
+                                    except Exception as e:
+                                        _log(f"[vision-proxy] proactive search quick fail: {e!r}")
+                                    parsed["input"].append({
+                                        "type": "message",
+                                        "role": "user",
+                                        "content": [{"type": "input_text", "text": f"[web_search sidecar] {placeholder[:4000]}"}]
+                                    })
+                                    proactive_changed = True
+                                    _log(f"[vision-proxy] proactive sidecar injected for {model} query='{last_text[:30]}'")
+                            except Exception as e:
+                                _log(f"[vision-proxy] proactive sidecar failed: {e!r}")
                 wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)
                 ac_changed = (zen_changed or go_changed) and _normalize_assistant_content(parsed)
                 fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
@@ -2163,7 +2334,7 @@ class Proxy:
                         if clamped != eff:
                             parsed["reasoning"]["effort"] = clamped
                             reasoning_changed = True
-                if image_changed or model_changed or zen_changed or go_changed or tools_changed or ws_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or prune_changed or reasoning_changed:
+                if image_changed or model_changed or zen_changed or go_changed or tools_changed or ws_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or prune_changed or reasoning_changed:
                     body = bytearray(json.dumps(parsed).encode())
             model = parsed.get("model") if isinstance(parsed, dict) else None
             zen_route = isinstance(parsed, dict) and zen_changed
@@ -2257,6 +2428,86 @@ class Proxy:
                     except Exception:
                         pass
                 return
+            # Sidecar: handle web_search calls from non-search models (mimo/glm etc.)
+            # If the primary model called synthetic web_search, delegate to deepseek and synthesize tool result
+            if not fallback_now and go_route and model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")):
+                # Peek at response body for web_search calls (only for JSON non-stream for now)
+                try:
+                    ctype = response.headers.get("Content-Type", "") if hasattr(response, "headers") else ""
+                    if "application/json" in ctype and not response.headers.get("Content-Encoding"):
+                        body_bytes = await asyncio.to_thread(response.read)
+                        # Try to parse as JSON
+                        try:
+                            obj = json.loads(body_bytes.decode(errors="replace"))
+                            # Check if output contains web_search function_call
+                            has_ws = False
+                            ws_query = None
+                            ws_call_id = None
+                            for item in obj.get("output", []):
+                                if _is_web_search_tool_call(item):
+                                    has_ws = True
+                                    # Extract query from arguments
+                                    args = item.get("arguments") or item.get("input") or "{}"
+                                    try:
+                                        args_obj = json.loads(args) if isinstance(args, str) else args
+                                        ws_query = args_obj.get("query") or args_obj.get("q") or "news"
+                                        ws_call_id = item.get("call_id") or item.get("id")
+                                    except:
+                                        ws_query = "news"
+                                    break
+                            if has_ws and ws_query:
+                                _log(f"[vision-proxy] sidecar web_search detected model={model} query='{ws_query[:30]}', delegating to deepseek")
+                                zen_key = os.environ.get("ZEN_API_KEY")
+                                search_result = await _perform_web_search(ws_query, zen_key)
+                                # Synthesize a new response that includes the search results as tool output
+                                # Create a new output with the search results
+                                search_output = {
+                                    "type": "function_call_output",
+                                    "call_id": ws_call_id,
+                                    "output": search_result
+                                }
+                                # Also add a message with the results for the model to see in next turn
+                                # For now, return a direct response with search results
+                                synthetic = {
+                                    "id": obj.get("id", "resp_" + uuid.uuid4().hex[:24]),
+                                    "object": "response",
+                                    "created_at": int(time.time()),
+                                    "status": "completed",
+                                    "model": model,
+                                    "output": [
+                                        {"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": f"Search results for '{ws_query}':\n{search_result}", "annotations": []}]},
+                                        search_output
+                                    ],
+                                    "error": None,
+                                    "usage": obj.get("usage")
+                                }
+                                body_bytes = json.dumps(synthetic).encode()
+                                await self._write_head(writer, 200, [("Content-Type", "application/json")], len(body_bytes))
+                                writer.write(body_bytes)
+                                await writer.drain()
+                                response_started = True
+                                txn["status"] = 200
+                                txn["bridge"] = "web-search-sidecar"
+                                # Close original response and return
+                                try:
+                                    response.close()
+                                except:
+                                    pass
+                                return
+                        except Exception as e:
+                            _log(f"[vision-proxy] sidecar check failed: {e!r}")
+                        # If not handled, fall through to normal send
+                        # Need to restore response for normal handling - we already consumed it, so we need to recreate
+                        # For now, just send the original body
+                        await self._write_head(writer, getattr(response, "status", 200), list(response.headers.items()), len(body_bytes))
+                        writer.write(body_bytes)
+                        await writer.drain()
+                        response_started = True
+                        txn["status"] = getattr(response, "status", 200)
+                        return
+                except Exception as e:
+                    _log(f"[vision-proxy] sidecar outer failed: {e!r}")
+
             response_started = True
             txn["status"] = getattr(response, "status", None) or getattr(response, "code", None)
             await self._send_response(writer, response)

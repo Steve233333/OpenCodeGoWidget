@@ -51,6 +51,11 @@ ZEN_CACHE_FILE = CACHE_DIR / "zen_models_cache.json"
 REASONING_REGISTRY = CACHE_DIR / "reasoning_registry.json"
 GENERIC_REASONING = ["high"]
 
+# opencodex 上游上下文/档位（无需安装 opencodex，自动拉取）
+UPSTREAM_URL = "https://raw.githubusercontent.com/lidge-jun/opencodex/main/src/codex/data/upstream-models.json"
+UPSTREAM_CACHE = CACHE_DIR / "upstream_context_cache.json"
+UPSTREAM_TTL = 24 * 3600
+
 # Fallback 31 ids (2026-08-28 live snapshot)
 FALLBACK_IDS = [
     "minimax-m3","minimax-m2.7","minimax-m2.5","kimi-k3","kimi-k2.7-code","kimi-k2.6",
@@ -243,6 +248,51 @@ def load_reasoning_registry():
         pass
     return {}
 
+def fetch_upstream_details(timeout=TIMEOUT):
+    """拉 opencodex 上游的 context / 档位，24h 缓存，失败回退。返回 {slug: (context, levels)}"""
+    try:
+        if UPSTREAM_CACHE.exists():
+            try:
+                j = json.loads(UPSTREAM_CACHE.read_text())
+                if time.time() - j.get("fetchedAt", 0) < UPSTREAM_TTL and isinstance(j.get("map"), dict):
+                    return {k: (v[0], v[1]) for k, v in j["map"].items()}
+            except Exception:
+                pass
+        req = urllib.request.Request(UPSTREAM_URL, headers={"User-Agent": "model-discovery/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode())
+        m = {}
+        for mod in data.get("models", []):
+            slug = (mod.get("slug") or "").strip().lower()
+            if not slug:
+                continue
+            ctx = mod.get("context_window") or mod.get("max_context_window") or 0
+            levels = []
+            for lv in mod.get("supported_reasoning_levels") or []:
+                eff = lv.get("effort") if isinstance(lv, dict) else str(lv)
+                if eff:
+                    levels.append(eff)
+            if ctx or levels:
+                m[slug] = (int(ctx) if ctx else 0, levels)
+            if not slug.endswith("-go") and slug + "-go" not in m and (ctx or levels):
+                m[slug + "-go"] = (int(ctx) if ctx else 0, levels)
+        if m:
+            try:
+                CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                UPSTREAM_CACHE.write_text(json.dumps({"fetchedAt": int(time.time()), "map": {k: [v[0], v[1]] for k, v in m.items()}}, ensure_ascii=False))
+            except Exception:
+                pass
+            _log(f"upstream context {len(m)} entries")
+            return m
+    except Exception as e:
+        _log(f"upstream fetch failed: {e!r}")
+    try:
+        j = json.loads(UPSTREAM_CACHE.read_text())
+        mm = j.get("map") or {}
+        return {k: (v[0], v[1]) for k, v in mm.items()}
+    except Exception:
+        return {}
+
 def fetch_zen_free_ids(timeout=TIMEOUT):
     """实时拉 Zen Free 官方7个，过度依赖 Pricing 表，需校验存在才算"""
     try:
@@ -338,20 +388,17 @@ def _display_name_for(remote_id, suffix):
             base = base.replace("Gpt-", "GPT-").replace("Muse-", "Muse ").replace("Mimo-", "MiMo-").replace("Glm-", "GLM-")
         return f"{base} ({suffix})"
 
-def build_entry(template, remote_id, priority):
+def build_entry(template, remote_id, priority, upstream_map=None):
     e = copy.deepcopy(template)
-    # Zen Free use -zen suffix, Go use -go
     is_zen = remote_id in ZEN_FREE_IDS or remote_id.endswith("-free") and remote_id in ZEN_FREE_IDS or remote_id == "big-pickle"
     suffix = "Zen" if is_zen else "Go"
     slug_suffix = "-zen" if is_zen else "-go"
     slug = remote_id + slug_suffix
-    # handle alias collisions: ox-alpha already handled, but keep slug as remote_id-go
     e["slug"] = slug
     e["display_name"] = _display_name_for(remote_id, suffix)
     e["description"] = f"OpenCode {'Zen Free' if is_zen else 'Go'} model ({remote_id}), routed via opencode.ai {'Zen' if is_zen else 'Zen/Go'} proxy. auto-discovered {time.strftime('%Y-%m-%d')}"
     e["priority"] = priority
     e["visibility"] = "list"
-    # supports_search_tool: only deepseek/gpt/muse keep true, rest false (Zen Free all false)
     if not is_zen and remote_id.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
         e["supports_search_tool"] = True
         if "web_search_tool_type" not in e:
@@ -359,18 +406,30 @@ def build_entry(template, remote_id, priority):
     else:
         e["supports_search_tool"] = False
         e.pop("web_search_tool_type", None)
-    # reasoning: hand-written registry, fallback generic high only (zero probe)
-    # for Zen Free strip -free for lookup: mimo-v2.5-free -> mimo-v2.5
+    # 上下文与档位：优先 opencodex 上游，其次本地 registry
+    upstream_map = upstream_map or {}
     lookup = remote_id
     if is_zen and remote_id.endswith("-free"):
         lookup = remote_id[:-5]
     if lookup == "big-pickle":
         lookup = "big-pickle"
+    up_ctx, up_levels = 0, None
+    for key in (remote_id, lookup, slug, remote_id + "-go", lookup + "-go"):
+        if key in upstream_map:
+            up_ctx, up_levels = upstream_map[key]
+            break
+    if up_ctx and up_ctx > 0:
+        e["context_window"] = up_ctx
+        e["max_context_window"] = up_ctx
+        e["effective_context_window_percent"] = e.get("effective_context_window_percent", 95)
     reg = load_reasoning_registry()
-    levels = reg.get(remote_id) or reg.get(lookup)
+    levels = None
+    if up_levels:
+        levels = up_levels
+    else:
+        levels = reg.get(remote_id) or reg.get(lookup)
     if levels is None:
         levels = GENERIC_REASONING
-    # normalize to supported_reasoning_levels format
     descs = {
         "low": "Fast responses with lighter reasoning",
         "medium": "Balanced reasoning for everyday tasks",
@@ -378,10 +437,10 @@ def build_entry(template, remote_id, priority):
         "xhigh": "Extended reasoning depth for harder tasks",
         "max": "Maximum reasoning depth for the hardest problems",
         "none": "No reasoning",
+        "ultra": "Maximum reasoning with automatic task delegation",
     }
     e["supported_reasoning_levels"] = [{"effort": lv, "description": descs.get(lv, lv)} for lv in levels]
     e["default_reasoning_level"] = levels[0] if levels else "high"
-    # ensure required fields
     e["supported_in_api"] = True
     return e
 
@@ -423,6 +482,7 @@ def sync(force=False, dry_run=False):
     existing_slugs = {m["slug"] for m in models}
     max_prio = max((m.get("priority", 0) for m in models), default=0)
 
+    upstream_map = fetch_upstream_details()
     # Only quota-driven sync: ids is quota source (25)
     to_add = []
     for rid in ids:
@@ -433,7 +493,7 @@ def sync(force=False, dry_run=False):
         if not tmpl:
             _log(f"no template for {rid}, skip")
             continue
-        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1)
+        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1, upstream_map=upstream_map)
         to_add.append(entry)
     # add Zen Free
     for rid in zen_ids:
@@ -444,7 +504,7 @@ def sync(force=False, dry_run=False):
         if not tmpl:
             _log(f"no template for zen {rid}, skip")
             continue
-        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1)
+        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1, upstream_map=upstream_map)
         to_add.append(entry)
 
     # Prune wild Go models not in quota (乱七八糟的) ; keep Zen separately
@@ -472,9 +532,52 @@ def sync(force=False, dry_run=False):
     if pruned:
         _log(f"prune wild not in quota/zen: {pruned}")
 
+    # 存量模型的上下文/档位自动同步（ultra 等无需发版）
+    if upstream_map:
+        updated = 0
+        for m in to_keep:
+            slug = m.get("slug", "")
+            candidates = [slug]
+            if slug.endswith("-go"):
+                candidates.append(slug[:-3])
+                candidates.append(slug[:-3] + "-go")
+            if slug.endswith("-zen"):
+                candidates.append(slug[:-4])
+            for key in candidates:
+                if key in upstream_map:
+                    ctx, levels = upstream_map[key]
+                    if ctx and m.get("context_window") != ctx:
+                        m["context_window"] = ctx
+                        m["max_context_window"] = ctx
+                        updated += 1
+                    if levels and [lv.get("effort") for lv in m.get("supported_reasoning_levels", [])] != levels:
+                        descs = {
+                            "low": "Fast responses with lighter reasoning",
+                            "medium": "Balanced reasoning for everyday tasks",
+                            "high": "Extra high reasoning depth for complex problems",
+                            "xhigh": "Extended reasoning depth for harder tasks",
+                            "max": "Maximum reasoning depth for the hardest problems",
+                            "none": "No reasoning",
+                            "ultra": "Maximum reasoning with automatic task delegation",
+                        }
+                        m["supported_reasoning_levels"] = [{"effort": lv, "description": descs.get(lv, lv)} for lv in levels]
+                        m["default_reasoning_level"] = levels[0] if levels else m.get("default_reasoning_level", "high")
+                        updated += 1
+                    break
+        if updated:
+            _log(f"auto context/reasoning updated {updated} fields from upstream")
+
     if not to_add and not pruned:
-        _log("no new models to add and no prune")
-        return 0
+        # 即使无增删，也可能有上下文/档位更新
+        try:
+            if 'updated' in locals() and updated > 0:
+                pass
+            else:
+                _log("no new models to add and no prune")
+                return 0
+        except:
+            _log("no new models to add and no prune")
+            return 0
 
     if to_add:
         _log(f"will add {len(to_add)} models:")
