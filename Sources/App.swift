@@ -539,18 +539,9 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部标题 + 退出
             HStack {
                 Text("设置").font(.headline)
                 Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 20))
-                }
-                .buttonStyle(.plain)
-                .help("关闭")
-                .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
