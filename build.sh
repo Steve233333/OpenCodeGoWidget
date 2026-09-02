@@ -31,6 +31,8 @@ cp Resources/BrandDark.png "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDG
 if [ -d "Resources/codex" ]; then
   mkdir -p "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex"
   ditto "Resources/codex" "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex"
+  # 兼容 installer 脚本的 resources/ 前缀：建 resources 软链指向自身
+  ln -sfn . "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex/resources" 2>/dev/null || true
   chmod +x "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex/codex-oneclick-setup.command" 2>/dev/null || true
   chmod +x "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex/patch/patch.sh" 2>/dev/null || true
   chmod +x "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex/scripts/"*.sh 2>/dev/null || true

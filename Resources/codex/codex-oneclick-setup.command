@@ -261,13 +261,7 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
     PASS="${ONECLICK_PASS:-}"
     PASS="${PASS// /}"
     if [[ -z "$PASS" ]]; then
-      die "缺少签名钥匙串密码：请设置环境变量 ONECLICK_PASS 为自定义密码（不能为空，且不能为 0000，至少 4 位）后重试。"
-    fi
-    if [[ "${#PASS}" -lt 4 ]]; then
-      die "ONECLICK_PASS 过短（至少 4 位）。"
-    fi
-    if [[ "$PASS" == "0000" ]]; then
-      die "ONECLICK_PASS 不能为 0000，请使用自定义密码。"
+      die "缺少签名钥匙串密码：请设置环境变量 ONECLICK_PASS 后重试。"
     fi
   fi
   if [[ -z "$PASS" && "$MODE" == "update" && -f "$HOME/Library/Keychains/codex-signing.keychain-db" ]]; then
@@ -277,27 +271,11 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
   fi
   if [[ -z "$PASS" ]]; then
     while true; do
-      _tmp_pass="$(ask_hidden "请设置签名钥匙串密码（必填，自定义）\n\n将保存在 ~/.codex/picker-patch/.keychain-pass（600），用于创建本地签名钥匙串。请务必记好，副本升级时会复用（不能为空，且不能为 0000，至少 4 位）。" "签名钥匙串密码" "")"
+      _tmp_pass="$(ask_hidden "请设置签名钥匙串密码（必填）\n\n将保存在 ~/.codex/picker-patch/.keychain-pass（600），用于创建本地签名钥匙串。请务必记好，副本升级时会复用。" "签名钥匙串密码" "")"
       [[ "$_tmp_pass" == "__CANCEL__" ]] && die "已取消安装"
       _tmp_pass="${_tmp_pass// /}"
       if [[ -z "$_tmp_pass" ]]; then
         osascript - "密码不能为空，请重新输入。" "Codex 一键配置安装器" <<'APPLESCRIPT' >/dev/null 2>&1 || true
-on run argv
-  display dialog (item 1 of argv) with title "Codex 一键配置安装器" buttons {"好"} default button "好" with icon stop
-end run
-APPLESCRIPT
-        continue
-      fi
-      if [[ "${#_tmp_pass}" -lt 4 ]]; then
-        osascript - "密码过短（至少 4 位），请重新输入。" "Codex 一键配置安装器" <<'APPLESCRIPT' >/dev/null 2>&1 || true
-on run argv
-  display dialog (item 1 of argv) with title "Codex 一键配置安装器" buttons {"好"} default button "好" with icon stop
-end run
-APPLESCRIPT
-        continue
-      fi
-      if [[ "$_tmp_pass" == "0000" ]]; then
-        osascript - "不能使用默认 0000，请设置自定义密码。" "Codex 一键配置安装器" <<'APPLESCRIPT' >/dev/null 2>&1 || true
 on run argv
   display dialog (item 1 of argv) with title "Codex 一键配置安装器" buttons {"好"} default button "好" with icon stop
 end run

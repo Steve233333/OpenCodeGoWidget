@@ -316,14 +316,8 @@ final class CodexInstaller: ObservableObject {
             isRunning = false; return
         }
         if effectivePass.isEmpty {
-            logText += "\n[错误] 签名密码为必填项（≥4 位且不能为 0000，首次配置必须填写）\n"
+            logText += "\n[错误] 签名密码为必填项，请填写\n"
             isRunning = false; return
-        }
-        if effectivePass.count < 4 {
-            logText += "\n[错误] 签名密码至少 4 位\n"; isRunning = false; return
-        }
-        if effectivePass == "0000" {
-            logText += "\n[错误] 签名密码不能为 0000，请使用自定义密码\n"; isRunning = false; return
         }
         // DeepSeek / GLM 可选，不校验；Go/密码之外的有效性由安装器进一步检查
         _ = effectiveDS

@@ -39,7 +39,7 @@ struct CodexSetupView: View {
                        placeholder: "智谱 GLM Key，如 1234.xxxx（可选，发图需要）",
                        text: $glmKey, show: $showGLM, existing: existingGLM)
                 keyRow(title: "签名密码", required: true,
-                       placeholder: "自定义 ≥4 位且不能为 0000（必填）",
+                       placeholder: "任意密码（必填，简单密码也可）",
                        text: $pass, show: $showPass, existing: existingPass, isPassword: true)
             }
 
@@ -167,15 +167,7 @@ struct CodexSetupView: View {
             return
         }
         if effectivePass.isEmpty {
-            errorText = "签名密码为必填项，请填写（≥4 位且不能为 0000）"
-            return
-        }
-        if effectivePass.count < 4 {
-            errorText = "签名密码至少 4 位"
-            return
-        }
-        if effectivePass == "0000" {
-            errorText = "签名密码不能为 0000"
+            errorText = "签名密码为必填项，请填写"
             return
         }
         // 非必填的可选 Key 不校验
