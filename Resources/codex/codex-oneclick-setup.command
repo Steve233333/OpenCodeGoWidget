@@ -745,6 +745,7 @@ fi
 # 把之前被搬走的对话搬回来（有就搬，没有就跳过）
 if [ -d "$CODEX_HOME/failed_rollouts" ]; then
   restored=0
+  setopt local_options null_glob 2>/dev/null || setopt null_glob 2>/dev/null || true
   for f in "$CODEX_HOME"/failed_rollouts/*.archived-*.jsonl; do
     [ -e "$f" ] || continue
     base="$(basename "$f")"
