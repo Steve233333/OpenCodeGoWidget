@@ -35,6 +35,7 @@ struct CodexSetupView: View {
         }
         .padding(16)
         .frame(width: 560, height: 640)
+        // 内嵌到主面板 ScrollView 时取消固定尺寸，靠外层 Scroll 撑开
         .onAppear {
             installer.refreshStatus()
             if !hasLoadedExisting {
