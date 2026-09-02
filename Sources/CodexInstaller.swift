@@ -129,12 +129,12 @@ final class CodexInstaller: ObservableObject {
             s.modelCount = arr.count
         }
         if s.configExists, let txt = try? String(contentsOfFile: configPath, encoding: .utf8) {
-            // model = "..."
-            if let r = txt.range(of: #"model\s*=\s*"([^"]+)""#, options: .regularExpression) {
-                let sub = String(txt[r])
-                if let q1 = sub.firstIndex(of: "\""), let q2 = sub.lastIndex(of: "\""), q1 != q2 {
-                    s.defaultModel = String(sub[sub.index(after: q1)..<q2])
-                }
+            // 安全提取 model = "..."（用捕获组，避免手动下标越界）
+            if let regex = try? NSRegularExpression(pattern: #"model\s*=\s*"([^"]+)""#),
+               let m = regex.firstMatch(in: txt, range: NSRange(txt.startIndex..., in: txt)),
+               let r = Range(m.range(at: 1), in: txt) {
+                let v = String(txt[r])
+                if !v.isEmpty { s.defaultModel = v }
             }
             // bearer
             if txt.contains("experimental_bearer_token") { s.hasDS = true }
@@ -159,22 +159,14 @@ final class CodexInstaller: ObservableObject {
            let arr = j["models"] as? [[String: Any]] {
             s.hasGo = arr.contains { ($0["slug"] as? String ?? "").hasSuffix("-go") || ($0["slug"] as? String ?? "").hasSuffix("-zen") }
         }
-        // patched version
+        // patched version — 修复：原先 String(m[r]) 对 m 越界导致 EXC_BREAKPOINT
         let marker = (patchBase as NSString).appendingPathComponent("patch-state.json")
-        if let txt = try? String(contentsOfFile: marker, encoding: .utf8),
-           let r = txt.range(of: #""sourceVersion"\s*:\s*"([^"]+)""#, options: .regularExpression) {
-            let m = String(txt[r])
-            if let q1 = m.firstIndex(of: "\""), let last = m.lastIndex(of: "\"") {
-                // 提取第二对引号
-                let inner = String(m[r])
-                // 简单提取
-                if let regex = try? NSRegularExpression(pattern: #""sourceVersion"\s*:\s*"([^"]+)""#),
-                   let match = regex.firstMatch(in: txt, range: NSRange(txt.startIndex..., in: txt)),
-                   let range = Range(match.range(at: 1), in: txt) {
-                    s.patchedVersion = String(txt[range])
-                } else {
-                    _ = inner; _ = q1; _ = last
-                }
+        if let txt = try? String(contentsOfFile: marker, encoding: .utf8) {
+            if let regex = try? NSRegularExpression(pattern: #""sourceVersion"\s*:\s*"([^"]+)""#),
+               let match = regex.firstMatch(in: txt, range: NSRange(txt.startIndex..., in: txt)),
+               let range = Range(match.range(at: 1), in: txt) {
+                let v = String(txt[range])
+                if !v.isEmpty { s.patchedVersion = v }
             }
         }
         if s.patchedVersion == "-" || s.patchedVersion.isEmpty {
