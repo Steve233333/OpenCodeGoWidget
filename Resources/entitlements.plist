@@ -18,3 +18,4 @@
 	<true/>
 </dict>
 </plist>
+<!-- NOTE: widget 专用沙盒配置，主 App 使用 app.entitlements.plist（非沙盒） -->

@@ -537,6 +537,34 @@ struct MonthChartView: View {
 struct SettingsView: View {
     @Binding var apiKey: String
     @Environment(\.dismiss) var dismiss
+    @State private var selectedTab: Int = 0
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $selectedTab) {
+                Text("Go 额度").tag(0)
+                Text("Codex 一键配置").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            Divider()
+
+            if selectedTab == 0 {
+                GoSettingsContent(apiKey: $apiKey, dismiss: dismiss)
+            } else {
+                CodexSetupView()
+            }
+        }
+        .frame(width: selectedTab == 0 ? 520 : 580, height: selectedTab == 0 ? 520 : 680)
+    }
+}
+
+struct GoSettingsContent: View {
+    @Binding var apiKey: String
+    var dismiss: DismissAction
+    @Environment(\.dismiss) var envDismiss
     @State private var draft: String = ""
     @State private var workspaceID: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "workspaceID") ?? ""
     @State private var authCookie: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "authCookie") ?? ""
@@ -548,9 +576,10 @@ struct SettingsView: View {
         }
         return false
     }()
+    private var effectiveDismiss: DismissAction { dismiss }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("设置").font(.headline)
+            Text("Go 额度设置").font(.headline)
             Text("1. 粘贴 OpenCode Go API Key（sk-...），在 opencode.ai → Settings → API Keys 复制。")
                 .font(.caption2).foregroundStyle(.secondary)
             SecureField("sk-...", text: $draft)
@@ -671,7 +700,7 @@ struct SettingsView: View {
             Spacer()
         }
         .padding(20)
-        .frame(width: 520, height: 420)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             draft = apiKey
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")

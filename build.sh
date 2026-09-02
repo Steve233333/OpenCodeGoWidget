@@ -27,6 +27,14 @@ cp Resources/MenuBarIcon.png "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 
 cp Resources/MenuBarIcon@2x.png "build/${APP_BUNDLE_NAME}.app/Contents/Resources/" 2>/dev/null || true
 cp Resources/BrandLight.png "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
 cp Resources/BrandDark.png "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/Resources/" 2>/dev/null || true
+# Codex 一键配置资源（供设置页内调用）
+if [ -d "Resources/codex" ]; then
+  mkdir -p "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex"
+  ditto "Resources/codex" "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex"
+  chmod +x "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex/codex-oneclick-setup.command" 2>/dev/null || true
+  chmod +x "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex/patch/patch.sh" 2>/dev/null || true
+  chmod +x "build/${APP_BUNDLE_NAME}.app/Contents/Resources/codex/scripts/"*.sh 2>/dev/null || true
+fi
 
 echo "==> 编写 Info.plist"
 cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
@@ -79,7 +87,7 @@ PLIST
 
 echo "==> 编译 App"
 swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
-  Sources/App.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift \
+  Sources/App.swift Sources/CodexInstaller.swift Sources/CodexSetupView.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"
@@ -94,16 +102,18 @@ echo "!! 强制 ad-hoc 签名（保证 Dock 中文名与签名校验通过）"
 
 echo "==> 签名 Widget"
 if [ "$SIGN_IDENTITY" = "-" ]; then
-  # ad-hoc：不带 --options runtime，但保留 entitlements（App Groups/沙盒），否则 widget 无法共享数据且可能触发 invalid blob
-  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
+  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 else
-  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
+  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 fi
-echo "==> 签名 App"
+echo "==> 签名 App (先签外壳，再单独重签 Widget 以保留沙盒)"
 if [ "$SIGN_IDENTITY" = "-" ]; then
-  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app"
+  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "build/${APP_BUNDLE_NAME}.app"
+  # 外壳签名后 Widget 若被覆盖，立即用沙盒配置重签
+  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 else
-  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app"
+  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "build/${APP_BUNDLE_NAME}.app"
+  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 fi
 
 echo "==> 安装到 /Applications"
@@ -111,9 +121,11 @@ rm -rf "/Applications/OpenCodeGoWidget.app"
 rm -rf "/Applications/${APP_BUNDLE_NAME}.app"
 ditto "build/${APP_BUNDLE_NAME}.app" "/Applications/${APP_BUNDLE_NAME}.app"
 if [ "$SIGN_IDENTITY" = "-" ]; then
-  codesign --force --deep "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
+  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
+  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex" 2>/dev/null || true
 else
-  codesign --force --deep --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
+  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
+  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex" 2>/dev/null || true
 fi
 
 echo "==> 注册"

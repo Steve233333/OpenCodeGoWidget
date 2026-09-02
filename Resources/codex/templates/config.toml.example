@@ -1,0 +1,136 @@
+model = "muse-spark-1.2-contributor-go"
+model_reasoning_effort = "xhigh"
+model_provider = "deepseek"
+preferred_auth_method = "apikey"
+forced_login_method = "api"
+model_catalog_json = "~/.codex-deepseek/models.json"
+
+notify = ["/Users/steve233/.codex-deepseek/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
+
+[marketplaces.openai-bundled]
+source_type = "local"
+source = "/Users/steve233/.codex-deepseek/.tmp/bundled-marketplaces/openai-bundled"
+
+[marketplaces.openai-primary-runtime]
+last_updated = "2026-08-20T05:27:24Z"
+source_type = "local"
+source = "/Users/steve233/.cache/codex-runtimes/codex-primary-runtime/plugins/openai-primary-runtime"
+
+[plugins."documents@openai-primary-runtime"]
+enabled = true
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = true
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = true
+
+[plugins."pdf@openai-primary-runtime"]
+enabled = true
+
+[plugins."template-creator@openai-primary-runtime"]
+enabled = true
+
+[plugins."visualize@openai-bundled"]
+enabled = true
+
+[plugins."github@openai-curated"]
+enabled = true
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+[plugins."computer-use@openai-bundled"]
+enabled = true
+
+[plugins."codex-app-tools@openai-bundled"]
+enabled = true
+
+[projects."/Library/Project/Python/Qlib量化研究_截面"]
+trust_level = "trusted"
+
+[projects."/Users/steve233/Desktop"]
+trust_level = "trusted"
+
+[projects."/Library/Project/TradingView"]
+trust_level = "trusted"
+
+[desktop]
+appearanceTheme = "system"
+localeOverride = "zh-CN"
+conversationDetailMode = "STEPS_COMMANDS"
+followUpQueueMode = "queue"
+dock-icon-preference = "codex-system"
+defaultTerminalLocation = "bottom"
+preventSleepWhileRunning = true
+enabled-reasoning-efforts = ["low", "medium", "high", "xhigh", "ultra", "max"]
+show-context-window-usage = true
+selected-avatar-id = "hoots"
+
+[desktop.open-in-target-preferences]
+global = "fileManager"
+
+[desktop.open-in-target-preferences.perPath]
+"/Users/steve233/Desktop/TradingView" = "fileManager"
+"/Library/Project/Python/backtrader回测" = "fileManager"
+
+[features]
+memories = true
+js_repl = false
+
+[model_providers.deepseek]
+name = "deepseek"
+base_url = "http://127.0.0.1:19100"
+wire_api = "responses"
+experimental_bearer_token = "sk-***REDACTED***"
+
+[mcp_servers.ocr-image]
+command = "python3"
+args = ["-u", "/Users/steve233/.config/opencode/mcp/ocr-server.py"]
+
+[mcp_servers.openaiDeveloperDocs]
+url = "https://developers.openai.com/mcp"
+
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_PAT_TOKEN"
+
+[mcp_servers.node_repl]
+args = []
+command = "/Users/steve233/Applications/ChatGPT-Patched.app/Contents/Resources/cua_node/bin/node_repl"
+startup_timeout_sec = 120
+
+[mcp_servers.node_repl.env]
+NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"
+NODE_REPL_NODE_MODULE_DIRS = "/Users/steve233/Applications/ChatGPT-Patched.app/Contents/Resources/cua_node/lib/node_modules"
+NODE_REPL_NODE_PATH = "/Users/steve233/Applications/ChatGPT-Patched.app/Contents/Resources/cua_node/bin/node"
+NODE_REPL_TRUSTED_CODE_PATHS = "/Users/steve233/.codex-deepseek:/Users/steve233/Applications/ChatGPT-Patched.app/Contents/Resources/cua_node/lib/node_modules"
+CODEX_HOME = "/Users/steve233/.codex-deepseek"
+BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
+BROWSER_USE_TINYSKY_ENABLED = "0"
+NODE_REPL_INSTRUCTIONS_USE_CASE_BROWSER = "Control the in-app browser in conjunction with the Browser Plugin."
+NODE_REPL_INSTRUCTIONS_USE_CASE_CHROME = "Control the Chrome browser in conjunction with the Chrome Plugin. Prefer this method of controlling Chrome over alternatives (such as Computer Use) unless the user explicitly mentions an alternative."
+NODE_REPL_INSTRUCTIONS_USE_CASE_COMPUTER_USE = "Control desktop apps on macOS through Computer Use."
+BROWSER_USE_CODEX_APP_BUILD_FLAVOR = "prod"
+BROWSER_USE_CODEX_APP_VERSION = "26.818.31338"
+NODE_REPL_TRUSTED_SERVICES = '{"browser":"/Users/steve233/.codex-deepseek/plugins/cache/openai-bundled/browser/26.818.31338/scripts/browser-service.mjs","sky":"@oai/sky/service"}'
+SKY_CUA_SERVICE_PATH = "/Users/steve233/.codex-deepseek/computer-use/Codex Computer Use.app"
+CODEX_CLI_PATH = "/Users/steve233/Applications/ChatGPT-Patched.app/Contents/Resources/codex"
+
+[mcp_servers.computer-use]
+command = "./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+args = ["mcp"]
+cwd = "."
+enabled = false
+
+[shell_environment_policy.set]
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "7fe0e1c59da4bc68f9d6ab81ae8d349b53fee44b074f49be0effbc1105a5f1d3"
+
+[memories]
+generate_memories = true
+use_memories = true
+extract_model = "mimo-v2.5-go"
+consolidation_model = "mimo-v2.5-go"
+min_rate_limit_remaining_percent = 0
+min_rollout_idle_hours = 1
+disable_on_external_context = false
