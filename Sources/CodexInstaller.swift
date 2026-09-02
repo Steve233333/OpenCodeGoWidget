@@ -311,35 +311,30 @@ final class CodexInstaller: ObservableObject {
         let glm = glmKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let pwd = pass.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // 校验：至少一个 Go/DS
+        // 统一校验：Go 必填（留空时需有旧 Go），密码必填（留空时需有旧密码）
         let existingGo = Self.existingGoKey()
         let existingDS = Self.existingDSKey() ?? ""
         _ = Self.existingGLMKey()
+        let existingPass = Self.existingPass()
         let effectiveGo = go.isEmpty ? existingGo : go
         let effectiveDS = ds.isEmpty ? existingDS : ds
-        if mode == .update {
-            // 更新模式允许留空复用旧 Key，但需至少有一个旧 Key
-            if effectiveGo.isEmpty && effectiveDS.isEmpty {
-                logText += "\n[错误] 更新模式未检测到旧 Key（Go 与 DeepSeek 均为空），请改用 安装 模式并填写 Key\n"
-                isRunning = false
-                return
-            }
-        } else {
-            if effectiveGo.isEmpty && effectiveDS.isEmpty && go.isEmpty && ds.isEmpty {
-                // 若用户留空但有旧 Key，仍允许沿用（与安装器逻辑一致）
-                if effectiveGo.isEmpty && effectiveDS.isEmpty {
-                    logText += "\n[错误] 至少需要 OpenCode Go 或 DeepSeek 其中一个 Key\n"
-                    isRunning = false
-                    return
-                }
-            }
+        let effectivePass = pwd.isEmpty ? existingPass : pwd
+        if effectiveGo.isEmpty {
+            logText += "\n[错误] OpenCode Go Key 为必填项（首次配置必须填写，更新时留空可复用旧值）\n"
+            isRunning = false; return
         }
-        if !pwd.isEmpty && pwd.count < 4 {
+        if effectivePass.isEmpty {
+            logText += "\n[错误] 签名密码为必填项（≥4 位且不能为 0000，首次配置必须填写）\n"
+            isRunning = false; return
+        }
+        if effectivePass.count < 4 {
             logText += "\n[错误] 签名密码至少 4 位\n"; isRunning = false; return
         }
-        if pwd == "0000" {
+        if effectivePass == "0000" {
             logText += "\n[错误] 签名密码不能为 0000，请使用自定义密码\n"; isRunning = false; return
         }
+        // DeepSeek / GLM 可选，不校验；Go/密码之外的有效性由安装器进一步检查
+        _ = effectiveDS
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -404,6 +399,13 @@ final class CodexInstaller: ObservableObject {
             logText += "\n[错误] 启动失败: \(error.localizedDescription)\n"
             isRunning = false
         }
+    }
+
+    /// 极简单按钮入口：安装/更新已合并，调用方只需传 4 栏（留空自动复用旧值）
+    func configure(goKey: String, dsKey: String, glmKey: String, pass: String) {
+        // 根据是否已安装自动选模式：已安装走 --update（保留 models.json 逻辑），全新走 --install
+        let mode: CodexInstallMode = status.isInstalled ? .update : .install
+        run(mode: mode, goKey: goKey, dsKey: dsKey, glmKey: glmKey, pass: pass)
     }
 
     func cancel() {

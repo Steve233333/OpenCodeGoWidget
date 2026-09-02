@@ -27,25 +27,13 @@ struct OpenCodeGoWidgetApp: App {
                 if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) ?? NSApp.keyWindow ?? NSApp.windows.first {
                     window.makeKeyAndOrderFront(nil)
                 } else {
+                    // 兜底：通过 URL 唤起主窗口
                     if let url = URL(string: "opencodego://month") {
                         NSWorkspace.shared.open(url)
                     }
                 }
             }
             .keyboardShortcut("o")
-            Button("Codex 一键配置") {
-                NSApp.activate(ignoringOtherApps: true)
-                if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) ?? NSApp.keyWindow ?? NSApp.windows.first {
-                    window.makeKeyAndOrderFront(nil)
-                    // 发通知让 ContentView 切到 Codex Tab
-                    NotificationCenter.default.post(name: Notification.Name("OpenCodeGoSwitchToCodex"), object: nil)
-                } else {
-                    if let url = URL(string: "opencodego://codex") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-            }
-            .keyboardShortcut("c")
             Divider()
             Button("退出") {
                 NSApplication.shared.terminate(nil)
@@ -96,14 +84,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        // LSUIElement 的 App 启动后自动把主窗口带到前台，避免用户误以为“没有界面”
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            NSApp.activate(ignoringOtherApps: true)
-            if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) ?? NSApp.windows.first {
-                window.makeKeyAndOrderFront(nil)
-                window.center()
-            }
-        }
+        // 非 SMAppService 回退（旧系统）由系统登录项手动添加
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -130,8 +111,6 @@ struct ContentView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var showSettings = false
-    @State private var showCodexSetup = false
-    @State private var mainTab: Int = 0 // 0=仪表盘 1=Codex 一键配置
     @State private var modelTick = 0 // 触发图例重算（ModelPalette.ordered 读 App Group 缓存）
     @State private var quotas: [GoQuota] = GoQuotaRegistry.cachedSync()
     @State private var quotaUpdatedAt: Date? = GoQuotaRegistry.cachedDate()
@@ -141,7 +120,7 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            HStack {
                 Label {
                     Text("OpenCode Go")
                 } icon: {
@@ -149,210 +128,164 @@ struct ContentView: View {
                 }
                 .font(.headline)
                 Spacer()
-                // 主 Tab：仪表盘 | Codex 一键配置 —— 最显眼入口
-                Picker("", selection: $mainTab) {
-                    Text("仪表盘").tag(0)
-                    Text("Codex 一键配置").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 200)
-                Button { showCodexSetup = true } label: { Label("打开独立窗口", systemImage: "arrow.up.forward.app") }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("在独立弹窗中打开 Codex 配置（更大空间）")
                 Button { showSettings.toggle() } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .help("Go 额度设置")
             }
             .padding(.horizontal, 18)
             .padding(.top, 16)
             .padding(.bottom, 8)
-            Divider().opacity(mainTab == 1 ? 1 : 0)
 
-            if mainTab == 0 {
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(spacing: 16) {
-                        if let snap = snapshot {
-                            VStack(spacing: 12) {
-                                // 账期/自然月堆叠柱状图 — 账期默认对齐 Go 月重置日，解决月中开套餐被自然月切断
-                                VStack(alignment: .leading, spacing: 6) {
-                                    let filteredDaily = snap.filteredDaily(for: selectedKeyId)
-                                    let monthlyTotal = filteredDaily.reduce(0) { $0 + $1.total }
-                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                        let isBilling = chartAlignment == .billing
-                                        Text(isBilling ? BillingCycle.titleRange(monthlyReset: snap.monthlyReset) : "本月花费").font(.caption).foregroundStyle(.secondary)
-                                        Spacer()
-                                    }
-                                    HStack(spacing: 8) {
-                                        if chartAlignment == .billing {
-                                            Text(BillingCycle.subtitleDetail(monthlyReset: snap.monthlyReset)).font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
-                                        } else {
-                                            Text("自然月 1日—月末").font(.system(size: 8)).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        Text(String(format: "$%.2f USD", monthlyTotal)).font(.subheadline.weight(.semibold)).monospacedDigit()
-                                    }
-                                    HStack(alignment: .center, spacing: 8) {
-                                        // 自绘分段开关放左侧左对齐，密钥菜单放右侧右对齐
-                                        HStack(spacing: 0) {
-                                            Button { chartAlignment = .billing; BillingCycle.saveAlignment(.billing) } label: {
-                                                Text("账期").font(.caption2.weight(chartAlignment == .billing ? .semibold : .regular))
-                                                    .padding(.horizontal, 10).padding(.vertical, 4)
-                                                    .background(chartAlignment == .billing ? Color.accentColor : Color.clear)
-                                                    .foregroundStyle(chartAlignment == .billing ? Color.white : Color.primary)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                                            }.buttonStyle(.plain)
-                                            Button { chartAlignment = .calendar; BillingCycle.saveAlignment(.calendar) } label: {
-                                                Text("自然月").font(.caption2.weight(chartAlignment == .calendar ? .semibold : .regular))
-                                                    .padding(.horizontal, 10).padding(.vertical, 4)
-                                                    .background(chartAlignment == .calendar ? Color.accentColor : Color.clear)
-                                                    .foregroundStyle(chartAlignment == .calendar ? Color.white : Color.primary)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                                            }.buttonStyle(.plain)
-                                        }
-                                        .padding(2)
-                                        .background(Color.primary.opacity(0.08))
-                                        .clipShape(RoundedRectangle(cornerRadius: 7))
-                                        Spacer()
-                                        let keysForMenu: [ApiKeyInfo] = snap.availableKeys.isEmpty ? CostCrawler.shared.loadCachedKeys() : snap.availableKeys
-                                        if !keysForMenu.isEmpty {
-                                            Menu {
-                                                Button("所有密钥") { selectedKeyId = nil; UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.removeObject(forKey: "selectedCostKeyId") }
-                                                ForEach(keysForMenu) { k in
-                                                    Button(k.displayName) { selectedKeyId = k.id; UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.set(k.id, forKey: "selectedCostKeyId") }
-                                                }
-                                            } label: {
-                                                HStack(spacing: 3) {
-                                                    Text(selectedKeyId == nil ? "所有密钥" : (keysForMenu.first(where: { $0.id == selectedKeyId })?.displayName ?? "未知"))
-                                                        .font(.caption2).lineLimit(1)
-                                                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 7))
-                                                }
-                                                .padding(.horizontal, 6).padding(.vertical, 4)
-                                                .background(Color.primary.opacity(0.06))
-                                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                            }
-                                            .menuStyle(.borderlessButton)
-                                            .fixedSize()
-                                        }
-                                    }
-                                    if filteredDaily.isEmpty {
-                                        VStack(spacing: 6) {
-                                            Text(selectedKeyId == nil ? "暂无本月模型费用数据" : "该 Key 本月暂无使用")
-                                                .font(.caption2).foregroundStyle(.secondary)
-                                            Text(selectedKeyId == nil ? "配置 workspace 后自动拉取按日堆叠真数据" : "新建的 Key 在产生调用前费用为 $0.00")
-                                                .font(.system(size: 9)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                                        }
-                                        .frame(height: 120)
-                                        .frame(maxWidth: .infinity)
-                                        .background(Color.primary.opacity(0.05))
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(spacing: 16) {
+                    if let snap = snapshot {
+                        VStack(spacing: 12) {
+                            // 账期/自然月堆叠柱状图 — 账期默认对齐 Go 月重置日，解决月中开套餐被自然月切断
+                            VStack(alignment: .leading, spacing: 6) {
+                                let filteredDaily = snap.filteredDaily(for: selectedKeyId)
+                                let monthlyTotal = filteredDaily.reduce(0) { $0 + $1.total }
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    let isBilling = chartAlignment == .billing
+                                    Text(isBilling ? BillingCycle.titleRange(monthlyReset: snap.monthlyReset) : "本月花费").font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                }
+                                HStack(spacing: 8) {
+                                    if chartAlignment == .billing {
+                                        Text(BillingCycle.subtitleDetail(monthlyReset: snap.monthlyReset)).font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
                                     } else {
-                                        MonthChartView(dailyCosts: filteredDaily, monthlyReset: snap.monthlyReset, alignment: chartAlignment)
-                                            .frame(height: 160)
-                                        // 图例：实时展示官方 Go 全量（已同步 29 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
-                                        let _ = modelTick
-                                        let allModels = Set(filteredDaily.flatMap { $0.entries.keys }.map { $0.lowercased() })
-                                        let ordered = ModelPalette.ordered
-                                        let orderedLower = Set(ordered.map { $0.lowercased() })
-                                        let historicalExtra = allModels.filter { !orderedLower.contains($0) }.sorted()
-                                        let legend = ordered + historicalExtra
-                                        if !legend.isEmpty {
-                                            WrappingLegendView(models: legend)
-                                        }
+                                        Text("自然月 1日—月末").font(.system(size: 8)).foregroundStyle(.secondary)
                                     }
-                                    // 今日模型：跟随 Key 筛选
-                                    let filteredCostEntries = snap.filteredCostEntries(for: selectedKeyId)
-                                    let filteredCostTotal = snap.filteredCostTotal(for: selectedKeyId)
-                                    VStack(spacing: 4) {
-                                        HStack {
-                                            Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
-                                            Spacer()
-                                            if filteredCostEntries.isEmpty {
-                                                Text("今日暂无使用 · $0.00 USD").font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
-                                            } else {
-                                                Text(String(format: "$%.2f USD", filteredCostTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text(String(format: "$%.2f USD", monthlyTotal)).font(.subheadline.weight(.semibold)).monospacedDigit()
+                                }
+                                HStack(alignment: .center, spacing: 8) {
+                                    // 自绘分段开关放左侧左对齐，密钥菜单放右侧右对齐
+                                    HStack(spacing: 0) {
+                                        Button { chartAlignment = .billing; BillingCycle.saveAlignment(.billing) } label: {
+                                            Text("账期").font(.caption2.weight(chartAlignment == .billing ? .semibold : .regular))
+                                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                                .background(chartAlignment == .billing ? Color.accentColor : Color.clear)
+                                                .foregroundStyle(chartAlignment == .billing ? Color.white : Color.primary)
+                                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                        }.buttonStyle(.plain)
+                                        Button { chartAlignment = .calendar; BillingCycle.saveAlignment(.calendar) } label: {
+                                            Text("自然月").font(.caption2.weight(chartAlignment == .calendar ? .semibold : .regular))
+                                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                                .background(chartAlignment == .calendar ? Color.accentColor : Color.clear)
+                                                .foregroundStyle(chartAlignment == .calendar ? Color.white : Color.primary)
+                                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                        }.buttonStyle(.plain)
+                                    }
+                                    .padding(2)
+                                    .background(Color.primary.opacity(0.08))
+                                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                                    Spacer()
+                                    let keysForMenu: [ApiKeyInfo] = snap.availableKeys.isEmpty ? CostCrawler.shared.loadCachedKeys() : snap.availableKeys
+                                    if !keysForMenu.isEmpty {
+                                        Menu {
+                                            Button("所有密钥") { selectedKeyId = nil; UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.removeObject(forKey: "selectedCostKeyId") }
+                                            ForEach(keysForMenu) { k in
+                                                Button(k.displayName) { selectedKeyId = k.id; UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.set(k.id, forKey: "selectedCostKeyId") }
                                             }
+                                        } label: {
+                                            HStack(spacing: 3) {
+                                                Text(selectedKeyId == nil ? "所有密钥" : (keysForMenu.first(where: { $0.id == selectedKeyId })?.displayName ?? "未知"))
+                                                    .font(.caption2).lineLimit(1)
+                                                Image(systemName: "chevron.up.chevron.down").font(.system(size: 7))
+                                            }
+                                            .padding(.horizontal, 6).padding(.vertical, 4)
+                                            .background(Color.primary.opacity(0.06))
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
                                         }
+                                        .menuStyle(.borderlessButton)
+                                        .fixedSize()
+                                    }
+                                }
+                                if filteredDaily.isEmpty {
+                                    VStack(spacing: 6) {
+                                        Text(selectedKeyId == nil ? "暂无本月模型费用数据" : "该 Key 本月暂无使用")
+                                            .font(.caption2).foregroundStyle(.secondary)
+                                        Text(selectedKeyId == nil ? "配置 workspace 后自动拉取按日堆叠真数据" : "新建的 Key 在产生调用前费用为 $0.00")
+                                            .font(.system(size: 9)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                                    }
+                                    .frame(height: 120)
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.primary.opacity(0.05))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                } else {
+                                    MonthChartView(dailyCosts: filteredDaily, monthlyReset: snap.monthlyReset, alignment: chartAlignment)
+                                        .frame(height: 160)
+                                    // 图例：实时展示官方 Go 全量（已同步 29 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
+                                    let _ = modelTick
+                                    let allModels = Set(filteredDaily.flatMap { $0.entries.keys }.map { $0.lowercased() })
+                                    let ordered = ModelPalette.ordered
+                                    let orderedLower = Set(ordered.map { $0.lowercased() })
+                                    let historicalExtra = allModels.filter { !orderedLower.contains($0) }.sorted()
+                                    let legend = ordered + historicalExtra
+                                    if !legend.isEmpty {
+                                        WrappingLegendView(models: legend)
+                                    }
+                                }
+                                // 今日模型：跟随 Key 筛选
+                                let filteredCostEntries = snap.filteredCostEntries(for: selectedKeyId)
+                                let filteredCostTotal = snap.filteredCostTotal(for: selectedKeyId)
+                                VStack(spacing: 4) {
+                                    HStack {
+                                        Text("今日模型").font(.system(size: 9)).foregroundStyle(.secondary)
+                                        Spacer()
                                         if filteredCostEntries.isEmpty {
-                                            Capsule()
-                                                .fill(Color.primary.opacity(0.08))
-                                                .frame(height: 8)
-                                                .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
+                                            Text("今日暂无使用 · $0.00 USD").font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
                                         } else {
-                                            CostBar(entries: filteredCostEntries, total: filteredCostTotal)
+                                            Text(String(format: "$%.2f USD", filteredCostTotal)).font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
                                         }
                                     }
-                                    .padding(.top, 4)
+                                    if filteredCostEntries.isEmpty {
+                                        Capsule()
+                                            .fill(Color.primary.opacity(0.08))
+                                            .frame(height: 8)
+                                            .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
+                                    } else {
+                                        CostBar(entries: filteredCostEntries, total: filteredCostTotal)
+                                    }
                                 }
-                                Divider()
-                                QuotaRow(label: "5小时", percent: snap.rolling, reset: snap.rollingReset)
-                                QuotaRow(label: "周", percent: snap.weekly, reset: snap.weeklyReset)
-                                QuotaRow(label: "月", percent: snap.monthly, reset: snap.monthlyReset)
-                                Text("更新于 \(snap.updatedAt.formatted(date: .omitted, time: .shortened))")
-                                    .font(.caption2).foregroundStyle(.secondary)
-                                if let e = snap.error { Text(e).font(.caption2).foregroundStyle(.red) }
-
-                                // Go 配额横条图（最底部，实时同步文档配额表，同一行三段分色）
-                                Divider()
-                                GoQuotaChart(quotas: quotas, updatedAt: quotaUpdatedAt)
-                                    .id(modelTick) // 随模型列表更新重绘
-
-                                // 快捷入口：跳到 Codex 配置
-                                Button { mainTab = 1 } label: {
-                                    Label("去配置 Codex 一键安装 →", systemImage: "wrench.and.screwdriver")
-                                }
-                                .controlSize(.small)
-                                .buttonStyle(.bordered)
+                                .padding(.top, 4)
                             }
-                        } else {
-                            Text("暂无数据，请先配置 API Key 并刷新")
-                                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        }
+                            Divider()
+                            QuotaRow(label: "5小时", percent: snap.rolling, reset: snap.rollingReset)
+                            QuotaRow(label: "周", percent: snap.weekly, reset: snap.weeklyReset)
+                            QuotaRow(label: "月", percent: snap.monthly, reset: snap.monthlyReset)
+                            Text("更新于 \(snap.updatedAt.formatted(date: .omitted, time: .shortened))")
+                                .font(.caption2).foregroundStyle(.secondary)
+                            if let e = snap.error { Text(e).font(.caption2).foregroundStyle(.red) }
 
-                        Button { Task { await refresh() } } label: {
-                            if loading {
-                                ProgressView().scaleEffect(0.6)
-                            } else {
-                                Label("刷新", systemImage: "arrow.clockwise")
-                            }
+                            // Go 配额横条图（最底部，实时同步文档配额表，同一行三段分色）
+                            Divider()
+                            GoQuotaChart(quotas: quotas, updatedAt: quotaUpdatedAt)
+                                .id(modelTick) // 随模型列表更新重绘
                         }
-                        .disabled(loading)
-                        .buttonStyle(.borderedProminent)
-
-                        if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
+                    } else {
+                        Text("暂无数据，请先配置 API Key 并刷新")
+                            .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
+
+                    Button { Task { await refresh() } } label: {
+                        if loading {
+                            ProgressView().scaleEffect(0.6)
+                        } else {
+                            Label("刷新", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(loading)
+                    .buttonStyle(.borderedProminent)
+
+                    if let e = error { Text(e).font(.caption).foregroundStyle(.red) }
                 }
-            } else {
-                // Codex 一键配置 内嵌主面板（与设置页同一套，免得用户找不到）
-                ScrollView(.vertical, showsIndicators: true) {
-                    CodexSetupView()
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 12)
-                }
-                .background(Color.primary.opacity(0.02))
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
             }
         }
         .frame(width: 620, height: 860)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
-        .sheet(isPresented: $showCodexSetup) {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Codex 一键配置 — 独立窗口").font(.headline)
-                    Spacer()
-                    Button("完成") { showCodexSetup = false }.buttonStyle(.borderedProminent).controlSize(.small)
-                }
-                .padding(12)
-                Divider()
-                ScrollView(.vertical, showsIndicators: true) {
-                    CodexSetupView()
-                        .padding(12)
-                }
-            }
-            .frame(width: 600, height: 700)
-        }
         .task {
             // 后台同步 Go 模型列表与配额表
             Task {
@@ -373,11 +306,7 @@ struct ContentView: View {
         .onOpenURL { url in
             if url.scheme == "opencodego" {
                 NSApp.activate(ignoringOtherApps: true)
-                if url.host == "codex" { mainTab = 1 }
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("OpenCodeGoSwitchToCodex"))) { _ in
-            mainTab = 1
         }
     }
 
@@ -628,7 +557,7 @@ struct SettingsView: View {
                 CodexSetupView()
             }
         }
-        .frame(width: selectedTab == 0 ? 520 : 580, height: selectedTab == 0 ? 520 : 680)
+        .frame(width: selectedTab == 0 ? 520 : 560, height: selectedTab == 0 ? 520 : 620)
     }
 }
 
