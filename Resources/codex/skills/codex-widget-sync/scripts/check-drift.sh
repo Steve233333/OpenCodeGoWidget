@@ -54,7 +54,8 @@ fi
 # 3. 比一下几个重要文件是不是跟电脑上一样（只比有没有大不同，不比 key）
 for pair in \
   "vision/vision_proxy.py:$HOME/.local/share/agent-vision-toolkit/vision_proxy.py" \
-  "patch/patch.sh:$HOME/.codex/picker-patch/patch.sh"
+  "patch/patch.sh:$HOME/.codex/picker-patch/patch.sh" \
+  "mcp/websearch-server.py:$HOME/.config/opencode/mcp/websearch-server.py"
 do
   rel="${pair%%:*}"
   home_path="${pair##*:}"
@@ -81,7 +82,19 @@ do
   fi
 done
 
-# 4. 看看 models.json 是不是正常的
+# 4. 看看搜索那块是不是双路的
+WSS="$WIDGET_DIR/Resources/codex/mcp/websearch-server.py"
+if [ -f "$WSS" ]; then
+  if grep -q "_delegate_via_deepseek" "$WSS" && grep -q "DIRECT_OPENER" "$WSS"; then
+    say_ok "搜索是双路的（会托给 deepseek 代搜）"
+  else
+    say_bad "搜索还是老版（没双路/代搜）"
+  fi
+else
+  say_bad "找不到 mcp/websearch-server.py"
+fi
+
+# 5. 看看 models.json 是不是正常的
 if [ -f "$WIDGET_DIR/Resources/codex/templates/models.json" ]; then
   cnt=$(python3 -c 'import json;print(len(json.load(open("'"$WIDGET_DIR/Resources/codex/templates/models.json"'") )["models"]))' 2>/dev/null || echo 0)
   if [ "$cnt" -gt 10 ]; then

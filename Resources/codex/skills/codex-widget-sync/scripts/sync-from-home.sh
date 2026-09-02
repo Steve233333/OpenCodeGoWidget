@@ -51,6 +51,7 @@ sync_one "$HOME_DIR/.local/share/agent-vision-toolkit/vision_proxy.py" "$WIDGET_
 sync_one "$HOME_DIR/.codex-deepseek/scripts/archive-large-rollouts.sh" "$WIDGET_DIR/Resources/codex/scripts/archive-large-rollouts.sh"
 sync_one "$HOME/.codex/picker-patch/patch.sh" "$WIDGET_DIR/Resources/codex/patch/patch.sh"
 sync_one "$HOME/.codex/picker-patch/certs/ent2.plist" "$WIDGET_DIR/Resources/codex/patch/ent2.plist"
+sync_one "$HOME/.config/opencode/mcp/websearch-server.py" "$WIDGET_DIR/Resources/codex/mcp/websearch-server.py"
 
 echo ""
 echo "抄完了，快跑一下 check-drift.sh 看看还有没有不一样的"

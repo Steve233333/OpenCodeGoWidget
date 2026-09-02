@@ -101,6 +101,12 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.7 — 双路联网搜索 + 代搜托付（2026-09-02）
+
+- 搜索不卡了：`websearch-server.py` 补上 `双路`（先直连绕开 `Clash/VPN` 的 `127.0.0.1` 代理，不通再走系统代理）+ `托给 deepseek 代搜`（`24 个没原生联网的 mimo/glm/qwen` 先让 `deepseek-v4-flash-go` 带着 `web_search` 去搜，再回退 `Exa/Parallel`），`glm/qwen` 网络一卡也不 `sandbox` 了。
+- 补坑：之前漏了 `import pathlib`，代搜时会报 `没找到 pathlib`，已补上；`check-drift` 也会比这个文件，不一样就拦。
+- 版本 **1.1.7 (9)**。
+
 ### v1.1.6 — 停用大对话自动搬走 + 防漂移（2026-09-02）
 
 - 不再自动搬走大对话：原来超过 8MB 就搬到 `failed_rollouts/` 会导致恢复时报错 `file does not exist`（如 `2026-09-02 17:10` 的 8M 对话），现在直接关掉，更新时还会自动把之前搬走的 10 个对话搬回来。
@@ -140,10 +146,10 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.6.dmg
-dist/OpenCode 小组件-1.1.6.zip
+dist/OpenCode 小组件-1.1.7.dmg
+dist/OpenCode 小组件-1.1.7.zip
 dist/OpenCode 小组件.app
-~/Desktop/OpenCode 小组件-1.1.6.dmg  # build.sh 会自动拷一份到桌面
+~/Desktop/OpenCode 小组件-1.1.7.dmg  # build.sh 会自动拷一份到桌面
 ```
 
 依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。
