@@ -1,0 +1,31 @@
+model = "__DEFAULT_MODEL__"
+model_reasoning_effort = "__REASONING_EFFORT__"
+model_provider = "deepseek"
+preferred_auth_method = "apikey"
+forced_login_method = "api"
+model_catalog_json = "~/.codex-deepseek/models.json"
+
+[desktop]
+appearanceTheme = "system"
+localeOverride = "zh-CN"
+defaultTerminalLocation = "bottom"
+
+[features]
+memories = false
+js_repl = false
+
+[model_providers.deepseek]
+name = "deepseek"
+base_url = "__BASE_URL__"
+wire_api = "responses"
+experimental_bearer_token = "__BEARER__"
+
+[memories]
+generate_memories = false
+use_memories = false
+extract_model = "__EXTRACT_MODEL__"
+consolidation_model = "__CONSOLIDATION_MODEL__"
+min_rate_limit_remaining_percent = 0
+min_rollout_idle_hours = 1
+disable_on_external_context = true
+max_rollouts_per_startup = 2

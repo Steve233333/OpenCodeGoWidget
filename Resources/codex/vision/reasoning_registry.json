@@ -1,0 +1,161 @@
+{
+  "deepseek-v4-flash-vision-exp": [
+    "low",
+    "high",
+    "max"
+  ],
+  "deepseek-v4-pro": [
+    "high",
+    "max"
+  ],
+  "deepseek-v4-flash": [
+    "low",
+    "high",
+    "max"
+  ],
+  "gpt-5.6-luna": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "muse-spark-1.2-contributor": [
+    "low",
+    "medium",
+    "high",
+    "xhigh"
+  ],
+  "mimo-v2.5": [
+    "low",
+    "high",
+    "max"
+  ],
+  "mimo-v2.5-pro": [
+    "high"
+  ],
+  "glm-5.3": [
+    "low",
+    "high",
+    "max"
+  ],
+  "glm-5.2": [
+    "high",
+    "max"
+  ],
+  "glm-5.1": [
+    "high",
+    "max"
+  ],
+  "glm-5": [
+    "high",
+    "max"
+  ],
+  "glm-5.3-flash": [
+    "low",
+    "high",
+    "max"
+  ],
+  "mimo-v2-pro": [
+    "low",
+    "high",
+    "max"
+  ],
+  "mimo-v2-omni": [
+    "low",
+    "high",
+    "max"
+  ],
+  "hy3": [
+    "high"
+  ],
+  "hy3-preview": [
+    "high"
+  ],
+  "grok-4.5": [
+    "low",
+    "high",
+    "max"
+  ],
+  "grok-4.6": [
+    "low",
+    "high",
+    "max"
+  ],
+  "minimax-m2.7": [
+    "low",
+    "high",
+    "max"
+  ],
+  "minimax-m3": [
+    "low",
+    "high",
+    "max"
+  ],
+  "kimi-k3": [
+    "low",
+    "high",
+    "max"
+  ],
+  "kimi-k2.7-code": [
+    "low",
+    "high",
+    "max"
+  ],
+  "kimi-k2.6": [
+    "low",
+    "high",
+    "max"
+  ],
+  "longcat-2.0": [
+    "low",
+    "high",
+    "max"
+  ],
+  "kimi-k2.5": [
+    "low",
+    "high",
+    "max"
+  ],
+  "qwen3.8-max": [
+    "low",
+    "medium",
+    "xhigh"
+  ],
+  "qwen3.7-max": [
+    "high"
+  ],
+  "qwen3.7-plus": [
+    "high"
+  ],
+  "qwen3.6-plus": [
+    "high"
+  ],
+  "qwen3.8-flash": [
+    "high"
+  ],
+  "hy4-preview": [
+    "high"
+  ],
+  "big-pickle": [
+    "high"
+  ],
+  "ling-3.0-flash-fin-free": [
+    "high"
+  ],
+  "ling-3.0-flash-fin": [
+    "high"
+  ],
+  "nemotron-3-ultra-free": [
+    "high"
+  ],
+  "nemotron-3.5-lightning-free": [
+    "high"
+  ],
+  "nemotron-3-ultra": [
+    "high"
+  ],
+  "nemotron-3.5-lightning": [
+    "high"
+  ]
+}
