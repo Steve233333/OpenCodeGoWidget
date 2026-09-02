@@ -539,13 +539,6 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("设置").font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            Divider()
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 20) {
                     GoSettingsContent(apiKey: $apiKey, dismiss: dismiss)
