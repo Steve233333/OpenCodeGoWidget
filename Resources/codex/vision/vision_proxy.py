@@ -2377,7 +2377,7 @@ class Proxy:
                                 # the model answers directly instead of calling web_search (which would 400 / sandbox-fail).
                                 zen_key = os.environ.get("ZEN_API_KEY")
                                 try:
-                                    search_res = await asyncio.wait_for(_perform_web_search(last_text, zen_key), timeout=15.0)
+                                    search_res = await asyncio.wait_for(_perform_web_search(last_text, zen_key), timeout=25.0)
                                 except asyncio.TimeoutError:
                                     _log(f"[vision-proxy] proactive real search timeout for {model}, using hint")
                                     search_res = ""
