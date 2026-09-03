@@ -142,24 +142,36 @@ struct BrandIconView: View {
     }
 }
 
-// 图例换行视图，供 App 与 Widget 共用
+// 图例换行视图，主 App 用（一次性全画，避免 ScrollView 里 LazyVGrid 可视区误算留白）
 struct WrappingLegendView: View {
     let models: [String]
     var body: some View {
-        // 使用 LazyVGrid 近似流式布局，兼容 Widget 的有限宽度
-        let columns = [GridItem(.adaptive(minimum: 110), spacing: 8)]
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
-            ForEach(models, id: \.self) { m in
-                HStack(spacing: 4) {
-                    Rectangle()
-                        .fill(ModelPalette.color(for: m))
-                        .frame(width: 12, height: 8)
-                        .clipShape(RoundedRectangle(cornerRadius: 2))
-                        .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
-                    Text(ModelPalette.shortName(m) + " (go)")
-                        .font(.system(size: 9))
-                        .lineLimit(1)
-                        .foregroundStyle(.secondary)
+        // 注意：主 App 纵向 ScrollView 里 LazyVGrid 会在窗口恢复滚动位置时误算可视区，
+        // 导致图例只画出前几格、上下拉一下才补全；SwiftUI 没有非 Lazy 的 VGrid，
+        // 故用 HStack 手动按 4 列分页一次全画（30 多项内存可忽略），禁用懒加载。
+        let cols = 4
+        let rows = (models.count + cols - 1) / cols
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(0..<rows, id: \.self) { r in
+                HStack(spacing: 8) {
+                    ForEach(0..<cols, id: \.self) { c in
+                        let idx = r * cols + c
+                        if idx < models.count {
+                            let m = models[idx]
+                            HStack(spacing: 4) {
+                                Rectangle()
+                                    .fill(ModelPalette.color(for: m))
+                                    .frame(width: 12, height: 8)
+                                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                                    .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+                                Text(ModelPalette.shortName(m) + " (go)")
+                                    .font(.system(size: 9))
+                                    .lineLimit(1)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                 }
             }
         }

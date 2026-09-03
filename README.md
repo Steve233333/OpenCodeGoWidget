@@ -101,6 +101,11 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.8.2 — 修复图例滚动留白（2026-09-03）
+
+- 主 App 图例 `LazyVGrid` 换 `VGrid` 一次全画：修窗口从底部滚动位置恢复时只画出前几格、上下拉一下才补全的问题；Widget 扩展不受影响。
+- 版本 **1.1.8.2 (12)**。
+
 ### v1.1.8.1 — 同步 Muse Spark 1.3（2026-09-03）
 
 - 三处回退表补上 `muse-spark-1.3-contributor`：配额与 1.2 同值（45,300 / 113,300 / 226,600），图例给略深一档的绿与 1.2 区分。
@@ -157,10 +162,10 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.8.1.dmg
-dist/OpenCode 小组件-1.1.8.1.zip
+dist/OpenCode 小组件-1.1.8.2.dmg
+dist/OpenCode 小组件-1.1.8.2.zip
 dist/OpenCode 小组件.app
-~/Desktop/OpenCode 小组件-1.1.8.1.dmg  # build.sh 会自动拷一份到桌面
+~/Desktop/OpenCode 小组件-1.1.8.2.dmg  # build.sh 会自动拷一份到桌面
 ```
 
 依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。
