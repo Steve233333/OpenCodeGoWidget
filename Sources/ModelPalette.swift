@@ -2,7 +2,7 @@ import SwiftUI
 
 enum ModelPalette {
     // Go 套餐模型顺序：实时同步 https://opencode.ai/zen/go/v1/models
-    // 首屏直接读 App Group 缓存（ModelRegistry），无网回退到硬编码全量 29 项
+    // 首屏直接读 App Group 缓存（ModelRegistry），无网回退到硬编码全量 30 项
     static var ordered: [String] {
         ModelRegistry.cachedOrderedSync()
     }
@@ -34,6 +34,7 @@ enum ModelPalette {
         "minimax-m2.7": Color(red: 0.78, green: 0.72, blue: 0.92),
         "minimax-m3": Color(red: 0.92, green: 0.72, blue: 0.82),
         "muse-spark-1.2-contributor": Color(red: 0.72, green: 0.92, blue: 0.72), // 截图中最高的淡绿
+        "muse-spark-1.3-contributor": Color(red: 0.62, green: 0.88, blue: 0.70), // 1.3 略深一档，与 1.2 区分
         "qwen3.5-plus": Color(red: 0.75, green: 0.80, blue: 0.95),
         "qwen3.6-plus": Color(red: 0.70, green: 0.78, blue: 0.94),
         "qwen3.7-plus": Color(red: 0.65, green: 0.76, blue: 0.92),

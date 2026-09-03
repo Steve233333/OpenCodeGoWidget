@@ -10,7 +10,7 @@ enum ModelRegistry {
     static let cacheDateKey = "go_model_ids_date"
     static let ttl: TimeInterval = 24 * 3600
 
-    // 回退列表：当前 Go 全量 29 项（API 2026-08-24 快照），保证首装/断网时即有完整图例
+    // 回退列表：当前 Go 全量 30 项（API 2026-08-24 快照 + Muse Spark 1.3），保证首装/断网时即有完整图例
     // 顺序与 API 返回一致，兼容文档表
     static let fallbackOrdered: [String] = [
         "minimax-m3",
@@ -42,6 +42,7 @@ enum ModelRegistry {
         "gpt-5.6-luna",
         "grok-4.5",
         "muse-spark-1.2-contributor",
+        "muse-spark-1.3-contributor",
     ]
 
     private static let logger = Logger(subsystem: "com.steve233.opencodego", category: "ModelRegistry")

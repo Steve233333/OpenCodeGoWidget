@@ -101,6 +101,12 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.8.1 — 同步 Muse Spark 1.3（2026-09-03）
+
+- 三处回退表补上 `muse-spark-1.3-contributor`：配额与 1.2 同值（45,300 / 113,300 / 226,600），图例给略深一档的绿与 1.2 区分。
+- `Resources/codex` 副本同步电脑最新配置（vision_proxy 1.3 原生搜索等），models.json 模板 33→34 项。
+- 版本 **1.1.8.1 (11)**。
+
 ### v1.1.8 — 非联网模型只走 deepseek 代搜（2026-09-02）
 
 - 按你说的改成 `非联网的只走 deepseek`：`vision_proxy` 的 `Google/DuckDuckGo 直连` 那段删了，只留 `deepseek-v4-flash-go` 代搜；`websearch-server` 的 `回退 Exa/Parallel` 也删了，只留 `delegate`，`深圳天气` 试过真能搜到才停。
@@ -151,10 +157,10 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.8.dmg
-dist/OpenCode 小组件-1.1.8.zip
+dist/OpenCode 小组件-1.1.8.1.dmg
+dist/OpenCode 小组件-1.1.8.1.zip
 dist/OpenCode 小组件.app
-~/Desktop/OpenCode 小组件-1.1.8.dmg  # build.sh 会自动拷一份到桌面
+~/Desktop/OpenCode 小组件-1.1.8.1.dmg  # build.sh 会自动拷一份到桌面
 ```
 
 依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。

@@ -124,6 +124,8 @@ NATIVE_VISION_MODELS = frozenset({
     "gpt-5.6-luna-go",
     "muse-spark-1.2-contributor",
     "muse-spark-1.2-contributor-go",
+    "muse-spark-1.3-contributor",
+    "muse-spark-1.3-contributor-go",
     "mimo-v2.5",
     "mimo-v2.5-go",
     "mimo-v2.5-pro",
@@ -750,7 +752,7 @@ def _strip_web_search_tool(parsed, model=None, go_route=False):
     """
     # Check if this is a search-capable model that can handle native web_search
     if go_route and isinstance(model, str) and model.startswith(
-        ("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")
+        ("deepseek-", "gpt-5.6-luna", "muse-spark")
     ):
         return False
     # For non-search models, don't strip here - we'll inject synthetic tool instead
@@ -765,7 +767,7 @@ def _inject_synthetic_web_search(parsed, model=None, go_route=False):
     """
     if not go_route or not isinstance(model, str):
         return False
-    if model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")):
+    if model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
         return False
     tools = parsed.get("tools")
     if not isinstance(tools, list):
@@ -1126,7 +1128,7 @@ _SEARCH_FALSE_MODELS = frozenset(
     }
 )
 # search=true whitelist (only these keep web_search on Go)
-_SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark-1.2", "grok-")
+_SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark", "grok-")
 
 
 def _intercept_unsupported_history(parsed, model):
@@ -2357,7 +2359,7 @@ class Proxy:
                 # Proactive sidecar: for non-search models that now have synthetic web_search, if user asks to search, pre-fetch
                 proactive_changed = False
                 if go_changed and model:
-                    is_search_capable = isinstance(model, str) and model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark-1.2"))
+                    is_search_capable = isinstance(model, str) and model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark"))
                     if not is_search_capable:
                         last_text = ""
                         for it in reversed(parsed.get("input", []) or []):
@@ -2511,7 +2513,7 @@ class Proxy:
                 return
             # Sidecar: handle web_search calls from non-search models (mimo/glm etc.)
             # If the primary model called synthetic web_search, delegate to deepseek and synthesize tool result
-            if not fallback_now and go_route and model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")):
+            if not fallback_now and go_route and model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
                 # Peek at response body for web_search calls (only for JSON non-stream for now)
                 try:
                     ctype = response.headers.get("Content-Type", "") if hasattr(response, "headers") else ""
@@ -2595,7 +2597,7 @@ class Proxy:
             # For now, handle the simple case where the response is JSON with web_search
             try:
                 ctype = response.headers.get("Content-Type", "") if hasattr(response, "headers") else ""
-                if "application/json" in ctype and go_route and model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")):
+                if "application/json" in ctype and go_route and model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
                     # Peek at response body for web_search
                     body_peek = await asyncio.to_thread(response.read)
                     # Restore response for normal handling if not web_search
@@ -2766,7 +2768,7 @@ class Proxy:
                 return
             obj = _build_chat_fallback_json(model, obj, effort)
             # Sidecar for web_search from non-search models via bridge - handle the search and inject results
-            if model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark-1.2")):
+            if model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
                 has_ws = False
                 ws_query = None
                 ws_call_id = None

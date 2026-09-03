@@ -215,7 +215,7 @@ struct ContentView: View {
                                 } else {
                                     MonthChartView(dailyCosts: filteredDaily, monthlyReset: snap.monthlyReset, alignment: chartAlignment)
                                         .frame(height: 160)
-                                    // 图例：实时展示官方 Go 全量（已同步 29 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
+                                    // 图例：实时展示官方 Go 全量（已同步 30 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
                                     let _ = modelTick
                                     let allModels = Set(filteredDaily.flatMap { $0.entries.keys }.map { $0.lowercased() })
                                     let ordered = ModelPalette.ordered

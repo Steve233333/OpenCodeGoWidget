@@ -42,6 +42,7 @@ enum GoQuotaRegistry {
         GoQuota(slug: "minimax-m3", displayName: "MiniMax M3", h5: 3200, weekly: 8000, monthly: 16000),
         GoQuota(slug: "minimax-m2.7", displayName: "MiniMax M2.7", h5: 3400, weekly: 8500, monthly: 17000),
         GoQuota(slug: "muse-spark-1.2-contributor", displayName: "Muse Spark 1.2 Contributor", h5: 45300, weekly: 113300, monthly: 226600),
+        GoQuota(slug: "muse-spark-1.3-contributor", displayName: "Muse Spark 1.3 Contributor", h5: 45300, weekly: 113300, monthly: 226600),
         GoQuota(slug: "qwen3.8-max", displayName: "Qwen3.8 Max", h5: 160, weekly: 400, monthly: 810),
         GoQuota(slug: "qwen3.7-max", displayName: "Qwen3.7 Max", h5: 340, weekly: 840, monthly: 1690),
         GoQuota(slug: "qwen3.7-plus", displayName: "Qwen3.7 Plus", h5: 4300, weekly: 10800, monthly: 21600),
