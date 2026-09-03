@@ -101,6 +101,12 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.8.3 — 修复 26.901 副本打不开（2026-09-03）
+
+- 根因：26.901 官方包启用 Electron per-file asar 完整性校验；旧补丁只改字节不更新 header 里的 `integrity` 哈希，副本启动即 `ASAR Integrity Violation` 静默退出，点图标无反应。
+- `patch.sh` 重建时改为同长原地刷新：picker 单行改空格填充（不再需要 npx 解包）、重算全部 8525 个文件的 integrity 哈希、sha256(新 header) 写回 `ElectronAsarIntegrity`；自审三道校验全过后再签名。
+- 小组件"配置"按钮覆盖安装的也是新版 `patch.sh`，更新官方版后重新配置不再打坏副本；版本 **1.1.8.3 (13)**。
+
 ### v1.1.8.2 — 修复图例滚动留白（2026-09-03）
 
 - 主 App 图例 `LazyVGrid` 换 `VGrid` 一次全画：修窗口从底部滚动位置恢复时只画出前几格、上下拉一下才补全的问题；Widget 扩展不受影响。
@@ -162,10 +168,10 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.8.2.dmg
-dist/OpenCode 小组件-1.1.8.2.zip
+dist/OpenCode 小组件-1.1.8.3.dmg
+dist/OpenCode 小组件-1.1.8.3.zip
 dist/OpenCode 小组件.app
-~/Desktop/OpenCode 小组件-1.1.8.2.dmg  # build.sh 会自动拷一份到桌面
+~/Desktop/OpenCode 小组件-1.1.8.3.dmg  # build.sh 会自动拷一份到桌面
 ```
 
 依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。
