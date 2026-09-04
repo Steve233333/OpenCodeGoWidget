@@ -640,32 +640,12 @@ fi
 
 # 安装 codex-picker-patch 1h 常驻（skill §架构）
 install_picker_patch_agent() {
+  # 冻结策略（2026-09-04）：副本不再跟随官方自动更新，手动升级唯一入口为小组件配置按钮。
+  # 此处只清理残留定时任务，不再写入/加载 plist，避免下次点配置又把自动更新装回来。
   local plist="$HOME/Library/LaunchAgents/com.steve233.codex-picker-patch.plist"
-  local cmd
-  cmd="$(command -v bash || echo /bin/bash)"
-  mkdir -p "$HOME/Library/LaunchAgents"
-  cat > "$plist" <<PLISTEOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.steve233.codex-picker-patch</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$cmd</string>
-    <string>$PATCH_BASE/patch.sh</string>
-    <string>--auto-update</string>
-  </array>
-  <key>StartInterval</key><integer>3600</integer>
-  <key>RunAtLoad</key><false/>
-  <key>StandardOutPath</key><string>$PATCH_BASE/patch.log</string>
-  <key>StandardErrorPath</key><string>$PATCH_BASE/patch.log</string>
-</dict>
-</plist>
-PLISTEOF
-  launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || launchctl unload "$plist" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null || true
-  log "codex-picker-patch 自动更新已安装（1h）"
+  launchctl bootout "gui/$(id -u)/com.steve233.codex-picker-patch" 2>/dev/null || launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || launchctl unload "$plist" 2>/dev/null || true
+  rm -f "$plist" 2>/dev/null || true
+  log "codex-picker-patch 自动更新已停用（副本冻结，手动升级走配置按钮）"
 }
 
 PATCH_OK=0
