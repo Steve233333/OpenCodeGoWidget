@@ -101,6 +101,12 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.8.4 — 副本冻结版（2026-09-04）
+
+- 副本不再跟随官方自动更新：停掉每小时 `--auto-update` 定时任务，冻在可用版本，官方升它的、副本不动。
+- 小组件"配置"按钮改为只清理残留定时任务、不再装回自动更新；手动升级唯一入口为配置按钮。
+- 版本 **1.1.8.4 (14)**。
+
 ### v1.1.8.3 — 修复 26.901 副本打不开（2026-09-03）
 
 - 根因：26.901 官方包启用 Electron per-file asar 完整性校验；旧补丁只改字节不更新 header 里的 `integrity` 哈希，副本启动即 `ASAR Integrity Violation` 静默退出，点图标无反应。
@@ -168,10 +174,10 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.8.3.dmg
-dist/OpenCode 小组件-1.1.8.3.zip
+dist/OpenCode 小组件-1.1.8.4.dmg
+dist/OpenCode 小组件-1.1.8.4.zip
 dist/OpenCode 小组件.app
-~/Desktop/OpenCode 小组件-1.1.8.3.dmg  # build.sh 会自动拷一份到桌面
+~/Desktop/OpenCode 小组件-1.1.8.4.dmg  # build.sh 会自动拷一份到桌面
 ```
 
 依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。
