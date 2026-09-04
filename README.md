@@ -101,6 +101,13 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.8.5 — 副本重建保险（2026-09-04）
+
+- 重建前先改名备份旧副本，5 个失败出口统一恢复备份+明确报错，最差也是旧副本还能用。
+- 成功路径加验签确认，通过才删备份；`--uninstall` 顺手清掉残留备份。
+- 配置页顶部加只读行"官方版 xx / 副本版 yy（已一致/有新版可升）"。
+- 版本 **1.1.8.5 (15)**。
+
 ### v1.1.8.4 — 副本冻结版（2026-09-04）
 
 - 副本不再跟随官方自动更新：停掉每小时 `--auto-update` 定时任务，冻在可用版本，官方升它的、副本不动。
@@ -174,10 +181,10 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.8.4.dmg
-dist/OpenCode 小组件-1.1.8.4.zip
+dist/OpenCode 小组件-1.1.8.5.dmg
+dist/OpenCode 小组件-1.1.8.5.zip
 dist/OpenCode 小组件.app
-~/Desktop/OpenCode 小组件-1.1.8.4.dmg  # build.sh 会自动拷一份到桌面
+~/Desktop/OpenCode 小组件-1.1.8.5.dmg  # build.sh 会自动拷一份到桌面
 ```
 
 依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。

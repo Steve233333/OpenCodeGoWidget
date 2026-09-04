@@ -34,6 +34,7 @@ struct CodexStatus: Equatable {
     var envExists: Bool = false
     var patchedExists: Bool = false
     var patchedVersion: String = "-"
+    var officialVersion: String = "-"
     var proxyRunning: Bool = false
     var proxyPlistExists: Bool = false
     var passExists: Bool = false
@@ -164,7 +165,7 @@ final class CodexInstaller: ObservableObject {
            let arr = j["models"] as? [[String: Any]] {
             s.hasGo = arr.contains { ($0["slug"] as? String ?? "").hasSuffix("-go") || ($0["slug"] as? String ?? "").hasSuffix("-zen") }
         }
-        // patched version — 修复：原先 String(m[r]) 对 m 越界导致 EXC_BREAKPOINT
+        // 副本版：只读 marker（成功才写，失败天然保持旧版）；无 marker 则读副本包 Info.plist
         let marker = (patchBase as NSString).appendingPathComponent("patch-state.json")
         if let txt = try? String(contentsOfFile: marker, encoding: .utf8) {
             if let regex = try? NSRegularExpression(pattern: #""sourceVersion"\s*:\s*"([^"]+)""#),
@@ -175,17 +176,25 @@ final class CodexInstaller: ObservableObject {
             }
         }
         if s.patchedVersion == "-" || s.patchedVersion.isEmpty {
-            // 回退读原版 ChatGPT 版本
-            let plistCandidates = [
+            let patchedPlistCandidates = [
+                (home as NSString).appendingPathComponent("Applications/ChatGPT-Patched.app/Contents/Info.plist"),
+                "/Applications/ChatGPT-Patched.app/Contents/Info.plist"
+            ]
+            for p in patchedPlistCandidates {
+                if let dict = NSDictionary(contentsOfFile: p) as? [String: Any], let v = dict["CFBundleShortVersionString"] as? String {
+                    s.patchedVersion = v; break
+                }
+            }
+        }
+        // 官方版：只读正本 Info.plist，与副本版分开
+        do {
+            let officialPlistCandidates = [
                 "/Applications/ChatGPT.app/Contents/Info.plist",
                 (home as NSString).appendingPathComponent("Applications/ChatGPT.app/Contents/Info.plist")
             ]
-            for p in plistCandidates {
-                if let v = Bundle(path: (p as NSString).deletingLastPathComponent.replacingOccurrences(of: "/Contents/Info.plist", with: ""))?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
-                    s.patchedVersion = v; break
-                }
+            for p in officialPlistCandidates {
                 if let dict = NSDictionary(contentsOfFile: p) as? [String: Any], let v = dict["CFBundleShortVersionString"] as? String {
-                    s.patchedVersion = v; break
+                    s.officialVersion = v; break
                 }
             }
         }

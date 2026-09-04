@@ -106,8 +106,52 @@ build_patched() {
       exit 1 ;;
   esac
 
-  # Rebuild the patched copy from the current (possibly updated) source.
-  rm -rf "$PATCHED"
+  # B1 备份再重建（2026-09-04）：旧副本先改名备份，重建成功才删，失败自动恢复。
+  # marker 只在成功末尾写，失败路径天然保持旧版本，与恢复后的备份一致，无需额外处理。
+  local PATCH_BAK=""
+  backup_patched() {
+    # 首次安装无旧包时跳过备份/恢复
+    if [ ! -d "$PATCHED" ]; then
+      log "no existing patched copy, skip backup"
+      return 0
+    fi
+    # 备份命名：marker 旧 sourceVersion > 旧包 Info.plist 版本 > 时间戳兜底，保证 mv 永不撞名
+    local bak_ver bak_base
+    bak_ver=$(get_marker_version)
+    if [ -z "$bak_ver" ]; then
+      bak_ver=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PATCHED/Contents/Info.plist" 2>/dev/null || true)
+      if [[ "$bak_ver" == *"Will Create"* ]] || [[ "$bak_ver" == *"Does Not Exist"* ]]; then bak_ver=""; fi
+    fi
+    if [ -z "$bak_ver" ]; then
+      bak_ver="ts$(date '+%Y%m%d-%H%M%S')"
+    fi
+    bak_base="$(dirname "$PATCHED")/ChatGPT-Patched.bak.$bak_ver"
+    PATCH_BAK="$bak_base"
+    # 同名旧备份先清掉（只留一份最新旧版）
+    rm -rf "$PATCH_BAK"
+    mv "$PATCHED" "$PATCH_BAK"
+    log "backed up existing patched copy -> $PATCH_BAK"
+  }
+  restore_patched() {
+    # $1 = 步骤名
+    local step="$1"
+    if [ -n "$PATCH_BAK" ] && [ -d "$PATCH_BAK" ]; then
+      rm -rf "$PATCHED"
+      mv "$PATCH_BAK" "$PATCHED"
+      log "RESTORED:$step (old copy recovered, marker keeps old version)"
+    else
+      rm -rf "$PATCHED"
+      log "RESTORED:$step (no backup, fresh install failed cleanly)"
+    fi
+    exit 1
+  }
+  cleanup_backup() {
+    if [ -n "$PATCH_BAK" ] && [ -d "$PATCH_BAK" ]; then
+      rm -rf "$PATCH_BAK"
+      log "backup removed ($PATCH_BAK)"
+    fi
+  }
+  backup_patched
   mkdir -p "$(dirname "$PATCHED")"
   cp -R "$SOURCE" "$PATCHED"
   log "copied source -> $PATCHED"
@@ -120,24 +164,21 @@ build_patched() {
   matches=$(grep -aboE "$PATTERN_REGEX" "$asar" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$matches" -ne 1 ]; then
     log "ERROR: pattern occurrences=$matches (expected 1) for regex $PATTERN_REGEX, refusing to patch. App may have a code change."
-    rm -rf "$PATCHED"
-    exit 1
+    restore_patched "pattern-count"
   fi
   off=$(grep -aboE "$PATTERN_REGEX" "$asar" 2>/dev/null | head -1 | cut -d: -f1)
   snippet=$(grep -aoE "$PATTERN_REGEX" "$asar" 2>/dev/null | head -1)
   within=$(printf '%s' "$snippet" | grep -aboF "$PATCH_FROM" | head -1 | cut -d: -f1)
   if [ -z "$within" ]; then
     log "ERROR: cannot locate $PATCH_FROM within matched pattern, refusing"
-    rm -rf "$PATCHED"
-    exit 1
+    restore_patched "pattern-locate"
   fi
   off=$((off + within))
   printf '%s' "$PATCH_TO" | dd of="$asar" bs=1 seek="$off" count="${#PATCH_TO}" conv=notrunc 2>/dev/null
 
   if ! is_patched; then
     log "ERROR: patch byte verification failed, removing broken copy"
-    rm -rf "$PATCHED"
-    exit 1
+    restore_patched "byte-verify"
   fi
   log "pattern '$PATTERN' patched ($PATCH_FROM -> $PATCH_TO) at offset $off"
 
@@ -157,8 +198,7 @@ build_patched() {
     log "WARN: sparkle feed URL not found (code change?), skipping"
   else
     log "ERROR: sparkle feed URL occurrences=$feed_matches (expected 1), refusing"
-    rm -rf "$PATCHED"
-    exit 1
+    restore_patched "feed-multi"
   fi
 
   # 26.901+: Electron validates per-file asar integrity on every read, using the
@@ -263,8 +303,7 @@ print('asar rewritten, size unchanged: %d' % len(buf))
 PYEOF
   then
     log "ERROR: asar integrity refresh failed, removing broken copy"
-    rm -rf "$PATCHED"
-    exit 1
+    restore_patched "integrity"
   fi
   log "asar integrity refreshed (picker single-line + per-file recompute + header hash)"
 
@@ -338,6 +377,14 @@ EOF
     log "re-signed (ad-hoc fallback)"
   fi
 
+  # 轻量启动确认：验签通过才删备份（B1/B2），失败走同一回滚
+  if ! codesign --verify --deep --strict "$PATCHED" >> "$LOG" 2>&1; then
+    log "ERROR: codesign verify failed on new copy"
+    restore_patched "verify"
+  fi
+  log "codesign verify passed"
+  cleanup_backup
+
   printf '{"sourceVersion":"%s","builtAt":"%s"}\n' "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MARKER"
   log "marker written: $version"
 }
@@ -391,6 +438,9 @@ uninstall() {
     rm -rf "$PATCHED"
     log "removed $PATCHED (official app in /Applications untouched)"
   fi
+  # 不留 600MB 僵尸包
+  rm -rf "$(dirname "$PATCHED")"/ChatGPT-Patched.bak.* 2>/dev/null || true
+  log "removed stale backups (ChatGPT-Patched.bak.*)"
   rm -f "$MARKER"
   if [ -f "$AGENT_PLIST" ]; then
     launchctl unload "$AGENT_PLIST" 2>/dev/null || true

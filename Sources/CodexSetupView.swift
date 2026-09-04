@@ -32,6 +32,14 @@ struct CodexSetupView: View {
                 .font(.headline)
             Text("填写后点击「配置」即可完成安装或更新（有旧 Key 时留空自动复用）")
                 .font(.caption2).foregroundStyle(.secondary)
+            // 副本/官方版本对照（只读展示，不触发任何写入）
+            HStack(spacing: 4) {
+                let ov = installer.status.officialVersion
+                let pv = installer.status.patchedVersion
+                let state: String = (ov == "-" || pv == "-") ? "未知" : (ov == pv ? "已一致" : "有新版可升")
+                Text("官方版 \(ov) / 副本版 \(pv)（\(state)）")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
 
             VStack(alignment: .leading, spacing: 12) {
                 keyRow(title: "OpenCode Go Key", required: true,
