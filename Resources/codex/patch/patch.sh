@@ -169,7 +169,8 @@ build_patched() {
   # place (same length -- the C++ layer FATALs on missing entries, so they
   # cannot be removed), (3) sha256(new header JSON) back into Info.plist
   # ElectronAsarIntegrity (the archive-level gate is fail-closed).
-  if ! python3 - "$asar" "$plist" >>"$LOG" 2>&1 <<'PYEOF'
+  # python 用 -u 关闭块缓冲，心跳日志才能实时写入文件
+  if ! python3 -u - "$asar" "$plist" >>"$LOG" 2>&1 <<'PYEOF'
 import struct, json, hashlib, re, plistlib
 asar, plist = __import__('sys').argv[1], __import__('sys').argv[2]
 with open(asar, 'rb') as f:
@@ -241,6 +242,8 @@ for p, e in walk(header):
     assert hdr.count(ob) >= 1, 'unit missing %s' % p
     hdr = hdr.replace(ob, nb)
     nfiles += 1
+    if nfiles % 1000 == 0:
+        print('... integrity recomputed %d files' % nfiles, flush=True)
 print('per-file integrity recomputed: %d files' % nfiles)
 json.loads(hdr.decode('utf-8'))  # still valid JSON
 buf[hstart:hend] = hdr

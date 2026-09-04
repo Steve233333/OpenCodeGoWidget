@@ -52,6 +52,11 @@ final class CodexInstaller: ObservableObject {
     @Published var lastExitCode: Int32? = nil
 
     private var process: Process?
+    // S1(2026-09-04)：取消/收尾不再依赖阻塞式 readToEnd（孤儿进程抱着管道会导致永久 hanging）。
+    //runGeneration 防止旧看门狗误伤新任务；out/errHandle 用于收尾时关闭读端（孤儿下次写即 SIGPIPE 退出）。
+    private var runGeneration = 0
+    private var outHandle: FileHandle?
+    private var errHandle: FileHandle?
 
     // 路径常量
     static var home: String { FileManager.default.homeDirectoryForCurrentUser.path }
@@ -290,6 +295,8 @@ final class CodexInstaller: ObservableObject {
             return
         }
         isRunning = true
+        runGeneration &+= 1
+        let myGeneration = runGeneration
         logText = "[\(Self.timestamp())] 准备执行 \(mode.rawValue) 模式...\n"
         logText += "安装器: \(installer)\n"
         if let resDir = Self.bundledCodexResourcesDir() {
@@ -344,6 +351,8 @@ final class CodexInstaller: ObservableObject {
         let errPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = errPipe
+        self.outHandle = outPipe.fileHandleForReading
+        self.errHandle = errPipe.fileHandleForReading
 
         // 异步读输出
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -359,21 +368,18 @@ final class CodexInstaller: ObservableObject {
 
         proc.terminationHandler = { [weak self] p in
             Task { @MainActor in
-                outPipe.fileHandleForReading.readabilityHandler = nil
-                errPipe.fileHandleForReading.readabilityHandler = nil
-                // 兜底把剩余缓冲读完
-                if let d = try? outPipe.fileHandleForReading.readToEnd(), let s = String(data: d, encoding: .utf8), !s.isEmpty { self?.logText += s }
-                if let d = try? errPipe.fileHandleForReading.readToEnd(), let s = String(data: d, encoding: .utf8), !s.isEmpty { self?.logText += s }
-                self?.lastExitCode = p.terminationStatus
+                guard let self, self.runGeneration == myGeneration else { return }
+                self.drainPipes()
+                // 兜底把剩余缓冲读完（非阻塞；阻塞式 readToEnd 会被孤儿进程 hanging 住，已禁用）
+                self.lastExitCode = p.terminationStatus
                 if p.terminationStatus == 0 {
-                    self?.logText += "\n[完成] 退出码 0 ✅\n"
+                    self.logText += "\n[完成] 退出码 0 ✅\n"
                     // 同步 Keychain：Go Key 存入 Keychain 供 Widget 直接用
                     if !go.isEmpty { KeychainStore.save(go) }
                 } else {
-                    self?.logText += "\n[失败] 退出码 \(p.terminationStatus) ❌\n"
+                    self.logText += "\n[失败] 退出码 \(p.terminationStatus) ❌\n"
                 }
-                self?.isRunning = false
-                self?.refreshStatus()
+                self.finalizeRun()
             }
         }
 
@@ -394,11 +400,51 @@ final class CodexInstaller: ObservableObject {
         run(mode: mode, goKey: goKey, dsKey: dsKey, glmKey: glmKey, pass: pass)
     }
 
+    /// 非阻塞读走管道里已有的数据（readToEnd 在有孤儿抱管时会永久阻塞，禁用）
+    private func drainPipes() {
+        for h in [outHandle, errHandle].compactMap({ $0 }) {
+            h.readabilityHandler = nil
+            let data = h.availableData
+            if !data.isEmpty, let s = String(data: data, encoding: .utf8), !s.isEmpty {
+                logText += s
+            }
+        }
+    }
+
+    /// 收尾：关管道读端（后台孤儿下次写即 SIGPIPE 退出）、清状态。
+    /// 注意只杀 zsh 本体，不碰进程组——子进程与 App 同组，killpg 会误杀自己。
+    private func finalizeRun() {
+        for h in [outHandle, errHandle].compactMap({ $0 }) {
+            h.readabilityHandler = nil
+            try? h.close()
+        }
+        outHandle = nil
+        errHandle = nil
+        process = nil
+        isRunning = false
+        refreshStatus()
+    }
+
     func cancel() {
+        guard isRunning else { return }
+        let myGeneration = runGeneration
+        logText += "\n[取消] 正在停止配置任务…\n"
         process?.terminate()
-        // 也尝试 kill 整个进程组
-        if let pid = process?.processIdentifier {
-            kill(pid, SIGTERM)
+        if let pid = process?.processIdentifier { kill(pid, SIGTERM) }
+        // 3 秒后还没退就 SIGKILL（仅 zsh 本体）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.isRunning, self.runGeneration == myGeneration,
+                  let pid = self.process?.processIdentifier else { return }
+            kill(pid, SIGKILL)
+            self.logText += "[取消] 进程无响应，已强制终止\n"
+        }
+        // 5 秒后无论如何强制收尾：防止孤儿抱管导致 terminationHandler 永不回调
+        //（finalizeRun 关读端后，孤儿下次写管道即 SIGPIPE 退出，不会再破坏副本）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self, self.isRunning, self.runGeneration == myGeneration else { return }
+            self.logText += "[取消] 已停止。若后台仍有残留，可在终端执行：pkill -f codex-oneclick-setup\n"
+            self.lastExitCode = -1
+            self.finalizeRun()
         }
     }
 

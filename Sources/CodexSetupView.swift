@@ -18,6 +18,11 @@ struct CodexSetupView: View {
     @State private var existingDS: String = ""
     @State private var existingGLM: String = ""
     @State private var existingPass: String = ""
+    // S2(2026-09-04)：运行计时 + 全量日志（之前只看最后2行，长静默阶段像卡死）
+    @State private var runStart: Date? = nil
+    @State private var elapsedSeconds = 0
+    @State private var showFullLog = true
+    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var canRun: Bool { !installer.isRunning }
 
@@ -50,12 +55,52 @@ struct CodexSetupView: View {
                 Text(code == 0 ? "上次配置成功 ✅" : "上次配置失败（\(code)），请查看日志")
                     .font(.caption2).foregroundStyle(code == 0 ? .green : .red)
             }
-            if installer.isRunning && !installer.logText.isEmpty {
-                // 极简日志预览（原 logView 的简化版）：只显示最后 2 行
-                Text(installer.logText.split(separator: "\n").suffix(2).joined(separator: "\n"))
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+            if installer.isRunning {
+                HStack(spacing: 6) {
+                    ProgressView().scaleEffect(0.6)
+                    Text("配置中…已用时 \(formattedElapsed(elapsedSeconds))（重建约需 1~2 分钟，请勿重复点击）")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(showFullLog ? "收起" : "展开") { showFullLog.toggle() }
+                        .controlSize(.mini).buttonStyle(.plain).font(.caption2)
+                }
+                if showFullLog && !installer.logText.isEmpty {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            Text(installer.logText)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                            Color.clear.frame(height: 1).id("logEnd")
+                        }
+                        .frame(maxHeight: 170)
+                        .onChange(of: installer.logText) { _ in
+                            proxy.scrollTo("logEnd", anchor: .bottom)
+                        }
+                    }
+                }
+            } else if !installer.logText.isEmpty {
+                HStack {
+                    Spacer()
+                    Button(showFullLog ? "收起日志" : "查看完整日志") { showFullLog.toggle() }
+                        .controlSize(.mini).buttonStyle(.plain).font(.caption2)
+                }
+                if showFullLog {
+                    ScrollView {
+                        Text(installer.logText)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 170)
+                } else {
+                    Text(installer.logText.split(separator: "\n").suffix(2).joined(separator: "\n"))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
 
             HStack {
@@ -98,6 +143,18 @@ struct CodexSetupView: View {
             existingDS = CodexInstaller.existingDSKey() ?? ""
             existingGLM = CodexInstaller.existingGLMKey()
             existingPass = CodexInstaller.existingPass()
+        }
+        .onReceive(tick) { _ in
+            if installer.isRunning, let s = runStart {
+                elapsedSeconds = Int(Date().timeIntervalSince(s))
+            }
+        }
+        // S3(2026-09-04)：配置成功后自动打开副本（runStart 非空才算本次发起，避免重进页面误触）
+        .onReceive(installer.$lastExitCode) { code in
+            if code == 0, runStart != nil {
+                runStart = nil
+                installer.openPatchedApp()
+            }
         }
     }
 
@@ -143,6 +200,10 @@ struct CodexSetupView: View {
         return String(s.prefix(4)) + "****" + String(s.suffix(4))
     }
 
+    private func formattedElapsed(_ s: Int) -> String {
+        String(format: "%d:%02d", s / 60, s % 60)
+    }
+
     private func configure() {
         errorText = nil
         let go = goKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -177,6 +238,9 @@ struct CodexSetupView: View {
 
         // 有 Key 时安装/更新已合并：统一走安装逻辑（留空复用旧 Key）
         // 若已安装则 installer 内部会备份旧配置并复用
+        runStart = Date()
+        elapsedSeconds = 0
+        showFullLog = true
         installer.configure(goKey: go, dsKey: ds, glmKey: glm, pass: pwd)
     }
 }

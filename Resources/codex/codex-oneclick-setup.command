@@ -45,6 +45,28 @@ APPLESCRIPT
   exit 1
 }
 
+# ---------------------------------------------------------------------------
+# I1. 互斥锁：禁止两个配置任务并发重建同一个副本（2026-09-04）。
+# 背景：重建耗时约 1~2 分钟且中途日志很少，用户容易连点“配置”；
+# 两个实例同时 rm -rf/cp -R 同一个 bundle 必互相破坏。mkdir 原子性保证
+# 只有一个能拿到锁；stale 锁（持有进程已死，如被 kill -9）自动清理。
+# ---------------------------------------------------------------------------
+ONECLICK_LOCK_DIR="$HOME/.codex/picker-patch/.oneclick.lock.d"
+mkdir -p "$HOME/.codex/picker-patch" 2>/dev/null || true
+if ! mkdir "$ONECLICK_LOCK_DIR" 2>/dev/null; then
+  _holder_pid="$(sed -nE 's/^PID=([0-9]+).*/\1/p' "$ONECLICK_LOCK_DIR/info" 2>/dev/null | head -1 || true)"
+  if [[ -n "${_holder_pid:-}" ]] && kill -0 "$_holder_pid" 2>/dev/null; then
+    _holder_info="$(cat "$ONECLICK_LOCK_DIR/info" 2>/dev/null || echo '?')"
+    die "已有配置任务在运行中（${_holder_info}），请等待它完成或取消后再试。本次未做任何更改。"
+  fi
+  log "WARN: 发现残留锁（持有进程已退出），清理后继续"
+  rm -rf "$ONECLICK_LOCK_DIR"
+  mkdir "$ONECLICK_LOCK_DIR" 2>/dev/null || die "无法创建锁目录 $ONECLICK_LOCK_DIR"
+fi
+printf 'PID=%s START=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S')" > "$ONECLICK_LOCK_DIR/info" 2>/dev/null || true
+_cleanup_oneclick_lock() { rm -rf "$ONECLICK_LOCK_DIR"; }
+trap _cleanup_oneclick_lock EXIT INT TERM
+
 ask_hidden() {
   osascript - "$1" "$2" "$3" <<'APPLESCRIPT'
 on run argv
@@ -579,6 +601,7 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
 EOF
 
   if [[ "$SKIP_PROXY_START" -eq 0 ]]; then
+    log "阶段：重启视觉代理（最多等待 30 秒）…"
     launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
     for _ in {1..30}; do
@@ -623,8 +646,10 @@ EOF2
     launchctl bootout "gui/$(id -u)" "$DISCOVERY_PLIST" 2>/dev/null || launchctl unload "$DISCOVERY_PLIST" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$DISCOVERY_PLIST" 2>/dev/null || launchctl load "$DISCOVERY_PLIST" 2>/dev/null || true
     log "Go 模型自动发现已安装（6h + 启动，跟配额表自动同步）"
-    # 立即同步一次（quota表 -> models.json）
+    # 立即同步一次（quota表 -> models.json，需联网约 10~20 秒，详细输出只写文件日志）
+    log "阶段：同步 Go 模型配额表（需联网，请耐心等待）…"
     "$PY_BIN" "$VISION_DIR/model_discovery.py" --sync --force >>"$LOG" 2>&1 || log "WARN: 首次 Go 模型同步失败，详见 $VISION_DIR/discovery.err.log"
+    log "配额表同步步骤结束"
   fi
 else
   log "无需视觉代理（纯官方 DeepSeek 直连）"
@@ -667,16 +692,19 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
   if [[ -z "$MARKER_VER" || "$SRC_VER" != "$MARKER_VER" ]]; then
     NEED_REBUILD=1
   fi
-  if ! bash "$PATCH_BASE/patch.sh" --status 2>&1 | grep -q "patched"; then
+  # 注意：必须带括号匹配 "(patched)"，裸 "patched" 会连 "patched copy:" 未 patch 行也命中
+  if ! bash "$PATCH_BASE/patch.sh" --status 2>&1 | grep -q "(patched)"; then
     NEED_REBUILD=1
   fi
   if [[ "$NEED_REBUILD" -eq 1 ]]; then
+    log "阶段：重建副本（约需 1~2 分钟，期间日志较少请耐心等待，不要重复点击配置）…"
     # 官方已升级时副本常驻会阻止重建，更新模式下自动退出
-    if pgrep -f "ChatGPT-Patched" >/dev/null 2>&1; then
+    # 注意：匹配完整 bundle 路径，避免误杀安装器自身或其它含关键字的进程
+    if pgrep -f "ChatGPT-Patched.app/Contents/MacOS" >/dev/null 2>&1; then
       if [[ "$MODE" == "update" ]]; then
         log "检测到官方已升级（$MARKER_VER -> $SRC_VER），副本仍在运行，尝试自动退出重建..."
-        pkill -f "ChatGPT-Patched" 2>/dev/null || true
-        for _ in {1..10}; do pgrep -f "ChatGPT-Patched" >/dev/null 2>&1 || break; sleep 0.5; done
+        pkill -f "ChatGPT-Patched.app/Contents/MacOS" 2>/dev/null || true
+        for _ in {1..10}; do pgrep -f "ChatGPT-Patched.app/Contents/MacOS" >/dev/null 2>&1 || break; sleep 0.5; done
       else
         log "WARN: 副本正在运行，重建将延后；请退出副本后重试 patch.sh --auto-update"
       fi
