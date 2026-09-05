@@ -67,6 +67,28 @@ printf 'PID=%s START=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S')" > "$ONECLICK_LOCK
 _cleanup_oneclick_lock() { rm -rf "$ONECLICK_LOCK_DIR"; }
 trap _cleanup_oneclick_lock EXIT INT TERM
 
+# ---------------------------------------------------------------------------
+# 2026-09-05: 只同步"包里更新"的文件（mtime 比较），禁止旧包降级本机。
+# 背景：本机是老大——手动改完还没重打包前点"配置"，旧逻辑会拿包里旧文件覆盖本机新修复。
+# cp -p 全程保留 mtime，比较才有意义；缺失文件照常安装。
+# ---------------------------------------------------------------------------
+sync_newer_file() {
+  local src="$1" dst="$2"
+  local base
+  base="$(basename "$dst")"
+  if [[ ! -e "$dst" ]]; then
+    mkdir -p "$(dirname "$dst")"
+    if cp -p "$src" "$dst" 2>/dev/null; then log "同步新增：${base}"; else log "WARN: 拷贝失败 $src"; fi
+    return 0
+  fi
+  if [[ "$src" -nt "$dst" ]]; then
+    if cp -p "$src" "$dst" 2>/dev/null; then log "同步更新：${base}（包更新）"; else log "WARN: 拷贝失败 $src"; fi
+  else
+    log "跳过覆盖：${base}（本机更新，无需降级）"
+  fi
+  return 0
+}
+
 ask_hidden() {
   osascript - "$1" "$2" "$3" <<'APPLESCRIPT'
 on run argv
@@ -524,7 +546,7 @@ MCP_SRC="$SCRIPT_DIR/resources/mcp/websearch-server.py"
 MCP_DST="$MCP_DIR/websearch-server.py"
 if [[ -f "$MCP_SRC" ]]; then
   mkdir -p "$MCP_DIR"
-  cp -p "$MCP_SRC" "$MCP_DST"
+  sync_newer_file "$MCP_SRC" "$MCP_DST"
   chmod +x "$MCP_DST"
   python3 -m py_compile "$MCP_DST" 2>/dev/null || true
   # 注入到副本 config.toml (mcp_servers.websearch)
@@ -548,7 +570,14 @@ PROXY_OK=0
 if [[ "$USE_PROXY" -eq 1 ]]; then
   VISION_DIR="$HOME/.local/share/agent-vision-toolkit"
   mkdir -p "$VISION_DIR" "$HOME/.config/agent-vision-toolkit"
-  cp -R "$SCRIPT_DIR/resources/vision/." "$VISION_DIR/" 2>/dev/null || true
+  # 2026-09-05: 逐文件 mtime 比较同步（见 sync_newer_file），旧包不再整体覆盖本机
+  if [ -d "$SCRIPT_DIR/resources/vision" ]; then
+    ( cd "$SCRIPT_DIR/resources/vision" && find . -type f -print0 ) | while IFS= read -r -d '' _rel; do
+      sync_newer_file "$SCRIPT_DIR/resources/vision/$_rel" "$VISION_DIR/$_rel"
+    done
+  else
+    cp -R "$SCRIPT_DIR/resources/vision/." "$VISION_DIR/" 2>/dev/null || true
+  fi
   chmod +x "$VISION_DIR"/bin/* 2>/dev/null || true
   touch "$ENV_FILE"
   chmod 600 "$ENV_FILE" 2>/dev/null || true
@@ -677,8 +706,8 @@ PATCH_OK=0
 PATCH_VER_MSG=""
 if [[ "$SKIP_PATCH" -eq 0 ]]; then
   mkdir -p "$PATCH_BASE/certs" "$PATCH_BASE/scripts"
-  cp -p "$SCRIPT_DIR/resources/patch/patch.sh" "$PATCH_BASE/patch.sh"
-  cp -p "$SCRIPT_DIR/resources/patch/ent2.plist" "$PATCH_BASE/certs/ent2.plist"
+  sync_newer_file "$SCRIPT_DIR/resources/patch/patch.sh" "$PATCH_BASE/patch.sh"
+  sync_newer_file "$SCRIPT_DIR/resources/patch/ent2.plist" "$PATCH_BASE/certs/ent2.plist"
   chmod 755 "$PATCH_BASE/patch.sh"
   if [[ -n "$PASS" ]]; then
     printf '%s' "$PASS" > "$PASS_FILE"

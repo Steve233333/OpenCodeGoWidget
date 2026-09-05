@@ -748,22 +748,8 @@ class ChatBridgeTranslator:
         return out
 
 
-def _strip_web_search_tool(parsed, model=None, go_route=False):
-    """Keep web_search for sidecar; only strip if no sidecar handling.
-
-    For non-search models (mimo/glm/kimi etc.), we now inject a synthetic
-    web_search function tool instead of stripping, so the model can call it
-    and the proxy will delegate to deepseek via sidecar. Stripping is only
-    needed if sidecar is disabled.
-    """
-    # Check if this is a search-capable model that can handle native web_search
-    if go_route and isinstance(model, str) and model.startswith(
-        ("deepseek-", "gpt-5.6-luna", "muse-spark")
-    ):
-        return False
-    # For non-search models, don't strip here - we'll inject synthetic tool instead
-    # The synthetic injection happens in _inject_synthetic_web_search
-    return False
+# 2026-09-05 清理：_strip_web_search_tool 已删除（两条分支都 return False 的纯 no-op；
+# 原生保留走前缀白名单，其余走 _inject_synthetic_web_search 边车）。调用点与测试同步删除。
 
 def _inject_synthetic_web_search(parsed, model=None, go_route=False):
     """Inject synthetic web_search for all non-search Go models (无条件).
@@ -1122,23 +1108,7 @@ def _normalize_fc_args_history(parsed):
 
 
 # Models that do NOT support web_search history (mimo/GLM/chat-adapted). Switching
-# into them with history containing web_search_call must be intercepted and
-# prompt new session (preserve integrity vs silent drop). Go-wide check, but
-# only triggers when history actually contains web_search_call.
-# 2026-08-28: expanded to full Go chat-adapted set; unknown models fallback to whitelist check in _intercept_unsupported_history.
-_SEARCH_FALSE_MODELS = frozenset(
-    {
-        "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni",
-        "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
-        "ox-alpha", "ox-alpha-free", "x-preview-f-free",
-        "hy3", "hy3-preview",
-        "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max",
-        "kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code",
-        "minimax-m3", "minimax-m2.7", "minimax-m2.5",
-        "longcat-2.0", "grok-4.5", "grok-4.6",
-        "omen-alpha",
-    }
-)
+# 2026-09-05 清理：_SEARCH_FALSE_MODELS 已删除（零引用；拦截早已走下方白名单通用逻辑）。
 # search=true whitelist (only these keep web_search on Go)
 _SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark", "grok-")
 
@@ -2366,7 +2336,6 @@ class Proxy:
                 go_changed = _rewrite_go_model(parsed)
                 tools_changed = _rewrite_apply_patch_tool(parsed)
                 model = parsed.get("model") if isinstance(parsed, dict) else None
-                ws_changed = (zen_changed or go_changed) and _strip_web_search_tool(parsed, model, go_changed)
                 synth_changed = (zen_changed or go_changed) and _inject_synthetic_web_search(parsed, model, go_changed)
                 # Proactive sidecar: for non-search models that now have synthetic web_search, if user asks to search, pre-fetch
                 proactive_changed = False
@@ -2429,7 +2398,7 @@ class Proxy:
                         if clamped != eff:
                             parsed["reasoning"]["effort"] = clamped
                             reasoning_changed = True
-                if image_changed or model_changed or zen_changed or go_changed or tools_changed or ws_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or prune_changed or reasoning_changed:
+                if image_changed or model_changed or zen_changed or go_changed or tools_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or prune_changed or reasoning_changed:
                     body = bytearray(json.dumps(parsed).encode())
             model = parsed.get("model") if isinstance(parsed, dict) else None
             zen_route = isinstance(parsed, dict) and zen_changed

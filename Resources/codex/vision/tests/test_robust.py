@@ -288,17 +288,22 @@ def t_translator_tool_broken_args():
     tail = tr.on_finish("tool_calls", None)
     assert b"cmd" in tail
 
-# ---------- 7. web_search / history 净化 鲁莽 ----------
+# ---------- 7. synthetic web_search 注入 鲁莽 ----------
+# 2026-09-05: t_strip_web_search_fuzz 退役（_strip 已删）；同等输入矩阵改测注入函数不断言崩溃
 
-def t_strip_web_search_fuzz():
-    for model in [None, "", "mimo-v2.5", "deepseek-v4-flash", "gpt-5.6-luna", "muse-spark-1.2", "unknown-model", "ox-alpha-free"]:
+def t_synthetic_web_search_fuzz():
+    for model in [None, "", "mimo-v2.5", "deepseek-v4-flash", "gpt-5.6-luna", "muse-spark-1.2", "omen-alpha", "unknown-model", "ox-alpha-free"]:
         for tools in [None, [], [{"type": "web_search"}], [{"type": "function", "name": "a"}], [{"type": "web_search"}, {"type": "function", "name": "b"}], "not-a-list"]:
             parsed = {"model": model, "tools": tools}
+            orig_has_ws = isinstance(tools, list) and any(isinstance(t, dict) and t.get("type") == "web_search" for t in tools)
             # go_route random
             try:
-                vp._strip_web_search_tool(parsed, model, go_route=random.choice([True, False]))
+                vp._inject_synthetic_web_search(parsed, model, go_route=random.choice([True, False]))
             except Exception as e:
-                assert False, f"strip crash {model} {tools}: {e}"
+                assert False, f"synth crash {model} {tools}: {e}"
+            # 不变量：原生模型的 web_search 不应被替换（仅当 tools 本来就是 list 才断言）
+            if orig_has_ws and model in ("deepseek-v4-flash", "gpt-5.6-luna", "muse-spark-1.2"):
+                assert {"type": "web_search"} in (parsed.get("tools") or []), f"native stripped {model}"
 
 def t_normalize_web_search_call_fuzz():
     cases = [

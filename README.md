@@ -101,6 +101,14 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.8.7 — 清死代码 + 新模型 SOP 工具化（2026-09-05）
+
+- **死代码清理**：删除 `_SEARCH_FALSE_MODELS` 名单、`_strip_web_search_tool` 纯 no-op 函数及引用，测试改写为 synthetic 注入 fuzz；拦截逻辑已收敛为 `_SEARCH_TRUE_PREFIXES` 白名单通用分支。
+- **安装器防旧包降级**：`codex-oneclick-setup.command` 新增 `sync_newer_file` mtime 守卫 + 原子锁，旧包点"配置"不再覆盖本机新修复。
+- **新模型 SOP 工具化**：新增 `vision/probe-new-model.sh` 5 探针分类器（协议/档位声明验证/联网/视觉/400穿透），`docs/MODEL-MATRIX.md` 37 模型基线矩阵。
+- **Zen Free 动态化修复**：`-free` 后缀自动发现，新增 deepseek/muse-1.3 免费版（37 total）；模态白名单过滤 video/pdf（卡 logo 修复延续）。
+- 版本 **1.1.8.7 (17)**。
+
 ### v1.1.8.6 — 元数据接 models.dev + Omen Alpha 接入（2026-09-05）
 
 - **模型元数据源升级**：`model_discovery.py` 接入 `models.dev`（OpenCode 官方同源），优先级链为本地手工 registry > models.dev > opencodex 上游。一次回填修正 20 个模型的上下文/档位偏差（如 luna 372K→1.05M、kimi-k2.x 1M→262K、grok-4.6 1M→500K），新增模型元数据从此与 OpenCode 客户端同源，不再靠模板抄错。
