@@ -37,8 +37,12 @@ MODELS_JSON = CODEX_HOME / "models.json"
 CACHE_DIR = Path.home() / ".local/share/agent-vision-toolkit"
 CACHE_FILE = CACHE_DIR / "go_models_cache.json"
 
-# OpenCode Zen Free 官方7个（Pricing为准，实时更新也只认这7个）
-ZEN_FREE_IDS = [
+# OpenCode Zen Free：上游 /zen/v1/models 动态识别（2026-09-05 改：原来硬编码 7 个，
+# 新增 free（如 deepseek-v4-flash-free、muse-spark-1.3-contributor-free）永远进不来）。
+# 规则：-free 后缀即 free 模型；big-pickle 是无后缀的历史特例（活着才收）。
+ZEN_FREE_EXTRA_IDS = {"big-pickle"}
+ZEN_FREE_EXCLUDE = set()
+ZEN_FREE_LEGACY = [
     "big-pickle",
     "hy3-free",
     "ling-3.0-flash-fin-free",
@@ -47,6 +51,7 @@ ZEN_FREE_IDS = [
     "nemotron-3-ultra-free",
     "nemotron-3.5-lightning-free",
 ]
+ZEN_FREE_IDS = ZEN_FREE_LEGACY  # 兼容旧引用；抓取失败时的回退名单
 ZEN_CACHE_FILE = CACHE_DIR / "zen_models_cache.json"
 REASONING_REGISTRY = CACHE_DIR / "reasoning_registry.json"
 GENERIC_REASONING = ["high"]
@@ -362,7 +367,7 @@ def fetch_modelsdev(timeout=30):
             return {}
 
 def fetch_zen_free_ids(timeout=TIMEOUT):
-    """实时拉 Zen Free 官方7个，过度依赖 Pricing 表，需校验存在才算"""
+    """实时拉 Zen Free，动态识别（-free 后缀），失败回退缓存/硬编码名单"""
     try:
         req = urllib.request.Request(ZEN_MODELS_URL, headers={"Accept":"*/*","User-Agent":"model-discovery/1.0"})
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -381,8 +386,10 @@ def fetch_zen_free_ids(timeout=TIMEOUT):
                     if isinstance(v, str): raw_ids.append(v)
                     elif isinstance(v, dict) and isinstance(v.get("id"), str): raw_ids.append(v["id"])
         raw_ids = [x.strip().lower() for x in raw_ids if x]
-        # 只认官方7个
-        ids = [i for i in ZEN_FREE_IDS if i in raw_ids]
+        # 动态识别：-free 后缀 + 历史特例，排除名单兜底（不再硬编码 7 个）
+        ids = [i for i in raw_ids if (i.endswith("-free") or i in ZEN_FREE_EXTRA_IDS) and i not in ZEN_FREE_EXCLUDE]
+        # 去重保序
+        ids = list(dict.fromkeys(ids))
         if len(ids) >= 1:
             try:
                 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -390,7 +397,7 @@ def fetch_zen_free_ids(timeout=TIMEOUT):
                 ZEN_CACHE_FILE.write_text(json.dumps(qc, ensure_ascii=False))
             except Exception:
                 pass
-            _log(f"zen free live {len(ids)}/{len(ZEN_FREE_IDS)} ids")
+            _log(f"zen free live {len(ids)} ids: {','.join(ids)}")
             return ids
     except Exception as e:
         _log(f"zen fetch failed: {e!r}")
@@ -437,7 +444,7 @@ def _display_name_for(remote_id, suffix):
         elif remote_id.endswith("-free"):
             base_raw = remote_id[:-5]
             base = base_raw.replace("-", " ").title()
-            base = base.replace("Gpt ", "GPT ").replace("Muse ", "Muse ").replace("Mimo ", "MiMo ").replace("Glm ", "GLM ").replace("Nemotron ", "Nemotron ")
+            base = base.replace("Gpt ", "GPT ").replace("Muse ", "Muse ").replace("Mimo ", "MiMo ").replace("Glm ", "GLM ").replace("Nemotron ", "Nemotron ").replace("Deepseek ", "DeepSeek ")
             base = base + " Free"
         else:
             base = remote_id.replace("-", " ").title()
@@ -449,16 +456,18 @@ def _display_name_for(remote_id, suffix):
         elif remote_id.endswith("-free"):
             base_raw = remote_id[:-5]
             base = base_raw.replace("-", " ").title().replace(" ", "-")
-            base = base.replace("Gpt-", "GPT-").replace("Muse-", "Muse ").replace("Mimo-", "MiMo-").replace("Glm-", "GLM-").replace("Nemotron-", "Nemotron ")
+            base = base.replace("Gpt-", "GPT-").replace("Muse-", "Muse ").replace("Mimo-", "MiMo-").replace("Glm-", "GLM-").replace("Nemotron-", "Nemotron ").replace("Deepseek-", "DeepSeek-")
             base = base + " Free"
         else:
             base = remote_id.replace("-", " ").title().replace(" ", "-")
             base = base.replace("Gpt-", "GPT-").replace("Muse-", "Muse ").replace("Mimo-", "MiMo-").replace("Glm-", "GLM-")
         return f"{base} ({suffix})"
 
-def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=None):
+def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=None, is_zen=None):
     e = copy.deepcopy(template)
-    is_zen = remote_id in ZEN_FREE_IDS or remote_id.endswith("-free") and remote_id in ZEN_FREE_IDS or remote_id == "big-pickle"
+    if is_zen is None:
+        # 兼容旧调用：启发式判断（sync 主流程现在显式传 is_zen）
+        is_zen = remote_id in ZEN_FREE_IDS or remote_id.endswith("-free") and remote_id in ZEN_FREE_IDS or remote_id == "big-pickle"
     suffix = "Zen" if is_zen else "Go"
     slug_suffix = "-zen" if is_zen else "-go"
     slug = remote_id + slug_suffix
@@ -569,7 +578,7 @@ def sync(force=False, dry_run=False):
         if not tmpl:
             _log(f"no template for {rid}, skip")
             continue
-        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1, upstream_map=upstream_map, modelsdev_map=modelsdev_map)
+        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1, upstream_map=upstream_map, modelsdev_map=modelsdev_map, is_zen=False)
         to_add.append(entry)
     # add Zen Free
     for rid in zen_ids:
@@ -580,7 +589,7 @@ def sync(force=False, dry_run=False):
         if not tmpl:
             _log(f"no template for zen {rid}, skip")
             continue
-        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1, upstream_map=upstream_map, modelsdev_map=modelsdev_map)
+        entry = build_entry(tmpl, rid, max_prio + len(to_add) + 1, upstream_map=upstream_map, modelsdev_map=modelsdev_map, is_zen=True)
         to_add.append(entry)
 
     # Prune wild Go models not in quota (乱七八糟的) ; keep Zen separately
