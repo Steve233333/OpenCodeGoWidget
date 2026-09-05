@@ -26,13 +26,16 @@ sync_one() {
 }
 
 # 配置
-sync_one "$HOME_DIR/.codex-deepseek/config.toml" "$WIDGET_DIR/Resources/codex/templates/config.toml"
+# 2026-09-05：不再整体抄 config.toml——home 配置已被 Codex 运行时写入大量机器相关段落
+# （notify/plugins/mcp_servers/绝对路径/真实 key），整体抄会把真 key 和本机路径带进公开模板。
+# 模板保持 31 行占位符版；要改模板字段（如 max_rollouts_per_startup）请手改 templates/config.toml。
+# sync_one "$HOME_DIR/.codex-deepseek/config.toml" "$WIDGET_DIR/Resources/codex/templates/config.toml"
 # 但模板里要有占位符，不能直接抄真的 key，抄完要替换回占位符
 if [ -f "$WIDGET_DIR/Resources/codex/templates/config.toml" ]; then
-  # 把真的 key 换回占位符，保持模板干净
+  # 把真的 key 换回占位符，保持模板干净（2026-09-05 修复：原来硬编码 OpenCodeGoWidget-main 旧路径）
   python3 - "$WIDGET_DIR/Resources/codex/templates/config.toml" <<'PY'
-import re, pathlib
-p = pathlib.Path("/Users/steve233/Desktop/OpenCodeGoWidget-main/Resources/codex/templates/config.toml")
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
 t = p.read_text()
 # 把具体值换回占位符，方便下次安装时填
 t = re.sub(r'model = ".*"', 'model = "__DEFAULT_MODEL__"', t, count=1)

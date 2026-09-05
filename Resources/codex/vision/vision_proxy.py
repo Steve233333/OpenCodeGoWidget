@@ -126,6 +126,9 @@ NATIVE_VISION_MODELS = frozenset({
     "muse-spark-1.2-contributor-go",
     "muse-spark-1.3-contributor",
     "muse-spark-1.3-contributor-go",
+    # 2026-09-05 omen-alpha: models.dev text+image，经 chat 桥 image_url 直通实测 200（P5 红色✓）
+    "omen-alpha",
+    "omen-alpha-go",
     "mimo-v2.5",
     "mimo-v2.5-go",
     "mimo-v2.5-pro",
@@ -227,6 +230,9 @@ RESPONSES_FALLBACK_MODELS = frozenset({
 })
 _RESPONSES_BROKEN_UNTIL = {}      # model -> monotonic deadline to skip probing /responses
 _RESPONSES_FALLBACK_TTL = 300.0   # seconds a broken probe result stays cached
+# 2026-09-05 omen-alpha: /responses 适配层整体坏（裸 500、带工具 400），官方原生端点是
+# chat/completions（见 Go docs 端点表）——无条件走桥，不做探测，400 也不会穿透。
+RESPONSES_ALWAYS_BRIDGE = frozenset({"omen-alpha"})
 _BRIDGE_NONSTREAM_MAX_BYTES = 64 * 1024 * 1024  # P5: cap for buffered non-stream chat bodies
 # Generic fallback: for any Go /responses that 500s, auto-bridge even if not in set
 
@@ -833,17 +839,22 @@ async def _perform_web_search(query, zen_key=None):
         return f"Search for '{query}' failed: ZEN_API_KEY missing"
     # 只走 deepseek-v4-flash-go 代搜
     try:
-        payload = {
+        # 2026-09-05 修复：直连上游要用裸 id deepseek-v4-flash（-go 是本代理内部约定，
+        # 网关不认识会 401 ModelError）；本地自调保留 -go（代理自己剥后缀）。
+        # 超时 15s→60s：deepseek 代搜实测 ~28s，15s 必超时（omen P6 实锤）。
+        _delegate_local = {
             "model": "deepseek-v4-flash-go",
-            "input": [{"role": "user", "content": [{"type": "input_text", "text": f"Search the web for: {query}. Summarize top 5 results concisely in Chinese."}]}],
+            "input": [{"role": "user", "content": [{"type":"input_text","text": f"Search the web for: {query}. Summarize top 5 results concisely in Chinese."}]}],
             "tools": [{"type": "web_search"}],
             "stream": False,
             "store": False
         }
-        data = json.dumps(payload).encode()
+        _delegate_direct = dict(_delegate_local, model="deepseek-v4-flash")
+        data_local = json.dumps(_delegate_local).encode()
+        data_direct = json.dumps(_delegate_direct).encode()
         # 双路：先本地 19100（走 vision_proxy 转发，自动换真实 key），不通直连 zen/go
         last_err = None
-        for url, is_local in [("http://127.0.0.1:19100/v1/responses", True), ("https://opencode.ai/zen/go/v1/responses", False)]:
+        for url, is_local, data in [("http://127.0.0.1:19100/v1/responses", True, data_local), ("https://opencode.ai/zen/go/v1/responses", False, data_direct)]:
             for opener in (urllib.request.build_opener(urllib.request.ProxyHandler({})), urllib.request.build_opener()):
                 try:
                     req = urllib.request.Request(url, data=data, method="POST")
@@ -853,7 +864,7 @@ async def _perform_web_search(query, zen_key=None):
                     req.add_header("User-Agent", "vision-proxy-delegate/1.0")
 
                     def do_search():
-                        with opener.open(req, timeout=15) as resp:
+                        with opener.open(req, timeout=60) as resp:
                             body = resp.read().decode("utf-8", errors="replace")
                             # 先试 JSON 整包
                             stripped = body.strip()
@@ -1125,6 +1136,7 @@ _SEARCH_FALSE_MODELS = frozenset(
         "kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code",
         "minimax-m3", "minimax-m2.7", "minimax-m2.5",
         "longcat-2.0", "grok-4.5", "grok-4.6",
+        "omen-alpha",
     }
 )
 # search=true whitelist (only these keep web_search on Go)
@@ -2460,9 +2472,12 @@ class Proxy:
             )
             # known chat-adapted models get instant fallback if TTL cached
             bridge_cached = bridge_eligible and model in RESPONSES_FALLBACK_MODELS and time.monotonic() < _RESPONSES_BROKEN_UNTIL.get(model, 0.0)
+            always_bridge = bridge_eligible and model in RESPONSES_ALWAYS_BRIDGE
             fallback_now = False
             upstream_status = 0
-            if bridge_cached:
+            if always_bridge:
+                fallback_now = True
+            elif bridge_cached:
                 fallback_now = True
             else:
                 response = await self._open_upstream(method, path, bytes(body), headers, upstream)

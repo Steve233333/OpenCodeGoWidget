@@ -101,6 +101,13 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.8.6 — 元数据接 models.dev + Omen Alpha 接入（2026-09-05）
+
+- **模型元数据源升级**：`model_discovery.py` 接入 `models.dev`（OpenCode 官方同源），优先级链为本地手工 registry > models.dev > opencodex 上游。一次回填修正 20 个模型的上下文/档位偏差（如 luna 372K→1.05M、kimi-k2.x 1M→262K、grok-4.6 1M→500K），新增模型元数据从此与 OpenCode 客户端同源，不再靠模板抄错。
+- **Omen Alpha (Go) 接入**：网关 `/responses` 适配层对其全坏（裸 500/带工具 400），代理新增 `RESPONSES_ALWAYS_BRIDGE` 无条件走 chat 桥（官方原生端点即 chat）；原生视觉直通（`NATIVE_VISION_MODELS`）、deepseek 边车代搜修复（直连用裸模型 ID 修 401 + 超时 15s→60s）、`_SEARCH_FALSE_MODELS` 保护。
+- **sync 脚本两处修复**：占位符替换硬编码旧路径；config.toml 模板不再整体抄 home（防真 key/本机路径进公开模板）。
+- 版本 **1.1.8.6 (16)**。
+
 ### v1.1.8.5 — 副本重建保险（2026-09-04）
 
 - 重建前先改名备份旧副本，5 个失败出口统一恢复备份+明确报错，最差也是旧副本还能用。
