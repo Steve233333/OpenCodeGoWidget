@@ -67,6 +67,17 @@ CONTEXT_OVERRIDES = {
     "hy3": 262144,
 }
 
+# Codex models.json schema 的 input_modalities 只认这三个（2026-09-05 副本卡 logo 实锤：
+# models.dev 的 video/pdf 裸抄进 19 个模型 -> serde unknown variant -> config/read 全拒 -> 永远卡 splash）
+ALLOWED_INPUT_MODALITIES = ("text", "image", "audio")
+
+def _sanitize_modalities(mod):
+    """models.dev modalities -> Codex 白名单交集；无合法值返回 None（保留模板现值）"""
+    if not isinstance(mod, dict):
+        return None
+    kept = [v for v in (mod.get("input") or []) if v in ALLOWED_INPUT_MODALITIES]
+    return kept or None
+
 # Fallback 31 ids (2026-08-28 live snapshot)
 FALLBACK_IDS = [
     "minimax-m3","minimax-m2.7","minimax-m2.5","kimi-k3","kimi-k2.7-code","kimi-k2.6",
@@ -483,9 +494,10 @@ def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=
         e["context_window"] = ctx_final
         e["max_context_window"] = ctx_final
         e["effective_context_window_percent"] = e.get("effective_context_window_percent", 95)
-    # modalities：models.dev 为准（如 omen text+image）
-    if md and md[2] and md[2].get("input"):
-        e["input_modalities"] = list(md[2]["input"])
+    # modalities：models.dev 为准，但必须过 Codex 白名单（video/pdf 会炸整个 models.json）
+    san = _sanitize_modalities(md[2]) if md else None
+    if san:
+        e["input_modalities"] = san
     reg = load_reasoning_registry()
     levels = reg.get(remote_id) or reg.get(lookup)
     if levels is None:
@@ -616,9 +628,10 @@ def sync(force=False, dry_run=False):
                 m["context_window"] = ctx
                 m["max_context_window"] = ctx
                 updated += 1
-            # modalities：models.dev 为准
-            if md and md[2] and md[2].get("input") and m.get("input_modalities") != list(md[2]["input"]):
-                m["input_modalities"] = list(md[2]["input"])
+            # modalities：models.dev 为准，过 Codex 白名单（video/pdf 会炸整个 models.json）
+            san = _sanitize_modalities(md[2]) if md else None
+            if san and m.get("input_modalities") != san:
+                m["input_modalities"] = san
                 updated += 1
             # 档位：registry 手工实测条目不动；否则 models.dev > opencodex
             if not (_reg.get(bare) or _reg.get(lookup)):

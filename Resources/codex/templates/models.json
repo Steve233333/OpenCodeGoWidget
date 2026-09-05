@@ -76,8 +76,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "pdf"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -153,9 +152,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video",
-        "pdf"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -412,8 +409,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -480,8 +476,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -548,8 +543,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -683,8 +677,7 @@
       "input_modalities": [
         "text",
         "image",
-        "audio",
-        "video"
+        "audio"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -809,8 +802,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -944,8 +936,6 @@
       "input_modalities": [
         "text",
         "image",
-        "video",
-        "pdf",
         "audio"
       ],
       "supports_image_detail_original": false,
@@ -1019,8 +1009,6 @@
       "input_modalities": [
         "text",
         "image",
-        "video",
-        "pdf",
         "audio"
       ],
       "supports_image_detail_original": false,
@@ -1093,8 +1081,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -1161,8 +1148,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -1279,8 +1265,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -1339,8 +1324,7 @@
       "apply_patch_tool_type": "freeform",
       "input_modalities": [
         "text",
-        "image",
-        "video"
+        "image"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -2024,8 +2008,7 @@
       "input_modalities": [
         "text",
         "image",
-        "audio",
-        "video"
+        "audio"
       ],
       "supports_image_detail_original": false,
       "truncation_policy": {
@@ -2093,8 +2076,6 @@
       "input_modalities": [
         "text",
         "image",
-        "video",
-        "pdf",
         "audio"
       ],
       "supports_image_detail_original": false,
