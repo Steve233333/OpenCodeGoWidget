@@ -35,6 +35,15 @@ struct OpenCodeGoWidgetApp: App {
             }
             .keyboardShortcut("o")
             Divider()
+            Button("检查更新…") {
+                NSApp.activate(ignoringOtherApps: true)
+                if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) ?? NSApp.keyWindow ?? NSApp.windows.first {
+                    window.makeKeyAndOrderFront(nil)
+                }
+                NotificationCenter.default.post(name: .openCodeGoOpenSettings, object: nil)
+                UpdateChecker.shared.check(force: true)
+            }
+            Divider()
             Button("退出") {
                 NSApplication.shared.terminate(nil)
             }
@@ -286,6 +295,9 @@ struct ContentView: View {
         }
         .frame(width: 620, height: 860)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoOpenSettings)) { _ in
+            showSettings = true
+        }
         .task {
             // 后台同步 Go 模型列表与配额表
             Task {
@@ -690,9 +702,8 @@ struct GoSettingsContent: View {
                 Text("可在系统设置 → 通用 → 登录项管理").font(.system(size: 9)).foregroundStyle(.secondary)
             }
             Divider()
+            UpdateStatusRow()
             HStack {
-                Text("版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "-") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "-"))")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
                 Spacer()
                 Text("OpenCode 小组件").font(.system(size: 9)).foregroundStyle(.secondary)
             }

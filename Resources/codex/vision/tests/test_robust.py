@@ -340,29 +340,6 @@ def t_intercept_unsupported_history_fuzz():
             out = vp._intercept_unsupported_history(parsed, model)
             assert isinstance(out, bool)
 
-def t_prune_old_images_stress():
-    # many images, keep_last edge
-    items = []
-    for i in range(10):
-        items.append({"type": "message", "role": "user", "content": [
-            {"type": "input_text", "text": f"msg {i}"},
-            {"type": "input_image", "image_url": f"data:image/png;base64,{i}"}
-        ]})
-    parsed = {"input": items}
-    changed = vp._prune_old_images(parsed, keep_last=3)
-    assert changed
-    # count remaining images
-    cnt = sum(1 for it in parsed["input"] for c in it.get("content", []) if c.get("type") == "input_image")
-    assert cnt == 3
-    # idempotent second call should not prune again
-    assert not vp._prune_old_images(parsed, keep_last=3)
-    # keep_last larger than total should not prune
-    items2 = [{"type": "message", "role": "user", "content": [{"type": "input_image", "image_url": "x"}]} for _ in range(5)]
-    parsed2 = {"input": items2}
-    assert not vp._prune_old_images(parsed2, keep_last=10)
-    cnt2 = sum(1 for it in parsed2["input"] for c in it.get("content", []) if c.get("type") == "input_image")
-    assert cnt2 == 5
-
 def t_fix_tool_required_fuzz():
     cases = [
         {"tools": None},

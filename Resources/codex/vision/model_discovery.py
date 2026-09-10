@@ -11,6 +11,14 @@ Usage:
   python3 model_discovery.py --sync --force    # ignore TTL
   python3 model_discovery.py --dry-run         # print what would be added
   python3 model_discovery.py --list            # print remote ids
+  python3 model_discovery.py --sync-derived    # only rebuild 代理档位表 + 桌面白名单
+
+每次 --sync 结束还会同步另两层"档位副本"（2026-09-10 起）：
+  1) 目录层  models.json（模型自己声明几档）      <- 本文件主流程
+  2) 代理层  reasoning_registry.json             <- 由目录生成，vision_proxy 读它做 clamp
+  3) 桌面层  config.toml [desktop] enabled-reasoning-efforts
+                                                <- 由目录生成，决定滑杆能显示几档
+手工实测的档位请写 reasoning_overrides.json（覆盖层），registry 已是生成物，别手改。
 """
 
 from __future__ import annotations
@@ -55,6 +63,13 @@ ZEN_FREE_IDS = ZEN_FREE_LEGACY  # 兼容旧引用；抓取失败时的回退名�
 ZEN_CACHE_FILE = CACHE_DIR / "zen_models_cache.json"
 REASONING_REGISTRY = CACHE_DIR / "reasoning_registry.json"
 GENERIC_REASONING = ["high"]
+
+# 手工实测档位覆盖层（唯一权威手工来源；首次运行自动从 reasoning_registry.json 迁移）
+REASONING_OVERRIDES = CACHE_DIR / "reasoning_overrides.json"
+# Codex 桌面端「模型控制可用档位」的白名单键（config.toml [desktop]）与档位顺序
+DESKTOP_WHITELIST_KEY = "enabled-reasoning-efforts"
+EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"]
+APP_DEFAULT_EFFORTS = ["low", "medium", "high", "xhigh", "ultra", "persistent"]
 
 # opencodex 上游上下文/档位（无需安装 opencodex，自动拉取）
 UPSTREAM_URL = "https://raw.githubusercontent.com/lidge-jun/opencodex/main/src/codex/data/upstream-models.json"
@@ -118,6 +133,9 @@ DISPLAY_TO_ID = {
     "deepseek v4 pro": "deepseek-v4-pro",
     "deepseek v4 flash vision exp": "deepseek-v4-flash-vision-exp",
     "deepseek v4 flash": "deepseek-v4-flash",
+    # 2026-09-10：Go 表格行名 "DeepSeek V4.1 Flash"，网关真实 id 是 deepseek-flash
+    # （models.dev 同源；猜成 deepseek-v4.1-flash 会 401 Model not supported）
+    "deepseek v4.1 flash": "deepseek-flash",
     "hy3": "hy3",
     "gpt 5.6 luna": "gpt-5.6-luna",
     "deepseek v4 flash vision exp": "deepseek-v4-flash-vision-exp",
@@ -126,6 +144,34 @@ DISPLAY_TO_ID = {
 
 def _norm_display(s):
     return re.sub(r"\s+", " ", s.strip().lower().replace("-", " ").replace("–", " ")).strip()
+
+def _modelsdev_id_index():
+    """models.dev 的「归一显示名 / 官方 id」-> 官方 id。用于把文档表格行名归一到网关真 id。"""
+    idx = {}
+    try:
+        for mid, v in (fetch_modelsdev() or {}).items():
+            idx.setdefault(_norm_display(str(mid)), mid)
+            name = v[3] if len(v) > 3 else mid
+            if name:
+                idx.setdefault(_norm_display(str(name)), mid)
+    except Exception:
+        return {}
+    return idx
+
+def _align_remote_id(norm_display, guess):
+    """把「猜出来的 id」跟 models.dev 对齐。猜错时（如 deepseek v4.1 flash）改回官方 id。"""
+    idx = _modelsdev_id_index()
+    if not idx:
+        return guess
+    known = set(idx.values())
+    if guess in known:
+        return guess
+    hit = idx.get(norm_display) or idx.get(re.sub(r"\(.*\)", "", norm_display).strip())
+    if hit:
+        if hit != guess:
+            _log(f"id 归一 {norm_display!r}: {guess} -> {hit} (models.dev)")
+        return hit
+    return guess
 
 FREE_TOKENS = {"-", "—", "", "限免", "免费", "无限", "∞", "不计配额", "限时免费", "限时免费不计配额"}
 
@@ -179,6 +225,8 @@ def fetch_quota_ids(timeout=TIMEOUT):
                     rid = re.sub(r"[^a-z0-9.\-]", "-", norm).strip("-")
                     rid = re.sub(r"-+", "-", rid).strip("-")
                     rid = rid.replace("gpt-5-6-luna","gpt-5.6-luna")
+                # 归一：拿 models.dev 的官方 id 校正猜出来的 id（2026-09-10 加）
+                rid = _align_remote_id(norm, rid)
                 if rid and rid not in ids:
                     ids.append(rid)
             if len(ids) >= 10:
@@ -267,13 +315,40 @@ def load_models_json():
         return {"models": []}
     return json.loads(MODELS_JSON.read_text())
 
-def load_reasoning_registry():
+def _reasoning_registry_path():
+    return CACHE_DIR / "reasoning_registry.json"
+
+def _reasoning_overrides_path():
+    return CACHE_DIR / "reasoning_overrides.json"
+
+def _read_json(path, default):
     try:
-        if REASONING_REGISTRY.exists():
-            return json.loads(REASONING_REGISTRY.read_text())
+        if path.exists():
+            return json.loads(path.read_text())
     except Exception:
         pass
-    return {}
+    return default
+
+def load_reasoning_overrides():
+    """手工实测档位覆盖层（唯一权威手工来源）。
+
+    首次运行从旧的 reasoning_registry.json 迁移一次；此后 registry 是生成物
+    （目录 + 覆盖层派生），要手改请改 reasoning_overrides.json。
+    """
+    path = _reasoning_overrides_path()
+    if path.exists():
+        return _read_json(path, {})
+    legacy = _read_json(_reasoning_registry_path(), {})
+    if legacy:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(legacy, ensure_ascii=False, indent=1) + "\n")
+            tmp.replace(path)
+            _log(f"迁移 {len(legacy)} 条手工档位 -> {path.name}（registry 从此自动生成）")
+        except Exception as e:
+            _log(f"override migration failed: {e!r}")
+    return legacy
 
 def fetch_upstream_details(timeout=TIMEOUT):
     """拉 opencodex 上游的 context / 档位，24h 缓存，失败回退。返回 {slug: (context, levels)}"""
@@ -321,14 +396,17 @@ def fetch_upstream_details(timeout=TIMEOUT):
         return {}
 
 def fetch_modelsdev(timeout=30):
-    """拉 models.dev（OpenCode 官方同源），返回 {bare_id: (context, levels, modalities)}。
+    """拉 models.dev（OpenCode 官方同源），返回 {bare_id: (context, levels, modalities, name, provider)}。
     levels 已过滤 minimal（Codex 端下不了，见 skill §15）。"""
     try:
         if MODELSDEV_CACHE.exists():
             try:
                 j = json.loads(MODELSDEV_CACHE.read_text())
-                if time.time() - j.get("fetchedAt", 0) < MODELSDEV_TTL and isinstance(j.get("map"), dict):
-                    return {k: (v[0], v[1], v[2]) for k, v in j["map"].items()}
+                # 旧缓存只有 3 个字段（无 name/provider），缺字段时视为过期，重新拉
+                if (time.time() - j.get("fetchedAt", 0) < MODELSDEV_TTL
+                        and isinstance(j.get("map"), dict)
+                        and all(len(v) >= 5 for v in j["map"].values())):
+                    return {k: tuple(v) for k, v in j["map"].items()}
             except Exception:
                 pass
         req = urllib.request.Request(MODELSDEV_URL, headers={"User-Agent": "model-discovery/1.0"})
@@ -347,12 +425,13 @@ def fetch_modelsdev(timeout=30):
                         levels = [v for v in (opt.get("values") or []) if v != "minimal"]
                         break
                 if ctx or levels:
-                    m[mid] = (int(ctx) if ctx else 0, levels, mod.get("modalities") or {})
+                    m[mid] = (int(ctx) if ctx else 0, levels, mod.get("modalities") or {},
+                              mod.get("name") or mid, prov)
         if m:
             try:
                 CACHE_DIR.mkdir(parents=True, exist_ok=True)
                 MODELSDEV_CACHE.write_text(json.dumps(
-                    {"fetchedAt": int(time.time()), "map": {k: [v[0], v[1], v[2]] for k, v in m.items()}},
+                    {"fetchedAt": int(time.time()), "map": {k: list(v) for k, v in m.items()}},
                     ensure_ascii=False))
             except Exception:
                 pass
@@ -362,7 +441,7 @@ def fetch_modelsdev(timeout=30):
         _log(f"models.dev fetch failed: {e!r}")
         try:
             j = json.loads(MODELSDEV_CACHE.read_text())
-            return {k: (v[0], v[1], v[2]) for k, v in (j.get("map") or {}).items()}
+            return {k: tuple(v) for k, v in (j.get("map") or {}).items()}
         except Exception:
             return {}
 
@@ -507,7 +586,7 @@ def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=
     san = _sanitize_modalities(md[2]) if md else None
     if san:
         e["input_modalities"] = san
-    reg = load_reasoning_registry()
+    reg = load_reasoning_overrides()
     levels = reg.get(remote_id) or reg.get(lookup)
     if levels is None:
         md_levels = md[1] if md else None
@@ -619,7 +698,7 @@ def sync(force=False, dry_run=False):
 
     # 存量模型的上下文/档位自动同步（registry 手工实测 > models.dev > opencodex；ultra 等无需发版）
     if modelsdev_map or upstream_map:
-        _reg = load_reasoning_registry()
+        _reg = load_reasoning_overrides()
         updated = 0
         for m in to_keep:
             slug = m.get("slug", "")
@@ -660,6 +739,10 @@ def sync(force=False, dry_run=False):
                     updated += 1
         if updated:
             _log(f"auto context/reasoning updated {updated} fields (models.dev/registry)")
+
+    # 三层档位一致：目录 -> 代理档位表 + 桌面端档位白名单（2026-09-10 加）
+    # 放在刷新之后：即使模型没增删、只有档位变化，这两层也会跟着同步。
+    sync_derived(to_keep + to_add, dry_run=dry_run)
 
     if not to_add and not pruned:
         # 即使无增删，也可能有上下文/档位更新
@@ -715,12 +798,204 @@ def sync(force=False, dry_run=False):
     _log(f"wrote {MODELS_JSON} ({len(j['models'])} total) pruned {len(pruned)} added {len(to_add)}")
     return len(to_add)
 
+# ---------------------------------------------------------------------------
+# 三层档位一致（2026-09-10）
+#   目录层 models.json                                  <- models.dev / 覆盖层（上面主流程）
+#   代理层 reasoning_registry.json                       <- 由目录生成（vision_proxy 读它 clamp）
+#   桌面层 config.toml [desktop] enabled-reasoning-efforts <- 由目录生成（决定滑杆显示几档）
+# 以前三层各写各的：目录声明 3 档、滑杆只显示 2 档、发出去还可能被压成第 2 档。
+# ---------------------------------------------------------------------------
+
+def _bare_id(slug):
+    """slug 去掉 -go / -zen 后缀 = 发给网关的真实模型 id。"""
+    if slug.endswith("-go"):
+        return slug[:-3]
+    if slug.endswith("-zen"):
+        return slug[:-4]
+    return slug
+
+def _levels_of(m):
+    return [lv.get("effort") for lv in (m.get("supported_reasoning_levels") or [])
+            if isinstance(lv, dict) and lv.get("effort")]
+
+def _toml_section_span(lines, section):
+    """返回 [section] 段的行号范围 (start, end)；end = 下一段起始行或文件末尾。"""
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == f"[{section}]":
+            start = i
+            break
+    if start is None:
+        return None
+    for j in range(start + 1, len(lines)):
+        s = lines[j].strip()
+        if s.startswith("[") and s.endswith("]"):
+            return (start, j)
+    return (start, len(lines))
+
+def write_reasoning_registry(models, dry_run=False):
+    """把目录里的档位表落成代理读的 reasoning_registry.json（生成物）。
+
+    目录优先；旧文件里有、目录里已经没有的条目保留（不删数据，避免误伤隐藏模型）。
+    """
+    path = _reasoning_registry_path()
+    old = _read_json(path, {})
+    fresh = {}
+    for m in models:
+        slug = str(m.get("slug", ""))
+        lv = _levels_of(m)
+        if slug and lv:
+            fresh[_bare_id(slug)] = lv
+    merged = {k: v for k, v in old.items() if k not in fresh}
+    merged.update(fresh)
+    if merged == old:
+        return 0
+    if dry_run:
+        _log(f"[dry-run] reasoning_registry.json: 目录档位 {len(fresh)} 条，"
+             f"覆盖历史 {len(set(fresh) & set(old))} 条，新增 {len(set(fresh) - set(old))} 条")
+        return len(fresh)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1) + "\n")
+        tmp.replace(path)
+        _log(f"reasoning_registry.json <- 目录生成 {len(fresh)} 条"
+             f"（保留历史 {len(merged) - len(fresh)} 条）")
+    except Exception as e:
+        _log(f"reasoning_registry 写失败: {e!r}")
+        return 0
+    return len(fresh)
+
+def _effective_whitelist(models):
+    """桌面端应放开的档位：app 默认档 + 目录里出现过的全部档位（含 max）。"""
+    union = set(APP_DEFAULT_EFFORTS)
+    for m in models:
+        union |= set(_levels_of(m))
+    union.add("persistent")
+    return [e for e in EFFORT_ORDER if e in union]
+
+def _configured_whitelist():
+    """读 config.toml [desktop] 里的白名单；没写或读不到返回 None（= 走 app 默认）。"""
+    cfg = CODEX_HOME / "config.toml"
+    try:
+        if not cfg.exists():
+            return None
+        lines = cfg.read_text().splitlines()
+    except Exception:
+        return None
+    span = _toml_section_span(lines, "desktop")
+    if not span:
+        return None
+    start, end = span
+    for i in range(start + 1, end):
+        mm = re.match(r"\s*" + re.escape(DESKTOP_WHITELIST_KEY) + r"\s*=\s*(.+)$", lines[i])
+        if mm:
+            try:
+                v = json.loads(mm.group(1).strip())
+                return v if isinstance(v, list) else None
+            except Exception:
+                return None
+    return None
+
+def sync_desktop_whitelist(models, dry_run=False):
+    """把白名单写进 config.toml [desktop]，让滑杆不再被默认值截掉 max 档。"""
+    want = _effective_whitelist(models)
+    cfg = CODEX_HOME / "config.toml"
+    if not cfg.exists():
+        _log("config.toml 不存在，跳过桌面档位白名单同步")
+        return False
+    try:
+        text = cfg.read_text()
+    except Exception as e:
+        _log(f"config.toml 读取失败: {e!r}")
+        return False
+    lines = text.splitlines()
+    span = _toml_section_span(lines, "desktop")
+    if not span:
+        _log("config.toml 没有 [desktop] 段，跳过桌面档位白名单同步")
+        return False
+    start, end = span
+    newline = f"{DESKTOP_WHITELIST_KEY} = {json.dumps(want)}"
+    target = None
+    for i in range(start + 1, end):
+        if re.match(r"\s*" + re.escape(DESKTOP_WHITELIST_KEY) + r"\s*=", lines[i]):
+            target = i
+            break
+    if target is not None:
+        if lines[target].strip() == newline:
+            return False
+        lines[target] = newline
+    else:
+        lines.insert(end, newline)
+    out = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    if dry_run:
+        _log(f"[dry-run] config.toml [desktop] {newline}")
+        return True
+    try:
+        bak = cfg.parent / f"config.toml.bak.{time.strftime('%Y%m%d%H%M%S')}"
+        bak.write_text(text)
+        tmp = cfg.with_suffix(".tmp")
+        tmp.write_text(out)
+        tmp.replace(cfg)
+    except Exception as e:
+        _log(f"config.toml 写入失败: {e!r}")
+        return False
+    _log(f"config.toml [desktop] {newline}（备份 {bak.name}）")
+    return True
+
+def validate_catalog(models, modelsdev_map=None):
+    """一致性自检：网关 id 对不对、档位声明有没有、桌面白名单够不够。返回问题列表。"""
+    issues = []
+    md = modelsdev_map if modelsdev_map is not None else (fetch_modelsdev() or {})
+    overrides = load_reasoning_overrides()
+    for m in models:
+        slug = str(m.get("slug", ""))
+        if not slug:
+            continue
+        bare = _bare_id(slug)
+        lv = _levels_of(m)
+        info = md.get(bare)
+        want_prov = "opencode" if slug.endswith("-zen") else "opencode-go"
+        if info is None:
+            issues.append(f"{slug}: 网关 id {bare!r} 在 models.dev 查不到，很可能 401 Model not supported")
+        elif len(info) > 4 and info[4] != want_prov:
+            issues.append(f"{slug}: id {bare!r} 在 {info[4]} 里，但这是 {want_prov} 的模型")
+        if not lv:
+            issues.append(f"{slug}: 没声明任何档位")
+        unknown = [x for x in lv if x not in EFFORT_ORDER]
+        if unknown:
+            issues.append(f"{slug}: 档位 {unknown} 不在 Codex 有效档位表里")
+        ov = overrides.get(bare)
+        if ov and list(ov) != list(lv):
+            issues.append(f"{slug}: 覆盖层 {list(ov)} 与目录 {lv} 不一致（以目录为准）")
+    need = set()
+    for m in models:
+        need |= set(_levels_of(m))
+    have = set(_configured_whitelist() or APP_DEFAULT_EFFORTS)
+    missing = [e for e in EFFORT_ORDER if e in need and e not in have]
+    if missing:
+        issues.append(f"桌面白名单缺 {missing}：这些档位不会出现在滑杆上")
+    return issues
+
+def sync_derived(models, dry_run=False):
+    """目录 -> 代理档位表 + 桌面白名单，并打印一致性自检。"""
+    write_reasoning_registry(models, dry_run=dry_run)
+    sync_desktop_whitelist(models, dry_run=dry_run)
+    issues = validate_catalog(models)
+    for it in issues:
+        _log(f"[一致性] {it}")
+    if not issues:
+        _log("[一致性] 目录 / 代理 / 桌面三层档位一致")
+    return issues
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sync", action="store_true", help="fetch and merge")
     ap.add_argument("--force", action="store_true", help="ignore TTL")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--list", action="store_true", help="print remote ids and exit")
+    ap.add_argument("--sync-derived", action="store_true",
+                    help="only regenerate reasoning_registry.json + config.toml whitelist from models.json")
     args = ap.parse_args()
     if args.list:
         ids = fetch_remote_ids() or load_cache() or {"ids": FALLBACK_IDS}
@@ -732,6 +1007,10 @@ def main():
     if args.sync or args.dry_run:
         sync(force=args.force, dry_run=args.dry_run)
         return
+    if args.sync_derived:
+        j = load_models_json()
+        issues = sync_derived(j.get("models", []), dry_run=args.dry_run)
+        sys.exit(1 if issues else 0)
     ap.print_help()
 
 if __name__ == "__main__":

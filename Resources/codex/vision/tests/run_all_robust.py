@@ -7,7 +7,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 tests = [
     ("原有单元 (12)", ["python3", os.path.join(HERE, "test_units.py")]),
-    ("vision 混沌 (32)", ["python3", os.path.join(HERE, "test_robust.py")]),
+    ("代理混沌 (32)", ["python3", os.path.join(HERE, "test_robust.py")]),
     ("model_discovery 混沌 (14)", ["python3", os.path.join(HERE, "test_model_discovery_robust.py")]),
     ("installer/patch 混沌 (8)", ["python3", os.path.join(HERE, "test_installer_patch_robust.py")]),
 ]

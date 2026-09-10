@@ -3,7 +3,7 @@
 # 用法：./probe-new-model.sh <网关模型id> [--go-key KEY]
 #   例：./probe-new-model.sh omen-alpha
 #       ./probe-new-model.sh kimi-k3
-# 输出：A原生派 / B桥接派（+是否 ALWAYS_BRIDGE）/ 档位声明验证 / 联网家族 / 视觉直通
+# 输出：A原生派 / B桥接派（+是否 ALWAYS_BRIDGE）/ 档位声明验证 / 联网家族
 # 注意：每个探针都是真实上游请求，会消耗少量 Go 额度；P3 只测条目声称的档位（slim 版，不穷举）
 set -uo pipefail
 
@@ -63,7 +63,7 @@ C4=$(post "$RESP" "$TMP/p4.json" "$TMP/p4.out"); echo "  web_search -> HTTP $C4"
 if [ "$C4" = "200" ]; then echo "  => 原生联网家族（加前缀白名单 + supports_search_tool=true）"
 else echo "  => 无原生联网（synthetic 边车自动生效，零改动；跨模型搜索历史走前缀白名单拦截）"; fi
 
-# ---- P5 function+流式+图片（三合一）----
+# ---- P5 function+流式（原 P5b 图片探针已随视觉链路下线，2026-09-10）----
 say "P5a: function 工具调用…"
 echo "{\"model\":\"$MODEL\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"echo hi via echo tool\"}]}],\"tools\":[{\"type\":\"function\",\"name\":\"echo\",\"description\":\"echo\",\"parameters\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"],\"additionalProperties\":false}}],\"max_output_tokens\":128,\"store\":false,\"stream\":true}" > "$TMP/p5a.json"
 C5a=$(post "$RESP" "$TMP/p5a.json" "$TMP/p5a.out"); echo "  function流式 -> HTTP $C5a"
@@ -82,18 +82,6 @@ try:
     json.loads(args); print(f"  工具参数合法 JSON ✓ (delta {n_delta} 块): {args[:60]}")
 except Exception as e: print(f"  工具参数非法/缺失（§20 式截断嫌疑）: {args[:80]}")
 PY
-say "P5b: 图片直通（8x8 测试图，问颜色）…"
-IMG=$(python3 -c "
-import base64,struct,zlib
-def ch(t,d):
-    c=struct.pack('>I',len(d))+t+d; return c+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
-ih=struct.pack('>IIBBBBB',8,8,8,2,0,0,0)
-raw=b''.join(b'\x00'+b'\xff\x00\x00'*8 for _ in range(8))
-print(base64.b64encode(b'\x89PNG\r\n\x1a\n'+ch(b'IHDR',ih)+ch(b'IDAT',zlib.compress(raw))+ch(b'IEND',b'')).decode())")
-echo "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,$IMG\"}},{\"type\":\"text\",\"text\":\"what color? one word\"}]}],\"max_tokens\":64}" > "$TMP/p5b.json"
-C5b=$(post "$CHAT" "$TMP/p5b.json" "$TMP/p5b.out"); echo "  image(chat) -> HTTP $C5b"
-python3 -c "import json; d=json.load(open('$TMP/p5b.out')); print('  回答:', (d.get('choices',[{}])[0].get('message',{}).get('content') or str(d)[:100])[:60])" 2>/dev/null
-
 # ---- P6 复杂载荷穿透检查（omen 式：带工具+历史时 400 穿透 vs 500 走桥）----
 say "P6: 复杂载荷（历史+工具）是否 400 穿透…"
 echo "{"model":"$MODEL","input":[{"role":"user","content":[{"type":"input_text","text":"search news"}]},{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"news","queries":["news"]},"output":[{"type":"text","text":"result"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"here you go"}]},{"role":"user","content":[{"type":"input_text","text":"more news"}]}],"tools":[{"type":"function","name":"web_search","description":"search","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}],"max_output_tokens":64,"store":false}" > "$TMP/p6.json"
@@ -106,4 +94,4 @@ echo
 echo "===== 结论 ====="
 echo "分类：$CLASS"
 echo "下一步：A类确认条目即可；B类确认 FALLBACK 名单；ALWAYS_BRIDGE 仅 400 穿透时加；"
-echo "P4=200 加搜搜白名单；P5b 对且答对加 NATIVE_VISION；P3 被拒的档位从条目删除。"
+echo "P4=200 加搜索白名单；P3 被拒的档位从条目删除。"

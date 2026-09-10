@@ -30,7 +30,6 @@ struct CodexStatus: Equatable {
     var defaultModel: String = "-"
     var hasGo: Bool = false
     var hasDS: Bool = false
-    var hasGLM: Bool = false
     var envExists: Bool = false
     var patchedExists: Bool = false
     var patchedVersion: String = "-"
@@ -88,11 +87,17 @@ final class CodexInstaller: ObservableObject {
            FileManager.default.fileExists(atPath: exec) {
             return exec
         }
-        // 3. 开发期源码路径
+        // 3. 开发期源码路径（2026-09-10：去掉写死的 /Users/steve233/Desktop/OpenCodeGoWidget-main，
+        //    改用当前工作目录 + 可执行文件所在仓库根，换机器/换目录都能用）
+        let execRoot = Bundle.main.executableURL?
+            .deletingLastPathComponent()   // MacOS
+            .deletingLastPathComponent()   // Contents
+            .deletingLastPathComponent()   // .app
+            .deletingLastPathComponent()   // build/
+            .path
         let devCandidates = [
-            "/Users/steve233/Desktop/OpenCodeGoWidget-main/Resources/codex/codex-oneclick-setup.command",
             FileManager.default.currentDirectoryPath + "/Resources/codex/codex-oneclick-setup.command"
-        ]
+        ] + (execRoot.map { [$0 + "/Resources/codex/codex-oneclick-setup.command"] } ?? [])
         for p in devCandidates where FileManager.default.fileExists(atPath: p) { return p }
         return nil
     }
@@ -103,8 +108,8 @@ final class CodexInstaller: ObservableObject {
         let execDir = Bundle.main.executableURL?.deletingLastPathComponent()
         if let e = execDir?.appendingPathComponent("../Resources/codex").standardized.path,
            FileManager.default.fileExists(atPath: e) { return e }
-        let dev = "/Users/steve233/Desktop/OpenCodeGoWidget-main/Resources/codex"
-        if FileManager.default.fileExists(atPath: dev) { return dev }
+        let repoRoot = FileManager.default.currentDirectoryPath + "/Resources/codex"
+        if FileManager.default.fileExists(atPath: repoRoot) { return repoRoot }
         return nil
     }
 
@@ -152,10 +157,6 @@ final class CodexInstaller: ObservableObject {
                 if t.hasPrefix("ZEN_API_KEY=") {
                     let v = String(t.dropFirst("ZEN_API_KEY=".count)).trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
                     if !v.isEmpty { s.hasGo = true; s.goKeyLength = v.count }
-                }
-                if t.hasPrefix("VISION_API_KEY=") {
-                    let v = String(t.dropFirst("VISION_API_KEY=".count)).trimmingCharacters(in: .whitespaces)
-                    if !v.isEmpty && !v.hasPrefix("#") { s.hasGLM = true }
                 }
             }
         }
@@ -237,19 +238,6 @@ final class CodexInstaller: ObservableObject {
         return v.isEmpty ? nil : v
     }
 
-    static func existingGLMKey() -> String {
-        let envPath = envFile
-        guard let content = try? String(contentsOfFile: envPath, encoding: .utf8) else { return "" }
-        for line in content.split(separator: "\n") {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("VISION_API_KEY=") {
-                let v = String(t.dropFirst("VISION_API_KEY=".count)).trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                if !v.isEmpty && !v.hasPrefix("#") { return v }
-            }
-        }
-        return ""
-    }
-
     static func existingPass() -> String {
         let p = passFile
         guard let v = try? String(contentsOfFile: p, encoding: .utf8) else { return "" }
@@ -294,7 +282,6 @@ final class CodexInstaller: ObservableObject {
     func run(mode: CodexInstallMode,
              goKey: String,
              dsKey: String,
-             glmKey: String,
              pass: String,
              skipPatch: Bool = false,
              skipProxyStart: Bool = false) {
@@ -316,13 +303,11 @@ final class CodexInstaller: ObservableObject {
         // 去空格
         let go = goKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let ds = dsKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let glm = glmKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let pwd = pass.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 统一校验：Go 必填（留空时需有旧 Go），密码必填（留空时需有旧密码）
         let existingGo = Self.existingGoKey()
         let existingDS = Self.existingDSKey() ?? ""
-        _ = Self.existingGLMKey()
         let existingPass = Self.existingPass()
         let effectiveGo = go.isEmpty ? existingGo : go
         let effectiveDS = ds.isEmpty ? existingDS : ds
@@ -335,7 +320,7 @@ final class CodexInstaller: ObservableObject {
             logText += "\n[错误] 签名密码为必填项，请填写\n"
             isRunning = false; return
         }
-        // DeepSeek / GLM 可选，不校验；Go/密码之外的有效性由安装器进一步检查
+        // DeepSeek 可选，不校验；Go/密码之外的有效性由安装器进一步检查
         _ = effectiveDS
 
         let proc = Process()
@@ -349,7 +334,6 @@ final class CodexInstaller: ObservableObject {
         var env = ProcessInfo.processInfo.environment
         env["ONECLICK_GO_KEY"] = go
         env["ONECLICK_DS_KEY"] = ds
-        env["ONECLICK_GLM_KEY"] = glm
         env["ONECLICK_PASS"] = pwd
         // 兼容：部分旧安装器读 ZEN_API_KEY
         if !go.isEmpty { env["ZEN_API_KEY"] = go }
@@ -402,11 +386,11 @@ final class CodexInstaller: ObservableObject {
         }
     }
 
-    /// 极简单按钮入口：安装/更新已合并，调用方只需传 4 栏（留空自动复用旧值）
-    func configure(goKey: String, dsKey: String, glmKey: String, pass: String) {
+    /// 极简单按钮入口：安装/更新已合并，调用方只需传 3 栏（留空自动复用旧值）
+    func configure(goKey: String, dsKey: String, pass: String) {
         // 根据是否已安装自动选模式：已安装走 --update（保留 models.json 逻辑），全新走 --install
         let mode: CodexInstallMode = status.isInstalled ? .update : .install
-        run(mode: mode, goKey: goKey, dsKey: dsKey, glmKey: glmKey, pass: pass)
+        run(mode: mode, goKey: goKey, dsKey: dsKey, pass: pass)
     }
 
     /// 非阻塞读走管道里已有的数据（readToEnd 在有孤儿抱管时会永久阻塞，禁用）

@@ -6,7 +6,7 @@
 # 交互：双击后会先让你选“安装 / 更新”；更新模式无需重填 Key
 # 高级参数（测试/无人值守）：
 #   --noninteractive     使用 ONECLICK_GO_KEY / ONECLICK_DS_KEY /
-#                        ONECLICK_GLM_KEY / ONECLICK_PASS 环境变量，不弹窗
+#                        ONECLICK_PASS 环境变量，不弹窗
 #   --skip-patch         不重建 ChatGPT-Patched.app（只生成配置）
 #   --skip-proxy-start   生成代理文件但不启动 launchd 服务
 #   --update               直接进入更新模式（不弹窗，复用旧 Key）
@@ -215,30 +215,26 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 1. 读取/收集三个 Key（全可选，但 Go 与 DeepSeek 至少一个）
+# 1. 读取/收集两个 Key（Go 与 DeepSeek 至少一个）
 # ---------------------------------------------------------------------------
 EXISTING_GO="$(grep '^ZEN_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
 EXISTING_DS="$(awk -F'"' '/^experimental_bearer_token *=/{print $2}' "$CODEX_HOME/config.toml" 2>/dev/null | head -1 || true)"
-EXISTING_GLM="$(grep '^VISION_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
 
 GO_KEY=""
 DS_KEY=""
-GLM_KEY=""
 PASS=""
 
 if [[ "$MODE" == "update" ]]; then
   # 更新模式：直接沿用现有 Key，不弹窗
   GO_KEY="$EXISTING_GO"
   DS_KEY="$EXISTING_DS"
-  GLM_KEY="$EXISTING_GLM"
   # 去空格
   GO_KEY="${GO_KEY// /}"
   DS_KEY="${DS_KEY// /}"
-  GLM_KEY="${GLM_KEY// /}"
   if [[ -z "$GO_KEY" && -z "$DS_KEY" ]]; then
     die "更新模式下未找到任何 Key（Go 与 DeepSeek 均为空）。请改用“安装”并填写至少一个 Key。"
   fi
-  log "更新模式：沿用 Go=\${#GO_KEY}位 DeepSeek=\${#DS_KEY}位 GLM=\${#GLM_KEY}位（不重新输入）"
+  log "更新模式：沿用现有 Go / DeepSeek Key（不重新输入）"
   # 更新模式下密码也直接复用，不再询问（除非缺失）
   if [[ -f "$PASS_FILE" && -z "$PASS" ]]; then
     PASS="$(cat "$PASS_FILE" 2>/dev/null || true)"
@@ -247,41 +243,35 @@ else
   if [[ "$NONINTERACTIVE" -eq 1 ]]; then
     GO_KEY="${ONECLICK_GO_KEY:-}"
     DS_KEY="${ONECLICK_DS_KEY:-}"
-    GLM_KEY="${ONECLICK_GLM_KEY:-}"
     PASS="${ONECLICK_PASS:-}"
   else
     GO_KEY="$(ask_hidden "OpenCode Go / Zen 订阅 Key（必填其一）\n\n请粘贴你的 sk-... key。\n\n缺这个 key 的后果：所有 *-go 模型（deepseek-go / mimo / glm / luna / muse 等）不会安装，只能使用官方 DeepSeek。" "① OpenCode Go Key" "")"
     [[ "$GO_KEY" == "__CANCEL__" ]] && die "已取消安装"
     DS_KEY="$(ask_hidden "DeepSeek 官方 API Key（可选）\n\n请粘贴 sk-... key。\n\n缺这个 key 的后果：官方 deepseek-v4-flash-vision-exp / deepseek-v4-pro 两个模型不会显示，默认模型会自动改走 Go 模型。" "② DeepSeek Key" "")"
     [[ "$DS_KEY" == "__CANCEL__" ]] && die "已取消安装"
-    GLM_KEY="$(ask_hidden "智谱 GLM 视觉 Key（可选）\n\n请粘贴 open.bigmodel.cn 的 key（格式类似 1234.xxxx）。\n\n缺这个 key 的后果：Codex 文本对话不受影响，但发图片会失败；之后可随时补填到 ~/.config/agent-vision-toolkit/env。" "③ 智谱 GLM 视觉 Key" "")"
-    [[ "$GLM_KEY" == "__CANCEL__" ]] && die "已取消安装"
   fi
 
   # 去空格；留空时回落到现有配置（重复安装/更新 key 场景）
   GO_KEY="${GO_KEY// /}"
   DS_KEY="${DS_KEY// /}"
-  GLM_KEY="${GLM_KEY// /}"
   GO_KEY="${GO_KEY:-$EXISTING_GO}"
   DS_KEY="${DS_KEY:-$EXISTING_DS}"
-  GLM_KEY="${GLM_KEY:-$EXISTING_GLM}"
 
   if [[ -z "$GO_KEY" && -z "$DS_KEY" ]]; then
     die "至少需要 OpenCode Go 或 DeepSeek 其中一个 key，请重新运行安装器。"
   fi
 fi
-for k in "$GO_KEY" "$DS_KEY" "$GLM_KEY"; do
+for k in "$GO_KEY" "$DS_KEY"; do
   if [[ -n "$k" && "${#k}" -lt 8 ]]; then
     die "检测到疑似无效的 key（长度过短），请检查后重试。"
   fi
 done
 
-HAS_GO=0; HAS_DS=0; HAS_GLM=0
+HAS_GO=0; HAS_DS=0
 [[ -n "$GO_KEY" ]] && HAS_GO=1
 [[ -n "$DS_KEY" ]] && HAS_DS=1
-[[ -n "$GLM_KEY" ]] && HAS_GLM=1
 
-log "输入校验通过：Go=$HAS_GO DeepSeek=$HAS_DS GLM=$HAS_GLM"
+log "输入校验通过：Go=$HAS_GO DeepSeek=$HAS_DS"
 
 # ---------------------------------------------------------------------------
 # 2. 签名密码：强制自定义（不允许 0000 默认）
@@ -487,7 +477,7 @@ if [[ -z "$DEFAULT_MODEL" || -z "$EXTRACT_MODEL" ]]; then
 fi
 
 USE_PROXY=0
-if [[ "$HAS_GO" -eq 1 || "$HAS_GLM" -eq 1 ]]; then
+if [[ "$HAS_GO" -eq 1 ]]; then
   USE_PROXY=1
 fi
 if [[ "$USE_PROXY" -eq 1 ]]; then
@@ -564,7 +554,7 @@ MCP_EOF
 fi
 
 # ---------------------------------------------------------------------------
-# 8. 视觉代理（有 Go 或 GLM 时安装）
+# 8. 本地代理（有 Go Key 时安装：Go/Zen 路由 + 协议桥接）
 # ---------------------------------------------------------------------------
 PROXY_OK=0
 if [[ "$USE_PROXY" -eq 1 ]]; then
@@ -578,20 +568,13 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   else
     cp -R "$SCRIPT_DIR/resources/vision/." "$VISION_DIR/" 2>/dev/null || true
   fi
-  chmod +x "$VISION_DIR"/bin/* 2>/dev/null || true
   touch "$ENV_FILE"
   chmod 600 "$ENV_FILE" 2>/dev/null || true
   tmp_env_x="$(mktemp)"
+  # 2026-09-10：视觉链路下线，顺手把历史 VISION_* 三行从旧机器的 env 里清掉
   grep -vE '^(VISION_API_KEY|VISION_BASE_URL|VISION_MODEL|ZEN_API_KEY)=' "$ENV_FILE" 2>/dev/null > "$tmp_env_x" || true
   {
     cat "$tmp_env_x"
-    if [[ "$HAS_GLM" -eq 1 ]]; then
-      printf 'VISION_API_KEY=%s\n' "$GLM_KEY"
-      printf 'VISION_BASE_URL=https://open.bigmodel.cn/api/paas/v4\n'
-      printf 'VISION_MODEL=glm-4v-flash\n'
-    else
-      printf '# VISION_* 未配置：看图功能未启用\n'
-    fi
     if ! grep -q '^LANG=' "$tmp_env_x" 2>/dev/null; then printf 'LANG=zh\n'; fi
     if [[ -n "$GO_KEY" ]]; then printf 'ZEN_API_KEY=%s\n' "$GO_KEY"; fi
   } > "$ENV_FILE.new"
@@ -602,10 +585,6 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   PY_BIN="$(command -v python3)"
   PLIST="$HOME/Library/LaunchAgents/com.agent-vision-toolkit.proxy.plist"
   mkdir -p "$HOME/Library/LaunchAgents"
-  SKIP_FLAG=""
-  if [[ "$HAS_GLM" -eq 0 ]]; then
-    SKIP_FLAG="<string>--skip-vision-config-check</string>"
-  fi
   cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -619,7 +598,6 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
     <string>--port</string><string>19100</string>
     <string>--upstream</string><string>https://api.deepseek.com/</string>
     <string>--env-file</string><string>$ENV_FILE</string>
-    $SKIP_FLAG
   </array>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
@@ -630,7 +608,7 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
 EOF
 
   if [[ "$SKIP_PROXY_START" -eq 0 ]]; then
-    log "阶段：重启视觉代理（最多等待 30 秒）…"
+    log "阶段：重启本地代理（最多等待 30 秒）…"
     launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
     for _ in {1..30}; do
@@ -641,9 +619,9 @@ EOF
       sleep 1
     done
     if [[ "$PROXY_OK" -eq 1 ]]; then
-      log "视觉代理已启动（127.0.0.1:19100）"
+      log "本地代理已启动（127.0.0.1:19100）"
     else
-      log "WARN: 视觉代理未在 30 秒内监听，请查看 $VISION_DIR/proxy.err.log"
+      log "WARN: 本地代理未在 30 秒内监听，请查看 $VISION_DIR/proxy.err.log"
     fi
   else
     PROXY_OK=1
@@ -651,7 +629,7 @@ EOF
   fi
 
   # Go 模型自动发现（quota 表 6h + 启动，跟表自动同步，限免自动识别）
-  if [[ "$HAS_GLM" -eq 1 || "$HAS_GO" -eq 1 ]]; then
+  if [[ "$HAS_GO" -eq 1 ]]; then
     DISCOVERY_PLIST="$HOME/Library/LaunchAgents/com.steve233.go-model-discovery.plist"
     cat > "$DISCOVERY_PLIST" <<EOF2
 <?xml version="1.0" encoding="UTF-8"?>
@@ -681,7 +659,7 @@ EOF2
     log "配额表同步步骤结束"
   fi
 else
-  log "无需视觉代理（纯官方 DeepSeek 直连）"
+  log "无需本地代理（纯官方 DeepSeek 直连）"
 fi
 
 # ---------------------------------------------------------------------------
@@ -812,11 +790,6 @@ log "自动归档已停用（>8MB 不再搬走）"
 # ---------------------------------------------------------------------------
 # 10. 汇总
 # ---------------------------------------------------------------------------
-if [[ "$HAS_GLM" -eq 1 ]]; then
-  VISION_TEXT="已启用（智谱 GLM）"
-else
-  VISION_TEXT="未启用：缺少 GLM key，发图片会失败；可稍后补填 $ENV_FILE 后执行 launchctl kickstart -k gui/$(id -u)/com.agent-vision-toolkit.proxy"
-fi
 if [[ "$SKIP_PATCH" -eq 1 ]]; then
   PATCH_TEXT="已跳过"
 elif [[ "$PATCH_OK" -eq 1 ]]; then
@@ -826,9 +799,9 @@ else
 fi
 
 if [[ "$MODE" == "update" ]]; then
-  SUMMARY=$'更新完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n看图：'"$VISION_TEXT"$'\n双开副本：'"$PATCH_TEXT"$'\n\n说明：已用现有 Key 复用更新配置/模板/视觉代理/补丁脚本，无需重填 Key。\n下一步：如副本在运行请重启生效；日志：'"$LOG"
+  SUMMARY=$'更新完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n双开副本：'"$PATCH_TEXT"$'\n\n说明：已用现有 Key 复用更新配置/模板/本地代理/补丁脚本，无需重填 Key。\n看图：不再需要视觉 Key，图片由模型原生处理（缺视觉的模型发图会报错，换有视觉的模型即可）。\n下一步：如副本在运行请重启生效；日志：'"$LOG"
 else
-  SUMMARY=$'安装完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n看图：'"$VISION_TEXT"$'\n双开副本：'"$PATCH_TEXT"$'\n\n下一步：\n1. 如果副本已启动，先完全退出再重新打开 Codex（生效）。\n2. 可选：gh auth login -h github.com 登录 GitHub；git config --global user.name/email 设置身份。\n3. 日志：'"$LOG"
+  SUMMARY=$'安装完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n双开副本：'"$PATCH_TEXT"$'\n\n看图：不再需要视觉 Key，图片由模型原生处理（缺视觉的模型发图会报错，换有视觉的模型即可）。\n\n下一步：\n1. 如果副本已启动，先完全退出再重新打开 Codex（生效）。\n2. 可选：gh auth login -h github.com 登录 GitHub；git config --global user.name/email 设置身份。\n3. 日志：'"$LOG"
 fi
 
 log "$SUMMARY"

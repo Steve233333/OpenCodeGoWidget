@@ -54,6 +54,9 @@ fi
 # 3. 比一下几个重要文件是不是跟电脑上一样（只比有没有大不同，不比 key）
 for pair in \
   "vision/vision_proxy.py:$HOME/.local/share/agent-vision-toolkit/vision_proxy.py" \
+  "vision/model_discovery.py:$HOME/.local/share/agent-vision-toolkit/model_discovery.py" \
+  "vision/reasoning_registry.json:$HOME/.local/share/agent-vision-toolkit/reasoning_registry.json" \
+  "vision/reasoning_overrides.json:$HOME/.local/share/agent-vision-toolkit/reasoning_overrides.json" \
   "patch/patch.sh:$HOME/.codex/picker-patch/patch.sh" \
   "mcp/websearch-server.py:$HOME/.config/opencode/mcp/websearch-server.py"
 do
@@ -81,6 +84,25 @@ do
     fi
   fi
 done
+
+# 3b. 视觉链路已下线（2026-09-10）：这两个东西不该再出现，出现说明回退了
+for gone in "vision/vision_client.py" "vision/bin"; do
+  if [ -e "$WIDGET_DIR/Resources/codex/$gone" ]; then
+    say_bad "$gone 又出现了（视觉链路已下线，应删除）"
+  else
+    say_ok "$gone 已下线"
+  fi
+done
+
+# 3c. 安装器里不该再有 GLM / VISION_API_KEY 询问
+INSTALLER_CHK="$WIDGET_DIR/Resources/codex/codex-oneclick-setup.command"
+if [ -f "$INSTALLER_CHK" ]; then
+  if grep -q "VISION_API_KEY=%s\|智谱 GLM 视觉 Key" "$INSTALLER_CHK"; then
+    say_bad "安装器里还有 GLM 视觉 Key 询问（视觉链路已下线）"
+  else
+    say_ok "安装器已无 GLM 视觉 Key 询问"
+  fi
+fi
 
 # 4. 看看搜索那块是不是双路的
 WSS="$WIDGET_DIR/Resources/codex/mcp/websearch-server.py"

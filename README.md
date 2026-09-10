@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.5.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.8.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.5.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.8.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -93,13 +93,23 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.5.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.5.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.8.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.8.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.8.8 — 应用内更新 + 视觉代理下线（2026-09-10）
+
+- **应用内更新**：设置页新增「检查更新」（打开设置页自动查一次，24 小时节流；菜单栏也有入口）。发现新版显示「发现新版 x.y.z」，点「更新」才会下载 ZIP、校验 bundle id/版本、替换 `/Applications` 里的旧版（旧版改名 `.bak-旧版本` 留作回退）并自动重启；不后台静默更新，`/Applications` 不可写时退化为打开 Release 页面。
+- **视觉代理彻底下线**：删除智谱 GLM 转文字整条链路（`vision_client.py`、`vision/bin/` 五个看图 CLI、`NATIVE_VISION_MODELS`、图片历史裁剪）。**不再需要视觉 Key**，一键配置从 4 栏减到 3 栏（Go / DeepSeek / 签名密码）；图片由模型原生处理，不声明 `image` 的模型发图会报错，换有视觉的模型即可。安装器会顺手清掉旧机器 env 里的 `VISION_*` 三行。
+- **修复 kimi-k3 不可用**：Go 网关把「该模型不支持 responses 格式」的报错从 500 改成 401，代理只在 500 时切 chat 桥，导致 kimi-k3 文/图都失败。现在已知 chat 适配模型吃 401 也会切桥（kimi-k3 文本与图片实测通过）。
+- **档位三层一致**：`model_discovery.py` 每次同步会一起生成代理档位表 `reasoning_registry.json` 和桌面端 `enabled-reasoning-efforts` 白名单，并做一致性自检——以前目录声明 3 档、界面只显示 2 档、发出去还可能被压成第 2 档的问题不会再出现。手工档位改 `reasoning_overrides.json`（registry 从此是生成物）。
+- **模型 id 归一**：Go 配额表里的新模型会用 models.dev 官方 id 校正（`DeepSeek V4.1 Flash` 曾猜成 `deepseek-v4.1-flash` 导致 401，正确 id 是 `deepseek-flash`）。
+- **发布资产改名**：DMG/ZIP 以 ASCII 名发布（`OpenCodeGoWidget-1.1.8.8.zip`），README 直链不再 404。
+- 版本 **1.1.8.8 (18)**。
 
 ### v1.1.8.7 — 清死代码 + 新模型 SOP 工具化（2026-09-05）
 

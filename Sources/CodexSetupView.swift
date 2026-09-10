@@ -1,22 +1,19 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Codex 一键配置（极简：4 栏 + 单按钮，安装/更新已合并）
+// MARK: - Codex 一键配置（极简：3 栏 + 单按钮，安装/更新已合并）
 
 struct CodexSetupView: View {
     @StateObject private var installer = CodexInstaller()
     @State private var goKey: String = ""
     @State private var dsKey: String = ""
-    @State private var glmKey: String = ""
     @State private var pass: String = ""
     @State private var showGo = false
     @State private var showDS = false
-    @State private var showGLM = false
     @State private var showPass = false
     @State private var errorText: String?
     @State private var existingGo: String = ""
     @State private var existingDS: String = ""
-    @State private var existingGLM: String = ""
     @State private var existingPass: String = ""
     // S2(2026-09-04)：运行计时 + 全量日志（之前只看最后2行，长静默阶段像卡死）
     @State private var runStart: Date? = nil
@@ -48,9 +45,6 @@ struct CodexSetupView: View {
                 keyRow(title: "DeepSeek Key", required: false,
                        placeholder: "sk-...（可选，官方 deepseek 模型）",
                        text: $dsKey, show: $showDS, existing: existingDS)
-                keyRow(title: "视觉模型 Key", required: false,
-                       placeholder: "智谱 GLM Key，如 1234.xxxx（可选，发图需要）",
-                       text: $glmKey, show: $showGLM, existing: existingGLM)
                 keyRow(title: "签名密码", required: true,
                        placeholder: "任意密码（必填，简单密码也可）",
                        text: $pass, show: $showPass, existing: existingPass, isPassword: true)
@@ -142,14 +136,12 @@ struct CodexSetupView: View {
             // 缓存已存值，避免 body 每次重算时同步读文件
             existingGo = CodexInstaller.existingGoKey()
             existingDS = CodexInstaller.existingDSKey() ?? ""
-            existingGLM = CodexInstaller.existingGLMKey()
             existingPass = CodexInstaller.existingPass()
         }
         .onReceive(installer.$status) { _ in
             // 状态刷新后同步更新已存提示
             existingGo = CodexInstaller.existingGoKey()
             existingDS = CodexInstaller.existingDSKey() ?? ""
-            existingGLM = CodexInstaller.existingGLMKey()
             existingPass = CodexInstaller.existingPass()
         }
         .onReceive(tick) { _ in
@@ -216,7 +208,6 @@ struct CodexSetupView: View {
         errorText = nil
         let go = goKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let ds = dsKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let glm = glmKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let pwd = pass.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 优先用缓存的已存值，避免重复读盘
@@ -226,7 +217,6 @@ struct CodexSetupView: View {
         let existingGo = eGo
         let existingDS = eDS
         let existingPass = ePass
-        let existingGLM = existingGLM.isEmpty ? CodexInstaller.existingGLMKey() : existingGLM
 
         let effectiveGo = go.isEmpty ? existingGo : go
         let effectiveDS = ds.isEmpty ? existingDS : ds
@@ -242,13 +232,13 @@ struct CodexSetupView: View {
             return
         }
         // 非必填的可选 Key 不校验
-        _ = effectiveDS; _ = glm.isEmpty ? existingGLM : glm
+        _ = effectiveDS
 
         // 有 Key 时安装/更新已合并：统一走安装逻辑（留空复用旧 Key）
         // 若已安装则 installer 内部会备份旧配置并复用
         runStart = Date()
         elapsedSeconds = 0
         showFullLog = true
-        installer.configure(goKey: go, dsKey: ds, glmKey: glm, pass: pwd)
+        installer.configure(goKey: go, dsKey: ds, pass: pwd)
     }
 }

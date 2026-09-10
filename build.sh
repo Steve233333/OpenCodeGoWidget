@@ -63,8 +63,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.1.8.7</string>
-	<key>CFBundleVersion</key><string>17</string>
+	<key>CFBundleShortVersionString</key><string>1.1.8.8</string>
+	<key>CFBundleVersion</key><string>18</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
@@ -86,8 +86,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.1.8.7</string>
-	<key>CFBundleVersion</key><string>17</string>
+	<key>CFBundleShortVersionString</key><string>1.1.8.8</string>
+	<key>CFBundleVersion</key><string>18</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
 	<key>NSExtension</key><dict>
@@ -99,7 +99,7 @@ PLIST
 
 echo "==> 编译 App"
 swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
-  Sources/App.swift Sources/CodexInstaller.swift Sources/CodexSetupView.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift \
+  Sources/App.swift Sources/CodexInstaller.swift Sources/CodexSetupView.swift Sources/UpdateChecker.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"
@@ -180,6 +180,20 @@ if [ -f "build/${DMG_NAME}" ]; then ditto "build/${DMG_NAME}" "$DESKTOP_DMG" 2>/
 if [ -f "build/${ZIP_NAME}" ]; then ditto "build/${ZIP_NAME}" "$DESKTOP_ZIP" 2>/dev/null && echo "已拷到桌面: $DESKTOP_ZIP" || true; fi
 # 清理 build 中间产物（保留 dist）
 rm -rf build
+
+# 发布用 ASCII 资产名（2026-09-10）：中文+空格传上去会被 GitHub 压成 OpenCode.-1.1.8.7.dmg，
+# README 里的 releases/latest/download/OpenCodeGoWidget-<版本>.zip 链接会 404。
+RELEASE_DIR="$DIST_DIR/release"
+mkdir -p "$RELEASE_DIR"
+if [ -f "$DIST_DIR/${DMG_NAME}" ]; then
+  ditto "$DIST_DIR/${DMG_NAME}" "$RELEASE_DIR/OpenCodeGoWidget-${VERSION}.dmg" \
+    && echo "发布用 DMG: $RELEASE_DIR/OpenCodeGoWidget-${VERSION}.dmg"
+fi
+if [ -f "$DIST_DIR/${ZIP_NAME}" ]; then
+  ditto "$DIST_DIR/${ZIP_NAME}" "$RELEASE_DIR/OpenCodeGoWidget-${VERSION}.zip" \
+    && echo "发布用 ZIP: $RELEASE_DIR/OpenCodeGoWidget-${VERSION}.zip"
+fi
+
 # 注册系统服务
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
 killall pkd 2>/dev/null || true
