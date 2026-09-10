@@ -250,11 +250,18 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
         #!/bin/bash
         # OpenCodeGoWidget 自动更新：等本 App 退出后替换旧版
         APP="$1"; NEW="$2"; PID="$3"; OLD="$4"
-        for _ in $(seq 1 60); do
+        # 先等 App 自己优雅退出（设置面板开着时 AppKit 可能拖几秒）
+        for _ in $(seq 1 20); do
           kill -0 "$PID" 2>/dev/null || break
-          sleep 1
+          sleep 0.5
         done
-        sleep 1
+        # 还没退就兜底结束它：替换/重启已在进行，不能一直等下去
+        if kill -0 "$PID" 2>/dev/null; then
+          kill -TERM "$PID" 2>/dev/null || true
+          sleep 2
+          kill -0 "$PID" 2>/dev/null && kill -KILL "$PID" 2>/dev/null || true
+        fi
+        sleep 0.5
         BAK="${APP}.bak-${OLD}"
         rm -rf "$BAK"
         mv "$APP" "$BAK" 2>/dev/null || true
@@ -283,7 +290,12 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
         do { try proc.run() } catch { return fail("更新脚本启动失败：\(error.localizedDescription)") }
         DispatchQueue.main.async {
             self.state = .preparing
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { NSApp.terminate(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                NSApp.terminate(nil)
+                // 兜底：设置面板还开着时 AppKit 可能把退出往后拖，替换脚本在等本进程消失。
+                // 3 秒还没走就强制退出——此时该保存的都已落盘，没有可丢的状态。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { exit(0) }
+            }
         }
     }
 }
