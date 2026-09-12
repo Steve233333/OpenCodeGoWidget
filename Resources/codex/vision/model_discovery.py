@@ -64,6 +64,18 @@ ZEN_CACHE_FILE = CACHE_DIR / "zen_models_cache.json"
 REASONING_REGISTRY = CACHE_DIR / "reasoning_registry.json"
 GENERIC_REASONING = ["high"]
 
+# 手工锁定的显示名 base（不含 "(Go)"/"(Zen)" 后缀）：
+#   - Muse 家族是 picker 单行补丁的对照样本，别让官方 name 改掉
+#   - big-pickle / muse-*-free 的官方 name 会丢掉 Free/Contributor 标记，照抄反而更差
+#   - hy4-preview 官方写成 "Hy4 preview"（小写），本地保留首字母大写
+DISPLAY_NAME_OVERRIDES = {
+    "big-pickle": "Big Pickle Free",
+    "muse-spark-1.3-contributor": "Muse Spark-1.3-Contributor",
+    "muse-spark-1.2-contributor": "Muse Spark 1.2 Contributor",
+    "muse-spark-1.3-contributor-free": "Muse Spark 1.3 Contributor Free",
+    "hy4-preview": "Hy4-Preview",
+}
+
 # 手工实测档位覆盖层（唯一权威手工来源；首次运行自动从 reasoning_registry.json 迁移）
 REASONING_OVERRIDES = CACHE_DIR / "reasoning_overrides.json"
 # Codex 桌面端「模型控制可用档位」的白名单键（config.toml [desktop]）与档位顺序
@@ -511,10 +523,38 @@ def find_template(models, remote_id):
     # generic chat-adapted fallback: use mimo template (supports tool call, image, no search)
     return get("mimo-v2.5-go") or get("glm-5-go") or models[0]
 
-def _display_name_for(remote_id, suffix):
+def _display_base_from_official(official_name, remote_id):
+    """models.dev 官方 name -> 基名；拿不到（或只是 id 本身）返回 None。
+
+    2026-09-11 加：显示名以官方 name 为权威。此前完全由 id 拼（id.replace("-", " ").title()），
+    于是 deepseek-v4.1-flash 变成 "Deepseek-V4.1-Flash"、minimax 变成 "Minimax"，
+    跟 OpenCode 客户端/新机器上看到的 "DeepSeek V4.1 Flash" 对不上。
+    """
+    if not isinstance(official_name, str):
+        return None
+    base = official_name.strip()
+    # 官方给 deepseek-v4-pro 挂过 "(New)" 水印，展示层不需要
+    base = re.sub(r"\s*\((?:new|beta|preview)\)\s*$", "", base, flags=re.IGNORECASE).strip()
+    # 只挡掉「官方名就是 id 本身」的情况；大小写/连字符差异（Minimax-M3 -> MiniMax-M3）要保留
+    if not base or base == str(remote_id):
+        return None
+    return base
+
+def _display_name_for(remote_id, suffix, official_name=None):
     # suffix = "Go" or "Zen"
+    # 优先级：手工 override > models.dev 官方 name > 由 id 拼（老逻辑，兜底）
     # Zen: keep spaces e.g. "Muse Spark 1.2 Free (Zen)" to match screenshot
     # Go: keep hyphens for version e.g. "MiMo-V2.5 (Go)"
+    if remote_id in DISPLAY_NAME_OVERRIDES:
+        return f"{DISPLAY_NAME_OVERRIDES[remote_id]} ({suffix})"
+    official = _display_base_from_official(official_name, remote_id)
+    if official:
+        if suffix != "Go":
+            return f"{official} ({suffix})"
+        # 官方名照抄词序/大小写，只把空格换成连字符对齐 Go 组习惯；Muse 保留空格
+        base = official.replace(" ", "-")
+        base = base.replace("Muse-Spark", "Muse Spark").replace("Gpt-", "GPT-").replace("Glm-", "GLM-")
+        return f"{base} ({suffix})"
     if suffix == "Zen":
         if remote_id == "big-pickle":
             base = "Big Pickle Free"
@@ -550,8 +590,17 @@ def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=
     suffix = "Zen" if is_zen else "Go"
     slug_suffix = "-zen" if is_zen else "-go"
     slug = remote_id + slug_suffix
+    upstream_map = upstream_map or {}
+    modelsdev_map = modelsdev_map or {}
+    lookup = remote_id
+    if is_zen and remote_id.endswith("-free"):
+        lookup = remote_id[:-5]
+    if lookup == "big-pickle":
+        lookup = "big-pickle"
+    md = modelsdev_map.get(remote_id) or modelsdev_map.get(lookup)
     e["slug"] = slug
-    e["display_name"] = _display_name_for(remote_id, suffix)
+    # 官方 name 只在按真 id 命中时采信（避免拿非 free 条目的名字去命名 free 模型）
+    e["display_name"] = _display_name_for(remote_id, suffix, (md[3] if (md and len(md) > 3 and remote_id in modelsdev_map) else None))
     e["description"] = f"OpenCode {'Zen Free' if is_zen else 'Go'} model ({remote_id}), routed via opencode.ai {'Zen' if is_zen else 'Zen/Go'} proxy. auto-discovered {time.strftime('%Y-%m-%d')}"
     e["priority"] = priority
     e["visibility"] = "list"
@@ -563,14 +612,7 @@ def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=
         e["supports_search_tool"] = False
         e.pop("web_search_tool_type", None)
     # 上下文与档位：本地 registry 手工实测 > models.dev（OpenCode 官方同源）> opencodex 上游 > 模板现值
-    upstream_map = upstream_map or {}
-    modelsdev_map = modelsdev_map or {}
-    lookup = remote_id
-    if is_zen and remote_id.endswith("-free"):
-        lookup = remote_id[:-5]
-    if lookup == "big-pickle":
-        lookup = "big-pickle"
-    md = modelsdev_map.get(remote_id) or modelsdev_map.get(lookup)
+    # （md 已在函数开头解析，显示名与档位共用同一次查询）
     up_ctx, up_levels = 0, None
     for key in (remote_id, lookup, slug, remote_id + "-go", lookup + "-go"):
         if key in upstream_map:
@@ -721,6 +763,15 @@ def sync(force=False, dry_run=False):
             if san and m.get("input_modalities") != san:
                 m["input_modalities"] = san
                 updated += 1
+            # 显示名：models.dev 官方 name 为准（手工 override 除外），改名无需发版
+            disp_suffix = "Zen" if slug.endswith("-zen") else ("Go" if slug.endswith("-go") else None)
+            md_exact = modelsdev_map.get(bare)
+            if disp_suffix and md_exact and len(md_exact) > 3:
+                want_name = _display_name_for(bare, disp_suffix, md_exact[3])
+                if want_name and m.get("display_name") != want_name:
+                    _log(f"显示名 {slug}: {m.get('display_name')!r} -> {want_name!r} (models.dev)")
+                    m["display_name"] = want_name
+                    updated += 1
             # 档位：registry 手工实测条目不动；否则 models.dev > opencodex
             if not (_reg.get(bare) or _reg.get(lookup)):
                 levels = (md[1] if md else None) or (up[1] if up else None)

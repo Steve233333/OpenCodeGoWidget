@@ -75,7 +75,8 @@ do
     say_ok "$rel 跟电脑上一样"
   else
     # 允许一点点不一样（比如占位符），只报大不同
-    lines_diff=$(diff -u "$widget_path" "$home_path" 2>/dev/null | wc -l | tr -d ' ')
+    # 注：diff 发现不同时退出码为 1，pipefail 下必须 || true，否则脚本在此直接暴毙、后半段永远跑不到
+    lines_diff=$(diff -u "$widget_path" "$home_path" 2>/dev/null | wc -l | tr -d ' ' || true)
     if [ "$lines_diff" -gt 20 ]; then
       say_bad "$rel 跟电脑上差很多（$lines_diff 行）"
       echo "   跑 sync-from-home.sh 同步一下"

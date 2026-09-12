@@ -35,6 +35,11 @@
  "nemotron-3.5-lightning": [
   "high"
  ],
+ "deepseek-flash": [
+  "low",
+  "high",
+  "max"
+ ],
  "glm-5.3-flash": [
   "low",
   "high",
@@ -120,11 +125,6 @@
  "qwen3.6-plus": [
   "high"
  ],
- "deepseek-flash": [
-  "low",
-  "high",
-  "max"
- ],
  "deepseek-v4-pro": [
   "high",
   "max"
@@ -190,5 +190,10 @@
  ],
  "nemotron-3.5-lightning-free": [
   "high"
+ ],
+ "deepseek-v4.1-flash": [
+  "low",
+  "high",
+  "max"
  ]
 }
