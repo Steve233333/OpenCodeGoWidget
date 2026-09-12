@@ -371,13 +371,75 @@ def _parse_chat_stream_chunks(raw):
 
 
 def _sanitize_fc_args(args):
-    """Ensure tool-call arguments are valid JSON object bytes (fault 21 insurance)."""
+    """Ensure tool-call arguments are valid JSON object bytes (fault 21 insurance).
+
+    Also normalizes whole-number floats to int: Muse via Zen/Go emits e.g.
+    yield_time_ms 30000.0 / max_output_tokens 8000.0 while the Codex Rust
+    executor parses integer params as u64 and rejects the call, which the
+    model then retries forever. Healthy args pass through byte-identical.
+    """
     try:
         json.loads(args)
-        return args
+        repaired = args
     except Exception:
         repaired = _repair_json_object_args(args)
-        return repaired if repaired else args
+        if not repaired:
+            return args
+    return _coerce_float_ints_in_args_str(repaired)
+
+
+def _coerce_float_ints(obj):
+    """Recursively convert whole-number floats to int, in place.
+
+    Returns True if anything changed. True floats (0.5, 2.5...), strings,
+    bools and out-of-int64-range values are left untouched (fail-safe).
+    """
+    changed = False
+    if isinstance(obj, dict):
+        items = obj.items()
+    elif isinstance(obj, list):
+        items = enumerate(obj)
+    else:
+        return False
+    for key, value in items:
+        if isinstance(value, float):
+            if value.is_integer() and abs(value) < 2 ** 53:
+                obj[key] = int(value)
+                changed = True
+        elif isinstance(value, (dict, list)):
+            if _coerce_float_ints(value):
+                changed = True
+    return changed
+
+
+def _coerce_float_ints_in_args_str(args):
+    """Coerce whole-number floats to int inside a tool-call arguments JSON string.
+
+    Response-path counterpart of the request-history repair: the parsed shape
+    is what the Codex executor validates, so normalizing here (before the
+    client ever sees the bytes) breaks the Muse float retry loop at the source.
+    Fail-safe: returns the input unchanged when it is not a JSON object string
+    or when nothing needs fixing (no log spam, byte-identical passthrough).
+    """
+    if not isinstance(args, str) or not args:
+        return args
+    try:
+        obj = json.loads(args)
+    except Exception:
+        return args
+    if not isinstance(obj, dict):
+        return args
+    try:
+        if not _coerce_float_ints(obj):
+            return args
+    except Exception:
+        return args
+    try:
+        fixed = json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        return args
+    _log("[vision-proxy] coerced float->int in tool-call arguments for Codex u64 params")
+    return fixed
 
 
 def _bridge_base_response(model, status="in_progress"):
@@ -1074,6 +1136,8 @@ def _normalize_fc_args_history(parsed):
     Same root cause as _repair_json_object_args: sessions that ran while the
     upstream adapter was dropping `{"` carry malformed arguments items; the
     model imitates its own malformed history when they are replayed verbatim.
+    Whole-number floats are coerced to int for the same imitation reason
+    (Muse re-emits yield_time_ms 30000.0 seen in its own history).
     Only zen/go routes call this; healthy history is left byte-identical.
     """
     input_items = parsed.get("input") if isinstance(parsed, dict) else None
@@ -1084,12 +1148,17 @@ def _normalize_fc_args_history(parsed):
         if not isinstance(item, dict) or item.get("type") != "function_call":
             continue
         args = item.get("arguments")
-        if not _fc_args_broken(args):
-            continue
-        fixed = _repair_json_object_args(args)
-        if fixed != args:
-            item["arguments"] = fixed
-            changed = True
+        if _fc_args_broken(args):
+            fixed = _repair_json_object_args(args)
+            if fixed != args:
+                item["arguments"] = fixed
+                changed = True
+        args = item.get("arguments")
+        if isinstance(args, str):
+            coerced = _coerce_float_ints_in_args_str(args)
+            if coerced != args:
+                item["arguments"] = coerced
+                changed = True
     if changed:
         _log("[vision-proxy] repaired malformed function_call arguments in zen/go request history")
     return changed
@@ -1380,12 +1449,24 @@ def _rewrite_apply_patch_response_json(body):
             return body
         changed = False
         for item in output:
-            if isinstance(item, dict) and item.get("type") == "function_call" and _is_apply_patch_name(item.get("name")):
+            if not (isinstance(item, dict) and item.get("type") == "function_call"):
+                continue
+            if _is_apply_patch_name(item.get("name")):
                 item["type"] = "custom_tool_call"
                 item["input"] = _extract_apply_patch_input(item.get("arguments"))
                 item.pop("arguments", None)
                 item.setdefault("status", "completed")
                 changed = True
+                continue
+            # Generic function calls (e.g. Muse exec_command with float
+            # yield_time_ms): coerce whole-number floats so the Codex Rust
+            # executor (u64 integer params) accepts the call.
+            args = item.get("arguments")
+            if isinstance(args, str):
+                fixed_args = _coerce_float_ints_in_args_str(args)
+                if fixed_args != args:
+                    item["arguments"] = fixed_args
+                    changed = True
         if not changed:
             return body
         return json.dumps(parsed, ensure_ascii=False).encode()
@@ -1453,6 +1534,23 @@ def _flush_apply_patch(entry, interrupted=False):
     except Exception as exc:
         _log(f"[vision-proxy] apply_patch flush failed, announced item may hang: {exc!r}")
         return []
+
+
+def _rebuild_sse_frame(frame, payload, etype):
+    """Re-serialize one parsed SSE frame after a targeted payload mutation.
+
+    Preserves the original framing style (bare `data:` vs `event:`+`data:`).
+    sequence_number lives inside payload and is kept as-is. Callers only
+    invoke this after a successful mutation, so the frame always changes.
+    """
+    try:
+        text = frame.decode("utf-8", errors="replace")
+    except Exception:
+        text = ""
+    data = json.dumps(payload, ensure_ascii=False)
+    if any(line.startswith("event:") for line in text.splitlines()):
+        return [f"event: {etype}\ndata: {data}\n\n".encode()]
+    return [f"data: {data}\n\n".encode()]
 
 
 def _rewrite_sse_frame(frame, state):
@@ -1540,6 +1638,14 @@ def _rewrite_sse_frame(frame, state):
                     entry["args_acc"] = arguments
                 flushed.add(item_id)
                 return _flush_apply_patch(entry, interrupted=False)
+            # Untracked generic call (e.g. Muse exec_command): coerce floats
+            # in place so the Codex executor accepts the arguments.
+            arguments = payload.get("arguments")
+            if isinstance(arguments, str):
+                fixed = _coerce_float_ints_in_args_str(arguments)
+                if fixed != arguments:
+                    payload["arguments"] = fixed
+                    return _rebuild_sse_frame(frame, payload, etype)
             return [frame]
 
         if etype == "response.output_item.done":
@@ -1566,6 +1672,16 @@ def _rewrite_sse_frame(frame, state):
                         entry["args_acc"] = arguments
                 flushed.add(item_id)
                 return _flush_apply_patch(entry, interrupted=interrupted)
+            if item.get("type") == "function_call":
+                # Untracked generic call: same float->int normalization as the
+                # arguments.done branch (covers upstreams that only send the
+                # terminal item frame).
+                arguments = item.get("arguments")
+                if isinstance(arguments, str):
+                    fixed = _coerce_float_ints_in_args_str(arguments)
+                    if fixed != arguments:
+                        item["arguments"] = fixed
+                        return _rebuild_sse_frame(frame, payload, etype)
             return [frame]
 
         return [frame]

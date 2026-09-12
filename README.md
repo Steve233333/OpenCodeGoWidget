@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.8.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.9.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.8.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.9.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -93,13 +93,20 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.8.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.8.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.9.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.9.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.8.9 — Muse 浮点参数死循环修复（2026-09-12）
+
+- **修复 Muse 在 Codex 副本里的工具调用死循环**：Muse 经 Go 网关回来的工具参数里整数常带 `.0`（如 `yield_time_ms: 30000.0`、`max_output_tokens: 8000.0`），Codex 原生执行器只认整数，直接拒收，模型嘴上说"参数类型写错了"实际每次发一样的，原地空转十几轮。代理现在统一归一化：SSE `function_call_arguments.done` / `output_item.done`、非流 JSON、chat 桥、历史回放五条路径全覆盖，真小数/字符串/bool 不动，健康参数字节级透传。
+- **9 月 2 日修过一次同类问题**，当时补丁落在临时目录没合进仓库所以复发了，这次正式合入 + 补回归测试，不会再丢。
+- 测试：`test_units.py` 21/21、`test_robust.py` 31/31、`test_model_discovery_robust.py` 14/14。
+- 版本 **1.1.8.9 (19)**。
 
 ### v1.1.8.8 — 应用内更新 + 视觉代理下线（2026-09-10）
 

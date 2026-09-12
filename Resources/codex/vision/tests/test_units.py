@@ -203,6 +203,100 @@ def test_budget():
     assert completed["response"]["status"] in ("completed", "incomplete")
 
 
+# ---------------------------------------------------------------- muse float->int (fault: Codex u64 vs 30000.0)
+MUSE_FLOAT_ARGS = '{"cmd":"curl -sL \\"https://example.com\\" | head -150","yield_time_ms":30000.0}'
+
+
+def t_coerce_float_muse_case():
+    """Exact 2026-09-12 Muse loop: yield_time_ms 30000.0 must become int 30000."""
+    fixed = vp._coerce_float_ints_in_args_str(MUSE_FLOAT_ARGS)
+    obj = json.loads(fixed)
+    assert obj["yield_time_ms"] == 30000 and isinstance(obj["yield_time_ms"], int), fixed
+    assert obj["cmd"].startswith("curl -sL"), fixed
+
+
+def t_coerce_float_nested_and_preserve():
+    src = '{"a": {"b": [1.0, 2.5, {"c": 8000.0}]}, "t": 0.5, "s": "30000.0", "flag": true, "n": null}'
+    obj = json.loads(vp._coerce_float_ints_in_args_str(src))
+    assert obj["a"]["b"] == [1, 2.5, {"c": 8000}], obj
+    assert isinstance(obj["a"]["b"][0], int) and isinstance(obj["a"]["b"][1], float)
+    assert obj["t"] == 0.5 and obj["s"] == "30000.0" and obj["flag"] is True and obj["n"] is None
+
+
+def t_coerce_float_passthrough():
+    healthy = '{"yield_time_ms": 30000, "cmd": "ls"}'
+    assert vp._coerce_float_ints_in_args_str(healthy) == healthy
+    for bad in ("", "not json", "[1, 2]", "42", "null"):
+        assert vp._coerce_float_ints_in_args_str(bad) == bad, bad
+    assert vp._coerce_float_ints_in_args_str(None) is None
+
+
+def t_sanitize_fc_args_coerces_float():
+    out = vp._sanitize_fc_args(MUSE_FLOAT_ARGS)
+    assert json.loads(out)["yield_time_ms"] == 30000, out
+    healthy = '{"a": 1}'
+    assert vp._sanitize_fc_args(healthy) == healthy
+
+
+def _done_frame(args, event_style=False):
+    payload = {"type": "response.function_call_arguments.done", "item_id": "fc_1",
+               "output_index": 0, "arguments": args}
+    body = json.dumps(payload)
+    if event_style:
+        return f"event: response.function_call_arguments.done\ndata: {body}\n\n".encode()
+    return f"data: {body}\n\n".encode()
+
+
+def t_sse_done_frame_coerce():
+    for event_style in (False, True):
+        out = vp._rewrite_sse_frame(_done_frame(MUSE_FLOAT_ARGS, event_style),
+                                    {"pending": {}, "completed": False})
+        assert len(out) == 1, out
+        text = out[0].decode()
+        if event_style:
+            assert text.startswith("event: response.function_call_arguments.done"), text
+        else:
+            assert text.startswith("data: "), text
+        data_line = [l for l in text.splitlines() if l.startswith("data: ")][0]
+        assert json.loads(json.loads(data_line[6:])["arguments"])["yield_time_ms"] == 30000, text
+
+
+def t_sse_done_frame_healthy_passthrough():
+    healthy = '{"yield_time_ms": 30000}'
+    frame = _done_frame(healthy)
+    assert vp._rewrite_sse_frame(frame, {"pending": {}, "completed": False}) == [frame]
+
+
+def t_sse_output_item_done_coerce():
+    item = {"id": "fc_1", "type": "function_call", "status": "completed",
+            "call_id": "call_1", "name": "exec_command", "arguments": MUSE_FLOAT_ARGS}
+    frame = ("data: " + json.dumps({"type": "response.output_item.done",
+                                    "output_index": 0, "item": item}) + "\n\n").encode()
+    out = vp._rewrite_sse_frame(frame, {"pending": {}, "completed": False})
+    assert len(out) == 1
+    got = json.loads([l for l in out[0].decode().splitlines() if l.startswith("data: ")][0][6:])
+    assert json.loads(got["item"]["arguments"])["yield_time_ms"] == 30000, got
+
+
+def t_nonstream_json_coerce_generic():
+    body = json.dumps({"output": [
+        {"type": "function_call", "name": "exec_command", "call_id": "call_1",
+         "arguments": MUSE_FLOAT_ARGS, "status": "completed"}]}).encode()
+    out = vp._rewrite_apply_patch_response_json(body)
+    assert out != body
+    item = json.loads(out)["output"][0]
+    assert item["type"] == "function_call"  # generic call untouched except args
+    assert json.loads(item["arguments"])["yield_time_ms"] == 30000, item
+
+
+def t_history_coerce_float():
+    parsed = {"model": "muse-spark-1.3-contributor", "input": [
+        {"type": "function_call", "call_id": "c1", "name": "exec_command",
+         "arguments": MUSE_FLOAT_ARGS}]}
+    assert vp._normalize_fc_args_history(parsed) is True
+    assert json.loads(parsed["input"][0]["arguments"])["yield_time_ms"] == 30000
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)
