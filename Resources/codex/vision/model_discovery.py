@@ -62,6 +62,10 @@ ZEN_FREE_LEGACY = [
 ZEN_FREE_IDS = ZEN_FREE_LEGACY  # 兼容旧引用；抓取失败时的回退名单
 ZEN_CACHE_FILE = CACHE_DIR / "zen_models_cache.json"
 REASONING_REGISTRY = CACHE_DIR / "reasoning_registry.json"
+# 剪枝挂起表：模型第一次从配额表消失时只记一笔，要连续缺席 PRUNE_GRACE_SECONDS
+# 才真剪。上游改文档/页面截断/正则撞车都不会再当场删掉能用的模型。
+PRUNE_PENDING_FILE = CACHE_DIR / "prune_pending.json"
+PRUNE_GRACE_SECONDS = 12 * 3600  # 两轮（launchd 每 6 小时跑一次）
 GENERIC_REASONING = ["high"]
 
 # 手工锁定的显示名 base（不含 "(Go)"/"(Zen)" 后缀）：
@@ -195,15 +199,87 @@ def _log(msg):
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 QUOTA_CACHE_FILE = CACHE_DIR / "go_quota_cache.json"
+# 最近一次成功抓到的配额页（剥标签、只留字母数字的归一化文本）。
+# 用途：剪枝前的安全闸——文档里还写着这个模型，就说明是解析漏行而不是上游下架。
+LAST_QUOTA_PAGE = ""
+
+_TAG_RE = re.compile(r"<[^>]*>")
+
+def _norm_key(s):
+    """归一化到只剩字母数字，用于「文档里还提不提到这个 id」的判断。"""
+    return re.sub(r"[^a-z0-9]", "", str(s).lower())
+
+def _strip_tags(s):
+    return _TAG_RE.sub(" ", s)
+
+def _cell_value(cell):
+    """取单元格的「当前生效值」。
+
+    配额表会给促销行加装饰：<del>旧值</del><br><strong>新值</strong>。
+    有 <strong> 就取最后一个（当前值），否则整格剥标签。
+    """
+    strong = re.findall(r"<strong>(.*?)</strong>", cell, re.S | re.I)
+    raw = strong[-1] if strong else cell
+    return re.sub(r"\s+", " ", _strip_tags(raw)).strip()
+
+def _cell_name(cell):
+    """取行名：先丢掉 <br> 后面的促销备注（如 `4x · 9 月 20 日结束`）再剥标签。"""
+    head = re.split(r"<br\s*/?>", cell, maxsplit=1, flags=re.I)[0]
+    strong = re.findall(r"<strong>(.*?)</strong>", head, re.S | re.I)
+    raw = strong[-1] if strong else head
+    return re.sub(r"\s+", " ", _strip_tags(raw)).strip()
+
+def parse_quota_rows(html):
+    """解析配额表 -> [(名称, 5小时, 每周, 每月)]，容忍单元格里的任意嵌套标签。
+
+    2026-09-14 事故：官方给 DeepSeek V4.1 Flash 那行加了
+    `<br><small>4x · 9 月 20 日结束</small>` 和 `<del>6500</del><br><strong>26000</strong>`
+    双值，旧正则 `<td>([^<]+)</td>` 匹配不到带标签的单元格 -> 整行消失 ->
+    配额 id 27->26 -> 同步把 deepseek-v4.1-flash-go 当野模型剪掉，Codex 里再也选不到。
+    所以这里一律「剥标签取文本」，不再假设单元格是纯文本。
+    """
+    rows = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I):
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S | re.I)
+        if len(cells) != 4:
+            continue
+        rows.append((_cell_name(cells[0]), _cell_value(cells[1]),
+                     _cell_value(cells[2]), _cell_value(cells[3])))
+    return rows
+
+def _quota_page_key():
+    """本次（或缓存里上次成功抓取）配额页的归一化文本。"""
+    if LAST_QUOTA_PAGE:
+        return LAST_QUOTA_PAGE
+    try:
+        return json.loads(QUOTA_CACHE_FILE.read_text()).get("page_norm") or ""
+    except Exception:
+        return ""
+
+def _load_prune_pending():
+    """{bare_id: 首次发现缺席的时间戳}；读不到就当空。"""
+    d = _read_json(PRUNE_PENDING_FILE, {})
+    return d if isinstance(d, dict) else {}
+
+def _save_prune_pending(d):
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = PRUNE_PENDING_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1) + "\n")
+        tmp.replace(PRUNE_PENDING_FILE)
+    except Exception as e:
+        _log(f"prune_pending 写失败: {e!r}")
 
 def fetch_quota_ids(timeout=TIMEOUT):
     """Fetch Go quota table as ids; auto-detect free rows (三列全 -/限免 => free) like Widget."""
+    global LAST_QUOTA_PAGE
     for url in GO_DOCS_URLS:
         try:
             req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0","Accept":"*/*"})
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 html = r.read().decode(errors="replace")
-            rows = re.findall(r"<tr>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>\s*</tr>", html)
+            rows = parse_quota_rows(html)
+            page_key = _norm_key(_strip_tags(html))
             # filter header row and price table
             filtered = []
             for x in rows:
@@ -242,9 +318,21 @@ def fetch_quota_ids(timeout=TIMEOUT):
                 if rid and rid not in ids:
                     ids.append(rid)
             if len(ids) >= 10:
+                LAST_QUOTA_PAGE = page_key
+                # 与上次成功抓取对比：少了谁、少的那个是不是还在页面上（=解析漏行）
+                prev_ids = []
+                try:
+                    prev_ids = json.loads((CACHE_DIR / "go_quota_cache.json").read_text()).get("ids") or []
+                except Exception:
+                    prev_ids = []
+                gone = [i for i in prev_ids if i not in ids]
+                if gone:
+                    still = [i for i in gone if _norm_key(i) and _norm_key(i) in page_key]
+                    _log(f"quota ids {len(prev_ids)} -> {len(ids)}，减少 {gone}"
+                         + (f"；其中 {still} 在页面上仍出现 -> 判定解析漏行，剪枝已拦" if still else ""))
                 try:
                     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                    qc = {"ids": ids, "fetchedAt": int(time.time())}
+                    qc = {"ids": ids, "fetchedAt": int(time.time()), "page_norm": page_key}
                     (CACHE_DIR / "go_quota_cache.json").write_text(json.dumps(qc, ensure_ascii=False))
                 except Exception:
                     pass
@@ -257,6 +345,7 @@ def fetch_quota_ids(timeout=TIMEOUT):
         qc = json.loads((CACHE_DIR / "go_quota_cache.json").read_text())
         if time.time() - qc.get("fetchedAt",0) < QUOTA_TTL:
             ids = qc["ids"]
+            LAST_QUOTA_PAGE = qc.get("page_norm") or ""
             _log(f"quota cache -> {len(ids)} ids")
             return ids
     except Exception:
@@ -679,7 +768,14 @@ def sync(force=False, dry_run=False):
             return 0
 
     # also fetch Zen Free 7
+    try:
+        prev_zen = json.loads(ZEN_CACHE_FILE.read_text()).get("ids") or []
+    except Exception:
+        prev_zen = []
     zen_ids = fetch_zen_free_ids()
+    gone_zen = [i for i in prev_zen if i not in set(zen_ids)]
+    if gone_zen:
+        _log(f"zen ids {len(prev_zen)} -> {len(zen_ids)}，减少 {gone_zen}（若上游只是抽风，下轮会自动回来）")
     zen_slugs = {i + "-zen" if i != "big-pickle" else "big-pickle-zen" for i in zen_ids}
     # treat Zen ids for template lookup (map to same)
     j = load_models_json()
@@ -716,8 +812,15 @@ def sync(force=False, dry_run=False):
     # Prune wild Go models not in quota (乱七八糟的) ; keep Zen separately
     quota_bare = set(ids)
     zen_bare = set(zen_ids)
+    # 剪枝安全闸（2026-09-14 事故后加）：配额页里还出现这个名字，就说明是我们没解析出来
+    # （官方给行加了促销装饰/改了表格结构），不是上游下架 —— 这时候绝不能把模型剪掉。
+    page_key = _quota_page_key()
+    pending = _load_prune_pending()
+    now = int(time.time())
     to_keep = []
     pruned = []
+    held = []
+    graced = []
     for m in models:
         slug = m.get("slug","")
         if slug.endswith("-zen"):
@@ -732,11 +835,32 @@ def sync(force=False, dry_run=False):
             continue
         bare = slug[:-3]
         if bare in quota_bare:
+            pending.pop(bare, None)
             to_keep.append(m)
+        elif page_key and _norm_key(bare) and _norm_key(bare) in page_key:
+            held.append(slug)
+            to_keep.append(m)
+            pending.pop(bare, None)
         else:
-            pruned.append(slug)
+            # 二次确认：第一次缺席只记账，连续缺席超过宽限期才真剪。
+            # 这样上游改文档 / 抓取截断 / 正则撞车都不会当场删掉能用的模型。
+            first = pending.get(bare)
+            if first is None or now - int(first) < PRUNE_GRACE_SECONDS:
+                if first is None:
+                    pending[bare] = now
+                graced.append(slug)
+                to_keep.append(m)
+            else:
+                pruned.append(slug)
+                pending.pop(bare, None)
+    if held:
+        _log(f"safety-hold 文档里仍提到但没进配额表，判为解析漏行、本次不剪: {held}")
+    if graced:
+        _log(f"prune-grace 首次缺席（未满 {PRUNE_GRACE_SECONDS // 3600}h），先挂起不剪: {graced}")
     if pruned:
         _log(f"prune wild not in quota/zen: {pruned}")
+    if not dry_run:
+        _save_prune_pending(pending)
 
     # 存量模型的上下文/档位自动同步（registry 手工实测 > models.dev > opencodex；ultra 等无需发版）
     if modelsdev_map or upstream_map:

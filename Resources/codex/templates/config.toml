@@ -10,6 +10,11 @@ appearanceTheme = "system"
 localeOverride = "zh-CN"
 defaultTerminalLocation = "bottom"
 
+# 模型推理档位三层对齐的「桌面层」：滑杆能选哪些档位由这里决定。
+# 取值与 model_discovery.py 的 _effective_whitelist() 一致（app 默认档 + 目录里出现过的档位），
+# 装在模板里是为了「装完即对齐」——不再依赖首次同步成功（VPN/SSL 抽风时也不会少档）。
+enabled-reasoning-efforts = ["low", "medium", "high", "xhigh", "max", "ultra", "persistent"]
+
 [features]
 memories = false
 js_repl = false

@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.9.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.0.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.9.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.0.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -93,13 +93,22 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.9.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.8.9.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.0.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.0.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.0 — 配额表解析不再漏行 + 档位对齐补齐（2026-09-14）
+
+- **修复模型"自己消失"**：官方给 Go 配额表里的 DeepSeek V4.1 Flash 那行加了 4x 促销标记（单元格变成 `<br><small>` 备注 + `<del>旧值</del>/<strong>新值</strong>` 双值），旧解析只认纯文本单元格，整行匹配失败 → 配额 id 27→26 → 同步把 `deepseek-v4.1-flash-go` 当野模型剪掉，Codex 的模型列表里再也选不到。现在解析一律剥标签取文本：行名丢掉 `<br>` 后面的促销备注，配额取当前生效值（`<strong>`，不是被划掉的 `<del>`）。
+- **剪枝双闸**：① 文档页里还出现该模型 → 判为解析漏行，`safety-hold` 不剪；② 首次缺席只记账，连续缺席超过 12 小时（两轮同步）才剪。上游改文档格式、抓取截断、正则撞车都不会再当场删掉能用的模型，日志会写明谁被 hold / 谁在挂起。
+- **档位对齐补齐到安装模板**：`templates/config.toml` 的 `[desktop]` 现在自带 `enabled-reasoning-efforts`，取值与 `model_discovery.py` 的 `_effective_whitelist()` 一致（app 默认档 + 目录里出现过的档位）。新机器装完即可看到全部档位，不再依赖首次同步成功（VPN/SSL 抽风时也不会少档）。
+- **档位矩阵重生成**：`docs/MODEL-MATRIX.md` 基线更新到 2026-09-14，37 个模型的档位/协议/搜索列与本机目录一致（此前仍停在已改名的 `deepseek-flash-go`）。
+- 回归测试：`test_model_discovery_robust.py` 新增 `t_quota_nested_markup_row`（带装饰标签的行必须解析出来）与 `t_prune_safety_hold`（解析漏行不剪、首次缺席挂起、连续缺席才剪），四套件 76 例全绿。
+- 版本 **1.1.9.0 (20)**。
 
 ### v1.1.8.9 — Muse 浮点参数死循环修复（2026-09-12）
 

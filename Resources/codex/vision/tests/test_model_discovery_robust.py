@@ -95,6 +95,112 @@ def t_quota_empty_html():
     finally:
         md.urllib.request.urlopen = orig
 
+def t_quota_nested_markup_row():
+    """2026-09-14 事故回归：配额行带 <br><small>/<del>/<strong> 装饰时不能漏行。
+
+    旧实现用 `<td>([^<]+)</td>` 逐格匹配纯文本，官方给 DeepSeek V4.1 Flash 那行
+    加了促销装饰后整行匹配失败 -> 配额 id 27->26 -> 同步把它当野模型剪掉，
+    Codex 的模型列表里就再也选不到了。
+    """
+    names = ["Kimi K3", "Qwen3.8 Max", "Grok 4.6", "GLM-5.3-Flash", "GLM-5.3",
+             "GLM-5.2", "GLM-5.1", "Kimi K2.7 Code", "Kimi K2.6", "LongCat-2.0"]
+    html = "<table><tr><td>模型</td><td>每5小时</td><td>每周</td><td>每月</td></tr>"
+    for n in names:
+        html += f"<tr><td>{n}</td><td>100</td><td>200</td><td>300</td></tr>"
+    html += ('<tr><td>DeepSeek V4.1 Flash<br><small>4x · 9 月 20 日结束</small></td>'
+             '<td><del>6,500</del><br><strong>26,000</strong></td>'
+             '<td><del>16,250</del><br><strong>65,000</strong></td>'
+             '<td><del>32,500</del><br><strong>130,000</strong></td></tr></table>')
+    # 行名不带促销备注；配额取当前生效值（<strong>）而不是被划掉的旧值
+    rows = md.parse_quota_rows(html)
+    assert ("DeepSeek V4.1 Flash", "26,000", "65,000", "130,000") in rows, rows
+
+    orig_open, orig_align = md.urllib.request.urlopen, md._align_remote_id
+    orig_cache_dir, orig_page = md.CACHE_DIR, md.LAST_QUOTA_PAGE
+    with tempfile.TemporaryDirectory() as td:
+        md.CACHE_DIR = pathlib.Path(td)
+        md.LAST_QUOTA_PAGE = ""
+        def fake_open(req, timeout=10):
+            class R:
+                def __enter__(self): return self
+                def __exit__(self,*a): pass
+                def read(self): return html.encode()
+            return R()
+        md.urllib.request.urlopen = fake_open
+        md._align_remote_id = lambda norm, guess: guess
+        try:
+            ids = md.fetch_quota_ids(timeout=2)
+            assert ids and len(ids) == len(names) + 1, ids
+            assert "deepseek-flash" in ids, ids
+            # 页面归一化文本要记下来，剪枝安全闸靠它判断"文档里还提不提到"
+            assert md.LAST_QUOTA_PAGE, "page_norm 未记录，剪枝安全闸会失效"
+            assert md._norm_key("deepseek-v4.1-flash") in md.LAST_QUOTA_PAGE
+        finally:
+            md.urllib.request.urlopen = orig_open
+            md._align_remote_id = orig_align
+            md.CACHE_DIR = orig_cache_dir
+            md.LAST_QUOTA_PAGE = orig_page
+
+def t_prune_safety_hold():
+    """解析漏行/单次抓取异常都不许当场删模型：
+
+    1) 文档里还出现的 -> safety-hold（判为解析漏行，永久保留）；
+    2) 第一次缺席的 -> prune-grace（挂起一轮，第二次仍缺席才剪）。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        home = pathlib.Path(td)
+        orig_home = pathlib.Path.home
+        pathlib.Path.home = lambda: home
+        keys = ("CODEX_HOME", "MODELS_JSON", "CACHE_DIR", "CACHE_FILE", "QUOTA_CACHE_FILE",
+                "PRUNE_PENDING_FILE", "LAST_QUOTA_PAGE")
+        fns = ("fetch_quota_ids", "fetch_zen_free_ids", "fetch_remote_ids",
+               "fetch_upstream_details", "fetch_modelsdev")
+        orig_vals = {k: getattr(md, k) for k in keys}
+        orig_fns = {k: getattr(md, k) for k in fns}
+        try:
+            md.CODEX_HOME = home / ".codex-deepseek"
+            md.MODELS_JSON = md.CODEX_HOME / "models.json"
+            md.CACHE_DIR = home / ".local/share/agent-vision-toolkit"
+            md.CACHE_FILE = md.CACHE_DIR / "go_models_cache.json"
+            md.QUOTA_CACHE_FILE = md.CACHE_DIR / "go_quota_cache.json"
+            md.PRUNE_PENDING_FILE = md.CACHE_DIR / "prune_pending.json"
+            md.CODEX_HOME.mkdir(parents=True, exist_ok=True)
+            md.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            md.MODELS_JSON.write_text(json.dumps({"models": [
+                {"slug": "deepseek-v4.1-flash-go", "priority": 1, "visibility": "list",
+                 "display_name": "DeepSeek-V4.1-Flash (Go)"},
+                {"slug": "kimi-k2.5-go", "priority": 2, "visibility": "list",
+                 "display_name": "Kimi-K2.5 (Go)"},
+                {"slug": "mimo-v2.5-go", "priority": 3, "visibility": "list",
+                 "display_name": "MiMo-V2.5 (Go)"},
+            ]}))
+            # 模拟事故现场：配额表漏了 V4.1 那一行
+            md.fetch_quota_ids = lambda timeout=10: ["mimo-v2.5"]
+            md.fetch_zen_free_ids = lambda timeout=10: []
+            md.fetch_remote_ids = lambda timeout=10: None
+            md.fetch_upstream_details = lambda: {}
+            md.fetch_modelsdev = lambda: {}
+            md.LAST_QUOTA_PAGE = md._norm_key("DeepSeek V4.1 Flash 26,000 65,000 130,000")
+            # 第一轮：文档里还有的 hold 住；真野的 kimi 进 grace（首次缺席不剪）
+            md.sync(force=True, dry_run=False)
+            slugs = [m["slug"] for m in json.loads(md.MODELS_JSON.read_text())["models"]]
+            assert "deepseek-v4.1-flash-go" in slugs, f"文档里仍有该模型却被剪: {slugs}"
+            assert "mimo-v2.5-go" in slugs, slugs
+            assert "kimi-k2.5-go" in slugs, f"首次缺席不该当场剪: {slugs}"
+            assert "kimi-k2.5" in json.loads(md.PRUNE_PENDING_FILE.read_text()), "缺席未记账"
+            # 第二轮：宽限期已过（把首次缺席时间改成 epoch 0）才真剪
+            md.PRUNE_PENDING_FILE.write_text(json.dumps({"kimi-k2.5": 0}))
+            md.sync(force=True, dry_run=False)
+            slugs = [m["slug"] for m in json.loads(md.MODELS_JSON.read_text())["models"]]
+            assert "kimi-k2.5-go" not in slugs, f"连续缺席该剪没剪: {slugs}"
+            assert "deepseek-v4.1-flash-go" in slugs, f"文档里仍有该模型却被剪: {slugs}"
+        finally:
+            pathlib.Path.home = orig_home
+            for k, v in orig_vals.items():
+                setattr(md, k, v)
+            for k, v in orig_fns.items():
+                setattr(md, k, v)
+
 # ---------- fetch_remote_ids shapes ----------
 
 def t_fetch_remote_shapes():
