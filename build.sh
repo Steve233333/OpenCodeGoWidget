@@ -48,6 +48,16 @@ if [ "${SKIP_DRIFT_CHECK:-0}" != "1" ]; then
   fi
 fi
 
+echo "==> 配额解析自检（离线 fixture；官方给配额表加装饰时会立刻报错）"
+if [ "${SKIP_QUOTA_TEST:-0}" != "1" ]; then
+  if [ -x "scripts/test-quota-parse.sh" ]; then
+    if ! "scripts/test-quota-parse.sh"; then
+      echo "!! 配额解析自检没过，先修好再打包（或 SKIP_QUOTA_TEST=1 ./build.sh 跳过）"
+      exit 1
+    fi
+  fi
+fi
+
 echo "==> 编写 Info.plist"
 cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -63,8 +73,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.1.9.0</string>
-	<key>CFBundleVersion</key><string>20</string>
+	<key>CFBundleShortVersionString</key><string>1.1.9.1</string>
+	<key>CFBundleVersion</key><string>21</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
@@ -86,8 +96,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.1.9.0</string>
-	<key>CFBundleVersion</key><string>20</string>
+	<key>CFBundleShortVersionString</key><string>1.1.9.1</string>
+	<key>CFBundleVersion</key><string>21</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
 	<key>NSExtension</key><dict>

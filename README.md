@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.0.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.1.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.0.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.1.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -93,13 +93,23 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.0.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.0.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.1.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.1.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.1 — 小组件的配额表也能看到 DeepSeek V4.1 Flash 了（2026-09-14）
+
+- **修复「配额面板少一行」**：官方给 V4.1 Flash 那行加了促销装饰（名字带 `<br><small>4x · 9 月 20 日结束</small>`，数值是 `<del>旧值</del><br><strong>新值</strong>`），小组件沿用的解析要求单元格是纯文本，整行匹配失败 → 这一行直接消失了。现在解析改成「按行取格、剥标签取文本」：名字丢掉 `<br>` 之后的备注，数值取 `<strong>` 的当前值。
+- **促销额度看得懂**：V4.1 Flash 显示 4x 后的当前额度 26,000 / 65,000 / 130,000，行内带一个橙色 `4x` 小标签（悬停看完整备注「4x · 9 月 20 日结束」）。
+- **一眼区分容易混的两行**：模型名列从 130pt 加宽到 150pt —— 之前 `DeepSeek V4 Flash Vision Exp` 被截断成「DeepSeek V4 Flas…」，和 `DeepSeek V4 Flash` 长得几乎一样。
+- **缓存键升级到 v2**：否则升级后 12 小时 TTL 内还会继续显示缺 V4.1 的旧列表；现在装完立刻重抓。
+- **兜底名单整表刷新**：离线/首装的硬编码名单按 2026-09-14 实时表重写（27 行，含 `deepseek-v4.1-flash`），顺带修掉 `deepseek-v4-flash=7600`、`qwen3.7-max=340`、`flash-vision-exp=3800` 三处过期数字。
+- **打包门禁加一道自检**：`scripts/test-quota-parse.sh` 用官方真实片段做离线 fixture 回归（促销装饰行 / 价格行 / 模型清单行 / <10 行闸门），`build.sh` 里不通过就不让打包；`--live` 模式可另抓真实页面冒烟。同一天 Python 端 `model_discovery.py` 修的是同一个病根。
+- 版本 **1.1.9.1 (21)**。
 
 ### v1.1.9.0 — 配额表解析不再漏行 + 档位对齐补齐（2026-09-14）
 

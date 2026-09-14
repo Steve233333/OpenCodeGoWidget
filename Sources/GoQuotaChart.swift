@@ -72,7 +72,7 @@ struct GoQuotaChart: View {
             }
             // 列头
             HStack(spacing: 6) {
-                Text("模型").font(.system(size: 8)).foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
+                Text("模型").font(.system(size: 8)).foregroundStyle(.secondary).frame(width: 150, alignment: .leading)
                 Text("请求数 (同行三段)").font(.system(size: 8)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.leading, 2)
                 Color.clear.frame(width: 70, height: 8)
@@ -90,7 +90,7 @@ struct GoQuotaChart: View {
             }
             // X 轴刻度：轴优先，与条同尺（ratio），Kimi 1x 对齐其月条末端
             HStack(spacing: 6) {
-                Color.clear.frame(width: 130, height: 1)
+                Color.clear.frame(width: 150, height: 1)
                 GeometryReader { geo in
                     let totalW = geo.size.width
                     // 官网同款：相邻刻度太近时自动隐藏（5x 在小屏通常会被隐藏）
@@ -153,7 +153,7 @@ private struct GoldBarRow: View {
                 Text("∞").font(.system(size: 9, weight: .bold)).frame(width: 36, alignment: .trailing).foregroundStyle(Color(red: 0.85, green: 0.65, blue: 0.13))
                 Text(displayName).font(.system(size: 9)).lineLimit(1).foregroundStyle(.primary)
             }
-            .frame(width: 130, alignment: .leading)
+            .frame(width: 150, alignment: .leading)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.06))
@@ -195,8 +195,15 @@ private struct QuotaBarRowNested: View {
                     Text("-").font(.system(size: 9)).frame(width: 36, alignment: .trailing).foregroundStyle(.secondary)
                 }
                 Text(quota.displayName).font(.system(size: 9)).lineLimit(1).foregroundStyle(.primary)
+                if let badge = quota.badge {
+                    Text(badge)
+                        .font(.system(size: 7, weight: .semibold))
+                        .lineLimit(1)
+                        .foregroundStyle(Color.orange)
+                        .help(quota.note ?? badge)
+                }
             }
-            .frame(width: 130, alignment: .leading)
+            .frame(width: 150, alignment: .leading)
 
             // 嵌套月内：总长 = monthly 在轴上的位置，内部按线性比例（22.45%/51.02%）避免对数膨胀
             GeometryReader { geo in
