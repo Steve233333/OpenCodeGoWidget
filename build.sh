@@ -58,6 +58,16 @@ if [ "${SKIP_QUOTA_TEST:-0}" != "1" ]; then
   fi
 fi
 
+echo "==> 密钥页解析自检（离线 fixture；浏览器登录自动获取依赖它）"
+if [ "${SKIP_KEY_TEST:-0}" != "1" ]; then
+  if [ -x "scripts/test-key-parse.sh" ]; then
+    if ! "scripts/test-key-parse.sh"; then
+      echo "!! 密钥解析自检没过，先修好再打包（或 SKIP_KEY_TEST=1 ./build.sh 跳过）"
+      exit 1
+    fi
+  fi
+fi
+
 echo "==> 编写 Info.plist"
 cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -73,8 +83,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.1.9.1</string>
-	<key>CFBundleVersion</key><string>21</string>
+	<key>CFBundleShortVersionString</key><string>1.1.9.2</string>
+	<key>CFBundleVersion</key><string>22</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
@@ -96,8 +106,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.1.9.1</string>
-	<key>CFBundleVersion</key><string>21</string>
+	<key>CFBundleShortVersionString</key><string>1.1.9.2</string>
+	<key>CFBundleVersion</key><string>22</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
 	<key>NSExtension</key><dict>
@@ -109,7 +119,7 @@ PLIST
 
 echo "==> 编译 App"
 swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
-  Sources/App.swift Sources/CodexInstaller.swift Sources/CodexSetupView.swift Sources/UpdateChecker.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift \
+  Sources/App.swift Sources/CodexInstaller.swift Sources/CodexSetupView.swift Sources/UpdateChecker.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift Sources/OpenCodeKeyFetcher.swift Sources/OpenCodeLoginView.swift \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"

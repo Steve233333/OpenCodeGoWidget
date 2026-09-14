@@ -13,17 +13,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.1.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.2.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.1.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.2.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
 
 <p align="center">
-  <b>下载 → 拖入「应用程序」→ 配 API Key → 添加小组件</b><br/>
+  <b>下载 → 拖入「应用程序」→ 浏览器登录自动配好 → 添加小组件</b><br/>
   <sub>Apple Silicon / Intel · 无需 Homebrew · 数据只存本机</sub>
 </p>
 
@@ -54,14 +54,16 @@ OpenCode Go 的额度分散在官网多个页面：5 小时、周、月要分别
 
 **ZIP 免安装**：解压后直接运行。
 
-### 配置
+### 配置（推荐：浏览器登录自动获取）
 
 1. 打开应用，点右上角齿轮。
-2. 粘贴 OpenCode Go API Key（`opencode.ai → Settings → API Keys` 里的 `sk-...`）。
-3. 想看真实费用图，就再导入一次 workspace：
-   - 粘贴 `https://opencode.ai/workspace/wrk_.../usage` 全链接；或
-   - 在浏览器导出 HAR 后点「选择 HAR 文件」，应用会自动提取 workspace ID 和认证 Cookie。
+2. 点「浏览器登录自动获取」，在弹窗里登录 `opencode.ai`（推荐 GitHub 登录）：
+   - 自动保存 workspace 与 Cookie —— 费用柱状图直接有数据，不用再导 HAR；
+   - 自动拉取官方密钥页，把完整 Go Key 回填到 Keychain 和两个设置栏，点「使用此 Key」即完成替换。
+3. DeepSeek Key（可选）：官方平台只在创建时展示一次，去 DeepSeek 控制台创建后，回到 `Codex 一键配置` 点「剪贴板填入」即可。
 4. 桌面右键 → 编辑小组件 → 搜索「OpenCode Go」→ 添加中尺寸。
+
+手动配置仍可用：粘贴 `sk-...`、粘贴 `https://opencode.ai/workspace/wrk_.../usage` 全链接、或在浏览器导出 HAR 后点「选择 HAR 文件」自动提取。所有密钥都可以在设置页里显示明文、替换或单独清除。
 
 API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，不上传到任何第三方。
 
@@ -88,18 +90,37 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ### 设置与安全
 
 - API Key 存 Keychain；workspace 凭据存 App Group。
+- **密钥可管理**：显示明文、输入新值替换、单独清除（额度 Key、workspace 凭据、Codex Go/DeepSeek Key 均有独立清除入口，清除前弹确认）。
+- **内嵌浏览器登录**：登录 `opencode.ai` 后自动获取 Go Key、workspace 与 Cookie，不用手填；登录凭据只存本机，可一键清除。
 - HAR 导入自动解析裸 workspace ID 和认证 Cookie，不需要手动复制。
 - 开机自启可开关，也可在系统设置的登录项里管理。
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.1.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.1.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.2.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.2.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.2 — 密钥终于能删能换 + 浏览器登录自动获取（2026-09-14）
+
+- **密钥管理不再只有「留空复用」**：三处密钥位全部可管理。
+  - `Go 额度设置`：新增「显示」明文查看、`清除已存 Key`（删 Keychain + App Group）、`清除 workspace 凭据`（删 workspaceID + authCookie）；填新值保存即替换。
+  - `Codex 一键配置`：Go Key / DeepSeek Key 行新增红色「清除」按钮（确认后分别删除 env 里的 `ZEN_API_KEY` 行与 `config.toml` 的 `experimental_bearer_token` 行）；签名密码加「随机生成」一键口令（它绑定本地签名钥匙串，删除会让副本签名降级为 ad-hoc，因此不做清除）。
+- **浏览器登录自动获取（新）**：设置页「浏览器登录自动获取」弹出内嵌浏览器（WKWebView，Safari UA），登录 opencode.ai 后自动：
+  - 保存 auth Cookie + workspace ID → 费用柱状图立刻有数据，不用再导 HAR；
+  - 拉取官方密钥页 SSR 数据，回填完整 Go Key（67 字符）到 Keychain 与两个设置栏；「拉取密钥」可随时再同步，多把 Key 时可选择「使用此 Key」；
+  - 登录态自动保存、下次打开直接复用；「清除登录」一键退出并清 Cookie。
+  - 建议用 GitHub 登录；Google 的 OAuth 可能拒绝内嵌浏览器。
+- **修复「替换 Key 后点配置不生效」**：装好后再点「配置」走的是 `--update`，安装器以前无条件沿用旧 Key，把本次传入的新 Key 静默丢弃。现在更新模式优先使用本次传入的新 Key，未传入的才沿用旧值（用假 HOME 验证：全传/不传/只传 Go 三个分支都正确）。
+- **修复「留空复用时 Key 悄悄丢了」**：App 以前只把输入框内容传给安装器——输入框留空、Key 只在 Keychain 里时，App 校验能过、脚本却拿不到 Key，配置会被静默写成「没有 Go Key」的纯官方直连。现在 App 传"有效值"（本次输入 > 已存 env > Keychain）并回写 Keychain。
+- **修复「清掉 Go Key 后 Codex 里还能选到 Go 模型」**：更新模式会按本次 Key 修剪 models.json（无 Go Key 移除 `-go`/`-zen`，无 DeepSeek Key 移除官方模型）；无 Go Key 时同时停用残留的本地代理和 Go 模型自动发现，不再出现"选中 Go 模型直连 DeepSeek 报 model 不支持"。
+- **DeepSeek Key 自动获取不可行（评估结论）**：DeepSeek 官方只在创建时展示一次完整 Key，接口不提供明文回读。已在登录弹窗提供「打开 DeepSeek 控制台」入口，DeepSeek 输入框新增「剪贴板填入」，浏览器里创建后复制一次即可。
+- **解析回归自检**：新增 `scripts/test-key-parse.sh`（离线 fixture：本人/他人 Key、重复序列化去重、workspace ID 提取），`build.sh` 打包前强制通过。
+- 版本 **1.1.9.2 (22)**。
 
 ### v1.1.9.1 — 小组件的配额表也能看到 DeepSeek V4.1 Flash 了（2026-09-14）
 
@@ -232,10 +253,10 @@ cd OpenCodeGoWidget
 
 ```text
 /Applications/OpenCode 小组件.app
-dist/OpenCode 小组件-1.1.8.5.dmg
-dist/OpenCode 小组件-1.1.8.5.zip
+dist/OpenCode 小组件-1.1.9.2.dmg
+dist/OpenCode 小组件-1.1.9.2.zip
 dist/OpenCode 小组件.app
-~/Desktop/OpenCode 小组件-1.1.8.5.dmg  # build.sh 会自动拷一份到桌面
+~/Desktop/OpenCode 小组件-1.1.9.2.dmg  # build.sh 会自动拷一份到桌面
 ```
 
 依赖只需要 Xcode Command Line Tools 和 macOS 14+ SDK。脚本会优先寻找本机可用签名身份，找不到时使用 ad-hoc 签名。
@@ -246,7 +267,10 @@ dist/OpenCode 小组件.app
 确认系统设置里小组件已启用；运行 `killall WidgetKit` 后重新添加。
 
 **费用图一直是空？**  
-说明 workspace 数据没配置成功。回到设置重新粘贴 workspace 全链接，或重新选择 HAR 文件保存。
+说明 workspace 数据没配置成功。点「浏览器登录自动获取」登录一次即可；也可以回到设置重新粘贴 workspace 全链接，或重新选择 HAR 文件保存。
+
+**怎么替换或删除已经保存的 Key？**  
+设置页每个密钥位都有独立入口：填新值保存 = 替换；红色「清除」按钮 = 删除（有确认弹窗）。也可以点「浏览器登录自动获取」重新拉取官网密钥。
 
 **API Key 会泄露吗？**  
 不会上传到第三方。Key 只存在本机 Keychain，网络请求只发往 `opencode.ai`。

@@ -225,17 +225,28 @@ DS_KEY=""
 PASS=""
 
 if [[ "$MODE" == "update" ]]; then
-  # 更新模式：直接沿用现有 Key，不弹窗
-  GO_KEY="$EXISTING_GO"
-  DS_KEY="$EXISTING_DS"
+  # 更新模式：默认沿用现有 Key，不弹窗。
+  # 但如果调用方显式传入了非空的新 Key（小组件设置页「替换 Key 后点配置」场景），
+  # 新 Key 优先——修复「替换了 Key 却没有生效」：之前这里无条件覆盖成旧 Key，
+  # 导致 ONECLICK_GO_KEY / ONECLICK_DS_KEY 输入被静默丢弃。
+  if [[ "$NONINTERACTIVE" -eq 1 ]]; then
+    GO_KEY="${ONECLICK_GO_KEY:-}"
+    DS_KEY="${ONECLICK_DS_KEY:-}"
+  fi
   # 去空格
   GO_KEY="${GO_KEY// /}"
   DS_KEY="${DS_KEY// /}"
+  GO_KEY="${GO_KEY:-$EXISTING_GO}"
+  DS_KEY="${DS_KEY:-$EXISTING_DS}"
   if [[ -z "$GO_KEY" && -z "$DS_KEY" ]]; then
     die "更新模式下未找到任何 Key（Go 与 DeepSeek 均为空）。请改用“安装”并填写至少一个 Key。"
   fi
-  log "更新模式：沿用现有 Go / DeepSeek Key（不重新输入）"
-  # 更新模式下密码也直接复用，不再询问（除非缺失）
+  if [[ "$NONINTERACTIVE" -eq 1 && ( -n "${ONECLICK_GO_KEY:-}" || -n "${ONECLICK_DS_KEY:-}" ) ]]; then
+    log "更新模式：使用本次传入的新 Key（替换旧值；未传入的 Key 沿用现有）"
+  else
+    log "更新模式：沿用现有 Go / DeepSeek Key（不重新输入）"
+  fi
+  # 更新模式下密码仍复用文件里的（改密码需要重建本地签名钥匙串，暂不在更新流程里做）
   if [[ -f "$PASS_FILE" && -z "$PASS" ]]; then
     PASS="$(cat "$PASS_FILE" 2>/dev/null || true)"
   fi
@@ -416,11 +427,9 @@ fi
 # ---------------------------------------------------------------------------
 MODEL_TMPL="$SCRIPT_DIR/resources/templates/models.json"
 MODELS_OUT="$CODEX_HOME/models.json"
-if [[ "$MODE" == "update" && -f "$MODELS_OUT" ]]; then
-  log "更新模式：保留现有 models.json（自动更新），跳过模板"
-  MODEL_COUNT="$(python3 -c 'import json;print(len(json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || echo 0)"
-  AVAIL_SLUGS="$(python3 -c 'import json;print(" ".join(m["slug"] for m in json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || true)"
-else
+
+# 按当前 Key 从模板生成（全新安装 / 列表被剪空时的回退）
+gen_models_from_template() {
   python3 - "$MODEL_TMPL" "$MODELS_OUT" "$HAS_GO" "$HAS_DS" <<'PY'
 import json, sys
 src, dst, has_go, has_ds = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4] == "1"
@@ -438,6 +447,46 @@ for i, m in enumerate(models, 1):
 json.dump({"models": models}, open(dst, "w"), ensure_ascii=False, indent=2)
 print(len(models))
 PY
+}
+
+if [[ "$MODE" == "update" && -f "$MODELS_OUT" ]]; then
+  log "更新模式：保留现有 models.json（自动更新），跳过模板"
+  # 2026-09-14：按本次 Key 修剪不可用模型——没有 Go Key 就移除 -go/-zen，
+  # 没有 DeepSeek Key 就移除官方模型。否则清掉 Key 后 Codex 里还能选到用不了的
+  # 模型（比如无 Go Key 时选 deepseek-v4-flash-go，会直连 DeepSeek 报
+  # "The supported API model names are ..."）。加回 Key 后配置/自动发现会恢复。
+  python3 - "$MODELS_OUT" "$HAS_GO" "$HAS_DS" <<'PY'
+import json, sys
+dst, has_go, has_ds = sys.argv[1], sys.argv[2] == "1", sys.argv[3] == "1"
+try:
+    data = json.load(open(dst))
+except Exception as e:
+    print(f"models.json 读取失败，保持原样：{e}")
+    sys.exit(0)
+models, removed = [], []
+for m in data.get("models", []):
+    slug = m.get("slug", "")
+    is_go = slug.endswith("-go") or slug.endswith("-zen")
+    if is_go and not has_go:
+        removed.append(slug); continue
+    if (not is_go) and not has_ds:
+        removed.append(slug); continue
+    models.append(m)
+for i, m in enumerate(models, 1):
+    m["priority"] = i
+json.dump({"models": models}, open(dst, "w"), ensure_ascii=False, indent=2)
+if removed:
+    print(f"按 Key 修剪模型：移除 {len(removed)} 个当前不可用的模型（剩余 {len(models)} 个；加回 Key 后再配置会自动恢复）")
+else:
+    print("模型列表与当前 Key 匹配，无需修剪")
+PY
+  PRUNED_COUNT="$(python3 -c 'import json;print(len(json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || echo 0)"
+  if [[ "$PRUNED_COUNT" -eq 0 ]]; then
+    log "修剪后列表为空，按模板重新生成"
+    gen_models_from_template > /dev/null
+  fi
+else
+  gen_models_from_template > /dev/null
 fi
 MODEL_COUNT="$(python3 -c 'import json;print(len(json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || echo 0)"
 AVAIL_SLUGS="$(python3 -c 'import json;print(" ".join(m["slug"] for m in json.load(open("'"$MODELS_OUT"'"))["models"]))' 2>/dev/null || true)"
@@ -660,6 +709,17 @@ EOF2
   fi
 else
   log "无需本地代理（纯官方 DeepSeek 直连）"
+  # 2026-09-14：没有 Go Key 时清掉残留的 Go 链路服务——否则旧代理还占着 19100，
+  # Go 模型自动发现还会每 6h 把 -go 模型写回 models.json，导致 Codex 里能选到
+  # 用不了的 Go 模型（选中会被直连发给 DeepSeek 官方报 model 不支持）。
+  # 之后加回 Go Key 再点配置，这两项会自动重新安装。
+  STALE_PROXY_PLIST="$HOME/Library/LaunchAgents/com.agent-vision-toolkit.proxy.plist"
+  STALE_DISCOVERY_PLIST="$HOME/Library/LaunchAgents/com.steve233.go-model-discovery.plist"
+  launchctl bootout "gui/$(id -u)" "$STALE_PROXY_PLIST" 2>/dev/null || launchctl unload "$STALE_PROXY_PLIST" 2>/dev/null || true
+  launchctl bootout "gui/$(id -u)/com.steve233.go-model-discovery" 2>/dev/null || true
+  launchctl bootout "gui/$(id -u)" "$STALE_DISCOVERY_PLIST" 2>/dev/null || launchctl unload "$STALE_DISCOVERY_PLIST" 2>/dev/null || true
+  rm -f "$STALE_PROXY_PLIST" "$STALE_DISCOVERY_PLIST"
+  log "已停用残留的本地代理与 Go 模型自动发现"
 fi
 
 # ---------------------------------------------------------------------------

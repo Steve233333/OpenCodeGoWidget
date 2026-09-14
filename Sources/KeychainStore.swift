@@ -22,6 +22,20 @@ enum KeychainStore {
         SecItemAdd(add as CFDictionary, nil)
     }
 
+    /// 删除已存 Key（Keychain + App Group 共享存储），幂等
+    @discardableResult
+    static func delete() -> Bool {
+        sharedDefaults?.removeObject(forKey: sharedKeyKey)
+        sharedDefaults?.synchronize()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+
     static func load() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

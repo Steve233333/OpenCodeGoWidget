@@ -244,6 +244,39 @@ final class CodexInstaller: ObservableObject {
         return v.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - 密钥清除（2026-09-14：设置页可删除/替换，不再只有「留空复用」）
+
+    /// 清除已存 Go Key：env 文件里的 ZEN_API_KEY 行 + Keychain/App Group
+    @discardableResult
+    static func clearGoKey() -> Bool {
+        var ok = true
+        let envPath = envFile
+        if let content = try? String(contentsOfFile: envPath, encoding: .utf8) {
+            let kept = content
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("ZEN_API_KEY=") }
+                .joined(separator: "\n")
+            do { try kept.write(toFile: envPath, atomically: true, encoding: .utf8) }
+            catch { ok = false }
+        }
+        if !KeychainStore.delete() { ok = false }
+        return ok
+    }
+
+    /// 清除 config.toml 里的 DeepSeek Key（experimental_bearer_token 行），其余配置不动
+    @discardableResult
+    static func clearDSKey() -> Bool {
+        let configPath = (codexHome as NSString).appendingPathComponent("config.toml")
+        guard let txt = try? String(contentsOfFile: configPath, encoding: .utf8) else { return false }
+        let out = txt.replacingOccurrences(
+            of: #"(?m)^[ \t]*experimental_bearer_token[ \t]*=.*$\n?"#,
+            with: "", options: .regularExpression)
+        guard out != txt else { return false }
+        do { try out.write(toFile: configPath, atomically: true, encoding: .utf8) }
+        catch { return false }
+        return true
+    }
+
     private static func maskedKey(_ k: String) -> String {
         guard k.count > 8 else { return "****" }
         return String(k.prefix(6)) + "****" + String(k.suffix(4))
@@ -330,13 +363,15 @@ final class CodexInstaller: ObservableObject {
         if skipProxyStart { args.append("--skip-proxy-start") }
         proc.arguments = args
 
-        // 环境变量
+        // 环境变量：传"有效值"（本次输入 > 已存），不能只传输入框内容。
+        // 否则输入框留空但 Keychain 里有 Key 时，App 校验能过、脚本却拿不到，
+        // 会把配置静默写成"没有 Go Key"（2026-09-14 实测踩坑）。
         var env = ProcessInfo.processInfo.environment
-        env["ONECLICK_GO_KEY"] = go
-        env["ONECLICK_DS_KEY"] = ds
-        env["ONECLICK_PASS"] = pwd
+        env["ONECLICK_GO_KEY"] = effectiveGo
+        env["ONECLICK_DS_KEY"] = effectiveDS
+        env["ONECLICK_PASS"] = effectivePass
         // 兼容：部分旧安装器读 ZEN_API_KEY
-        if !go.isEmpty { env["ZEN_API_KEY"] = go }
+        if !effectiveGo.isEmpty { env["ZEN_API_KEY"] = effectiveGo }
         proc.environment = env
         proc.currentDirectoryURL = URL(fileURLWithPath: (installer as NSString).deletingLastPathComponent)
 
@@ -367,8 +402,8 @@ final class CodexInstaller: ObservableObject {
                 self.lastExitCode = p.terminationStatus
                 if p.terminationStatus == 0 {
                     self.logText += "\n[完成] 退出码 0 ✅\n"
-                    // 同步 Keychain：Go Key 存入 Keychain 供 Widget 直接用
-                    if !go.isEmpty { KeychainStore.save(go) }
+                    // 同步 Keychain：存"有效 Go Key"（含留空复用的旧值）供 Widget 直接用
+                    if !effectiveGo.isEmpty { KeychainStore.save(effectiveGo) }
                 } else {
                     self.logText += "\n[失败] 退出码 \(p.terminationStatus) ❌\n"
                 }

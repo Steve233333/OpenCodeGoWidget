@@ -4,6 +4,7 @@ import AppKit
 // MARK: - Codex 一键配置（极简：3 栏 + 单按钮，安装/更新已合并）
 
 struct CodexSetupView: View {
+    var onOpenLogin: (() -> Void)? = nil
     @StateObject private var installer = CodexInstaller()
     @State private var goKey: String = ""
     @State private var dsKey: String = ""
@@ -15,6 +16,22 @@ struct CodexSetupView: View {
     @State private var existingGo: String = ""
     @State private var existingDS: String = ""
     @State private var existingPass: String = ""
+    @State private var clearTarget: ClearTarget? = nil
+
+    /// 可清除的密钥（签名密码是本地钥匙串口令，删除会破坏副本签名，不做清除）
+    enum ClearTarget: String, Identifiable {
+        case go, ds
+        var id: String { rawValue }
+        var title: String { self == .go ? "OpenCode Go Key" : "DeepSeek Key" }
+        var message: String {
+            switch self {
+            case .go:
+                return "将删除已保存的 Go Key（安装目录 env 配置 + Keychain/App Group）。删除后需重新填写并「配置」才能使用 Go 模型，确定？"
+            case .ds:
+                return "将删除 config.toml 里已保存的 DeepSeek Key。删除后官方 DeepSeek 模型将不可用，确定？"
+            }
+        }
+    }
     // S2(2026-09-04)：运行计时 + 全量日志（之前只看最后2行，长静默阶段像卡死）
     @State private var runStart: Date? = nil
     @State private var elapsedSeconds = 0
@@ -25,9 +42,22 @@ struct CodexSetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Codex 一键配置")
-                .font(.headline)
-            Text("填写后点击「配置」即可完成安装或更新（有旧 Key 时留空自动复用）")
+            HStack {
+                Text("Codex 一键配置")
+                    .font(.headline)
+                Spacer()
+                if let onOpenLogin {
+                    Button {
+                        onOpenLogin()
+                    } label: {
+                        Label("浏览器登录自动获取", systemImage: "globe")
+                            .font(.caption2)
+                    }
+                    .controlSize(.small)
+                    .help("用内嵌浏览器登录 opencode.ai，自动获取 Go Key")
+                }
+            }
+            Text("填写后点击「配置」即可完成安装或更新（有旧 Key 时留空自动复用；输入新值即替换）")
                 .font(.caption2).foregroundStyle(.secondary)
             // 副本/官方版本对照（只读展示，不触发任何写入）
             HStack(spacing: 4) {
@@ -41,13 +71,17 @@ struct CodexSetupView: View {
             VStack(alignment: .leading, spacing: 12) {
                 keyRow(title: "OpenCode Go Key", required: true,
                        placeholder: "sk-...（必填，没有则无法使用 Go 模型）",
-                       text: $goKey, show: $showGo, existing: existingGo)
+                       text: $goKey, show: $showGo, existing: existingGo,
+                       onClear: { clearTarget = .go })
                 keyRow(title: "DeepSeek Key", required: false,
                        placeholder: "sk-...（可选，官方 deepseek 模型）",
-                       text: $dsKey, show: $showDS, existing: existingDS)
+                       text: $dsKey, show: $showDS, existing: existingDS,
+                       onClear: { clearTarget = .ds },
+                       onPasteFromClipboard: { pasteClipboard(into: $dsKey) })
                 keyRow(title: "签名密码", required: true,
                        placeholder: "任意密码（必填，简单密码也可）",
-                       text: $pass, show: $showPass, existing: existingPass, isPassword: true)
+                       text: $pass, show: $showPass, existing: existingPass, isPassword: true,
+                       onRandom: randomizePass)
             }
 
             if let e = errorText {
@@ -134,15 +168,31 @@ struct CodexSetupView: View {
         .onAppear {
             installer.refreshStatus()
             // 缓存已存值，避免 body 每次重算时同步读文件
-            existingGo = CodexInstaller.existingGoKey()
-            existingDS = CodexInstaller.existingDSKey() ?? ""
-            existingPass = CodexInstaller.existingPass()
+            reReadExisting()
         }
         .onReceive(installer.$status) { _ in
             // 状态刷新后同步更新已存提示
-            existingGo = CodexInstaller.existingGoKey()
-            existingDS = CodexInstaller.existingDSKey() ?? ""
-            existingPass = CodexInstaller.existingPass()
+            reReadExisting()
+        }
+        // 浏览器登录自动获取后回填 Go Key 输入框（点「配置」才会真正生效）
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoKeyFetched)) { note in
+            if let key = note.object as? String, !key.isEmpty {
+                goKey = key
+                showGo = false
+                errorText = nil
+                reReadExisting()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoStoredKeyCleared)) { _ in
+            reReadExisting()
+        }
+        .alert(item: $clearTarget) { target in
+            Alert(
+                title: Text("清除 \(target.title)？"),
+                message: Text(target.message),
+                primaryButton: .destructive(Text("清除")) { performClear(target) },
+                secondaryButton: .cancel(Text("取消"))
+            )
         }
         .onReceive(tick) { _ in
             if installer.isRunning, let s = runStart {
@@ -158,7 +208,7 @@ struct CodexSetupView: View {
         }
     }
 
-    private func keyRow(title: String, required: Bool, placeholder: String, text: Binding<String>, show: Binding<Bool>, existing: String, isPassword: Bool = false) -> some View {
+    private func keyRow(title: String, required: Bool, placeholder: String, text: Binding<String>, show: Binding<Bool>, existing: String, isPassword: Bool = false, onClear: (() -> Void)? = nil, onPasteFromClipboard: (() -> Void)? = nil, onRandom: (() -> Void)? = nil) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text(title).font(.caption.weight(.semibold))
@@ -172,8 +222,26 @@ struct CodexSetupView: View {
                     Text("未设置").font(.system(size: 9)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(show.wrappedValue ? "隐藏" : "显示") { show.wrappedValue.toggle() }
-                    .controlSize(.mini).buttonStyle(.plain).font(.caption2)
+                if !existing.isEmpty, let onClear {
+                    Button("清除") { onClear() }
+                        .controlSize(.mini).buttonStyle(.plain).font(.caption2)
+                        .foregroundStyle(.red)
+                        .help("删除已保存的密钥，之后需重新填写")
+                }
+                if let onPasteFromClipboard {
+                    Button("剪贴板填入") { onPasteFromClipboard() }
+                        .controlSize(.mini).buttonStyle(.plain).font(.caption2)
+                        .help("把剪贴板内容填入输入框（适合官网只能看一次的新 Key）")
+                }
+                if let onRandom {
+                    Button("随机生成") { onRandom() }
+                        .controlSize(.mini).buttonStyle(.plain).font(.caption2)
+                        .help("生成一个随机本地签名密码")
+                }
+                if !text.wrappedValue.isEmpty {
+                    Button(show.wrappedValue ? "隐藏" : "显示") { show.wrappedValue.toggle() }
+                        .controlSize(.mini).buttonStyle(.plain).font(.caption2)
+                }
             }
             HStack(spacing: 6) {
                 Group {
@@ -189,7 +257,10 @@ struct CodexSetupView: View {
                 }
             }
             if text.wrappedValue.isEmpty && !existing.isEmpty {
-                Text("留空将沿用已存（\(isPassword ? "\(existing.count)位" : masked(existing))）")
+                Text("留空将沿用已存（\(isPassword ? "\(existing.count)位" : masked(existing))）；输入新值可替换；点右上「清除」删除")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+            } else if !text.wrappedValue.isEmpty && !existing.isEmpty {
+                Text("点「配置」后将替换已存密钥")
                     .font(.system(size: 9)).foregroundStyle(.secondary)
             }
         }
@@ -198,6 +269,40 @@ struct CodexSetupView: View {
     private func masked(_ s: String) -> String {
         guard s.count > 8 else { return "****" }
         return String(s.prefix(4)) + "****" + String(s.suffix(4))
+    }
+
+    private func pasteClipboard(into binding: Binding<String>) {
+        let s = (NSPasteboard.general.string(forType: .string) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { errorText = "剪贴板里没有文本"; return }
+        binding.wrappedValue = s
+        errorText = nil
+    }
+
+    private func randomizePass() {
+        let chars = Array("abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789")
+        pass = String((0..<12).map { _ in chars.randomElement()! })
+        showPass = true
+    }
+
+    private func reReadExisting() {
+        existingGo = CodexInstaller.existingGoKey()
+        existingDS = CodexInstaller.existingDSKey() ?? ""
+        existingPass = CodexInstaller.existingPass()
+    }
+
+    private func performClear(_ target: ClearTarget) {
+        switch target {
+        case .go:
+            _ = CodexInstaller.clearGoKey()
+            goKey = ""
+            NotificationCenter.default.post(name: .openCodeGoStoredKeyCleared, object: "go")
+        case .ds:
+            _ = CodexInstaller.clearDSKey()
+            dsKey = ""
+        }
+        installer.refreshStatus()
+        reReadExisting()
     }
 
     private func formattedElapsed(_ s: Int) -> String {

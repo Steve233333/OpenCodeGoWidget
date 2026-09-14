@@ -298,6 +298,17 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openCodeGoOpenSettings)) { _ in
             showSettings = true
         }
+        // 浏览器登录自动获取的 Go Key 同步到主界面状态（供设置页与刷新使用）
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoKeyFetched)) { note in
+            if let key = note.object as? String, !key.isEmpty { apiKey = key }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoStoredKeyCleared)) { _ in
+            apiKey = ""
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoCredentialsChanged)) { _ in
+            // 登录态变化后立即拉一次数据，费用图马上有内容
+            Task { await refresh() }
+        }
         .task {
             // 后台同步 Go 模型列表与配额表
             Task {
@@ -549,13 +560,15 @@ struct MonthChartView: View {
 struct SettingsView: View {
     @Binding var apiKey: String
     @Environment(\.dismiss) var dismiss
+    @StateObject private var session = AccountSession()
+    @State private var showLoginSheet = false
     var body: some View {
         VStack(spacing: 0) {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 20) {
-                    GoSettingsContent(apiKey: $apiKey, dismiss: dismiss)
+                    GoSettingsContent(apiKey: $apiKey, dismiss: dismiss, onOpenLogin: { showLoginSheet = true })
                     Divider()
-                    CodexSetupView()
+                    CodexSetupView(onOpenLogin: { showLoginSheet = true })
                     // 底部统一退出
                     HStack {
                         Spacer()
@@ -569,14 +582,22 @@ struct SettingsView: View {
             }
         }
         .frame(width: 560, height: 680)
+        .sheet(isPresented: $showLoginSheet) {
+            LoginSheetView(session: session)
+        }
     }
 }
 
 struct GoSettingsContent: View {
     @Binding var apiKey: String
     var dismiss: DismissAction
+    var onOpenLogin: () -> Void = {}
     @Environment(\.dismiss) var envDismiss
     @State private var draft: String = ""
+    @State private var showKey = false
+    @State private var storedKeyMask: String = ""
+    @State private var confirmClearKey = false
+    @State private var confirmClearWS = false
     @State private var workspaceID: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "workspaceID") ?? ""
     @State private var authCookie: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "authCookie") ?? ""
     @State private var harStatus: String = ""
@@ -590,14 +611,50 @@ struct GoSettingsContent: View {
     private var effectiveDismiss: DismissAction { dismiss }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Go 额度设置").font(.headline)
-            Text("1. 粘贴 OpenCode Go API Key（sk-...），在 opencode.ai → Settings → API Keys 复制。")
+            HStack {
+                Text("Go 额度设置").font(.headline)
+                Spacer()
+                Button {
+                    onOpenLogin()
+                } label: {
+                    Label("浏览器登录自动获取", systemImage: "globe")
+                        .font(.caption2)
+                }
+                .controlSize(.small)
+                .help("登录 opencode.ai 后自动获取 API Key、workspace 与 Cookie")
+            }
+            Text("1. OpenCode Go API Key（sk-...，存 Keychain 用于额度查询；Codex 用的 Key 在下方「Codex 一键配置」填写）")
                 .font(.caption2).foregroundStyle(.secondary)
-            SecureField("sk-...", text: $draft)
-                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 6) {
+                Group {
+                    if showKey {
+                        TextField("sk-...", text: $draft).textFieldStyle(.roundedBorder)
+                    } else {
+                        SecureField("sk-...", text: $draft).textFieldStyle(.roundedBorder)
+                    }
+                }
+                if !draft.isEmpty {
+                    Button(showKey ? "隐藏" : "显示") { showKey.toggle() }
+                        .controlSize(.small).buttonStyle(.plain).font(.caption2)
+                }
+            }
+            HStack(spacing: 6) {
+                if storedKeyMask.isEmpty {
+                    Text("未保存 Key").font(.system(size: 9)).foregroundStyle(.orange)
+                } else {
+                    Text("已存 \(storedKeyMask)").font(.system(size: 9)).foregroundStyle(.green)
+                }
+                Spacer()
+                if !storedKeyMask.isEmpty {
+                    Button("清除已存 Key") { confirmClearKey = true }
+                        .controlSize(.mini).buttonStyle(.plain).font(.caption2).foregroundStyle(.red)
+                }
+            }
+            Text("填新值点「保存」= 替换；点「清除已存 Key」= 删除（留空保存不会清空）")
+                .font(.system(size: 9)).foregroundStyle(.secondary)
 
             Divider()
-            Text("2. 柱状图费用（可选）：粘贴你的 workspace 链接或 HAR，以启用按日按模型堆叠真数据")
+            Text("2. 柱状图费用（可选）：粘贴你的 workspace 链接或 HAR，以启用按日按模型堆叠真数据（浏览器登录后自动填）")
                 .font(.caption2).foregroundStyle(.secondary)
             TextField("https://opencode.ai/workspace/wrk_.../usage", text: $workspaceID)
                 .textFieldStyle(.roundedBorder)
@@ -613,6 +670,18 @@ struct GoSettingsContent: View {
             TextField("auth Cookie（或直接选 HAR 自动填）", text: $authCookie)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption2)
+            HStack(spacing: 6) {
+                if workspaceID.isEmpty && authCookie.isEmpty {
+                    Text("未配置 workspace 凭据").font(.system(size: 9)).foregroundStyle(.secondary)
+                } else {
+                    Text("已配置 workspace 凭据（费用图已启用）").font(.system(size: 9)).foregroundStyle(.green)
+                }
+                Spacer()
+                if !workspaceID.isEmpty || !authCookie.isEmpty {
+                    Button("清除 workspace 凭据") { confirmClearWS = true }
+                        .controlSize(.mini).buttonStyle(.plain).font(.caption2).foregroundStyle(.red)
+                }
+            }
 
             HStack {
                 Button("保存") {
@@ -620,6 +689,7 @@ struct GoSettingsContent: View {
                     if !t.isEmpty {
                         KeychainStore.save(t)
                         apiKey = t
+                        refreshStoredKeyMask()
                     }
                     var ws = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
                     var ac = authCookie.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -677,7 +747,7 @@ struct GoSettingsContent: View {
                 Button("取消", role: .cancel) { dismiss() }
                 Spacer()
             }
-            Text("提示：柱状图需要 workspace 裸ID (wrk_...) 与 539B auth Cookie；粘贴 .har 路径或 https://.../workspace/wrk_.../usage 全链路时会在保存时即时解析为真实 Cookie 存入 App Group，无需手动复制。")
+            Text("提示：柱状图需要 workspace 裸ID (wrk_...) 与 539B auth Cookie；粘贴 .har 路径或 https://.../workspace/wrk_.../usage 全链路时会在保存时即时解析为真实 Cookie 存入 App Group，无需手动复制。点上方「浏览器登录自动获取」可一步完成。")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
 
             Divider()
@@ -713,7 +783,8 @@ struct GoSettingsContent: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.06), lineWidth: 1))
         .onAppear {
-            draft = apiKey
+            draft = KeychainStore.resolvedKey() ?? apiKey
+            refreshStoredKeyMask()
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
             var storedWS = d?.string(forKey: "workspaceID") ?? ""
             var storedAuth = d?.string(forKey: "authCookie") ?? ""
@@ -769,6 +840,64 @@ struct GoSettingsContent: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoKeyFetched)) { note in
+            if let key = note.object as? String, !key.isEmpty {
+                draft = key
+                refreshStoredKeyMask()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoStoredKeyCleared)) { _ in
+            // Codex 页清除了 Keychain 里的 Go Key，这里同步显示
+            draft = ""
+            apiKey = ""
+            refreshStoredKeyMask()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoCredentialsChanged)) { _ in
+            let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+            workspaceID = d?.string(forKey: "workspaceID") ?? ""
+            authCookie = d?.string(forKey: "authCookie") ?? ""
+        }
+        .alert("清除已存 Key？", isPresented: $confirmClearKey) {
+            Button("清除", role: .destructive) { clearStoredKey() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除 Keychain 与 App Group 里的 Key（影响额度查询）；「Codex 一键配置」里的 Go Key 需到那里单独清除。")
+        }
+        .alert("清除 workspace 凭据？", isPresented: $confirmClearWS) {
+            Button("清除", role: .destructive) { clearWorkspaceCredentials() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除已存的 workspace ID 与 auth Cookie，柱状图费用会停止更新，可随时重新登录或粘贴。")
+        }
+    }
+
+    private func refreshStoredKeyMask() {
+        storedKeyMask = KeychainStore.resolvedKey().map { masked($0) } ?? ""
+    }
+
+    private func masked(_ s: String) -> String {
+        guard s.count > 8 else { return "****" }
+        return String(s.prefix(4)) + "****" + String(s.suffix(4))
+    }
+
+    private func clearStoredKey() {
+        _ = KeychainStore.delete()
+        draft = ""
+        apiKey = ""
+        refreshStoredKeyMask()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    private func clearWorkspaceCredentials() {
+        let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        d?.removeObject(forKey: "workspaceID")
+        d?.removeObject(forKey: "authCookie")
+        d?.synchronize()
+        workspaceID = ""
+        authCookie = ""
+        harStatus = ""
+        WidgetCenter.shared.reloadAllTimelines()
+        NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
     }
 
     private func importHAR(from url: URL) {
