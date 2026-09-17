@@ -240,15 +240,26 @@ struct ContentView: View {
                                 } else {
                                     MonthChartView(dailyCosts: filteredDaily, monthlyReset: snap.monthlyReset, alignment: chartAlignment)
                                         .frame(height: 160)
-                                    // 图例：实时展示官方 Go 全量（已同步 30 项），不再仅按本月已用过滤，避免 19 vs 22 不一致
+                                    // 图例：只列「当前在架」的模型（Go 实时 + Zen 免费实时），
+                                    // 已下架但历史里有用量的不再占格子（只留一行统计），避免"下架还列着"
                                     let _ = modelTick
                                     let allModels = Set(filteredDaily.flatMap { $0.entries.keys }.map { $0.lowercased() })
-                                    let ordered = ModelPalette.ordered
-                                    let orderedLower = Set(ordered.map { $0.lowercased() })
-                                    let historicalExtra = allModels.filter { !orderedLower.contains($0) }.sorted()
-                                    let legend = ordered + historicalExtra
+                                    let liveGo = ModelPalette.ordered
+                                    let liveGoLower = Set(liveGo.map { $0.lowercased() })
+                                    let liveZen = ModelRegistry.cachedZenOrderedSync()
+                                        .filter { !liveGoLower.contains($0.lowercased()) }
+                                    let liveLower = liveGoLower.union(Set(liveZen.map { $0.lowercased() }))
+                                    let legend = liveGo + liveZen.filter { allModels.contains($0.lowercased()) }
+                                    let delisted = allModels.subtracting(liveLower).sorted()
                                     if !legend.isEmpty {
                                         WrappingLegendView(models: legend)
+                                    }
+                                    if !delisted.isEmpty {
+                                        Text("另有 \(delisted.count) 个已下架模型仍出现在历史柱里（\(delisted.prefix(4).joined(separator: "、"))\(delisted.count > 4 ? " 等" : "")），不再列入图例")
+                                            .font(.system(size: 8))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
                                     }
                                 }
                                 // 今日模型：跟随 Key 筛选
@@ -333,6 +344,7 @@ struct ContentView: View {
             // 后台同步 Go 模型列表与配额表
             Task {
                 _ = await ModelRegistry.refreshIfNeeded()
+                _ = await ModelRegistry.refreshZenIfNeeded()
                 let q = await GoQuotaRegistry.refreshIfNeeded()
                 await MainActor.run {
                     modelTick += 1
@@ -358,10 +370,12 @@ struct ContentView: View {
         loading = true; error = nil
         // 刷新额度/费用前强制同步模型列表与配额表（用户主动刷新应立即体现官方新增，失败静默）
         async let modelRefresh: [String] = ModelRegistry.refreshIfNeeded(force: true)
+        async let zenRefresh: [String] = ModelRegistry.refreshZenIfNeeded(force: true)
         async let quotaRefresh: [GoQuota] = GoQuotaRegistry.refreshIfNeeded(force: true)
         do {
             let snap = try await WidgetSnapshotRefresher.fetch()
             let models = await modelRefresh
+            _ = await zenRefresh
             let q = await quotaRefresh
             // 触发图例与配额图重算
             await MainActor.run {
@@ -390,6 +404,7 @@ struct ContentView: View {
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         } catch {
             let models = await modelRefresh
+            _ = await zenRefresh
             let q = await quotaRefresh
             await MainActor.run {
                 modelTick += 1; _ = models

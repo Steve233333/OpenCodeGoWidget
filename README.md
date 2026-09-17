@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.7.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.8.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.7.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.8.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,21 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.7.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.7.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.8.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.8.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.8 — 图例只列「还在架」的模型，下架的不再占格子（2026-09-17）
+
+- **图例跟着实时在架状态走**：以前图例 = Go 实时列表 + 「本月用过但不在列表里」的补位，于是 `ox-alpha-free`（8-28 就下架）、`hy3-free` 这种历史模型一直挂在图例里。现在图例 = **Go 实时 38 项 + Zen 免费实时列表里本月真用过的**；下架的一律不进图例，只在末尾留一行小字「另有 N 个已下架模型仍出现在历史柱里（ox-alpha-free、hy3-free 等）」，柱子颜色照旧保留，不会突然变白。
+- **Zen 免费侧也实时同步**：新增 `https://opencode.ai/zen/v1/models` 的拉取与 24h 缓存（`-free` 后缀 + `big-pickle` 判定为免费），Zen 免费模型下架后同样会自动从图例消失。
+- **图例后缀不再一律 (go)**：Zen 免费模型（`xxx-free`、`big-pickle`）现在标 (zen)，和 Go 模型区分开。
+- **兜底配色不再每次启动换色**：未知模型的颜色从 Swift `hashValue`（每次进程重新加盐）改成 FNV-1a 稳定哈希 —— 已下架模型只在兜底配色里出现，之前每开一次 App 柱子颜色都变。
+- 版本 **1.1.9.8 (28)**。
 
 ### v1.1.9.7 — 「别的电脑小组件空白」不用再猜：加一条备用通道 + 一键自检（2026-09-17）
 

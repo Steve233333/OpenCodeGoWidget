@@ -160,6 +160,64 @@ enum ModelRegistry {
         return cached
     }
 
+    // MARK: - Zen 免费模型（图例要跟「当前在架」同步，Zen 侧也得知道谁还没下架）
+
+    static let zenCacheKey = "zen_model_ids"
+    static let zenCacheDateKey = "zen_model_ids_date"
+    /// 回退：2026-09-17 Zen 免费实时列表（8 个）
+    static let zenFallbackOrdered: [String] = [
+        "big-pickle",
+        "deepseek-v4-flash-free",
+        "muse-spark-1.3-contributor-free",
+        "muse-spark-1.2-contributor-free",
+        "mimo-v2.5-free",
+        "ling-3.0-flash-fin-free",
+        "nemotron-3-ultra-free",
+        "nemotron-3.5-lightning-free",
+    ]
+    private static let zenEndpoint = URL(string: "https://opencode.ai/zen/v1/models")!
+
+    /// Zen 免费模型判定：`-free` 后缀 + 历史特例 big-pickle
+    static func isZenFree(_ id: String) -> Bool {
+        let s = id.lowercased()
+        return s.hasSuffix("-free") || s == "big-pickle"
+    }
+
+    static func cachedZenOrderedSync() -> [String] {
+        guard let d = UserDefaults(suiteName: suiteName),
+              let arr = d.stringArray(forKey: zenCacheKey), !arr.isEmpty else {
+            return zenFallbackOrdered
+        }
+        return arr
+    }
+
+    @discardableResult
+    static func refreshZenIfNeeded(force: Bool = false) async -> [String] {
+        let d = UserDefaults(suiteName: suiteName)
+        let cached = cachedZenOrderedSync()
+        let date = d?.object(forKey: zenCacheDateKey) as? Date
+        let stale = force || date == nil || Date().timeIntervalSince(date!) >= ttl
+        if !stale { return cached }
+
+        var req = URLRequest(url: zenEndpoint)
+        req.timeoutInterval = 10
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let decoded = try? JSONDecoder().decode(ListResponse.self, from: data) else {
+            logger.warning("ModelRegistry zen fetch failed")
+            return cached
+        }
+        let ids = decoded.data.map { $0.id.lowercased() }.filter { isZenFree($0) }
+        guard !ids.isEmpty else { return cached }
+        var seen = Set<String>()
+        let deduped = ids.filter { seen.insert($0).inserted }
+        d?.set(deduped, forKey: zenCacheKey)
+        d?.set(Date(), forKey: zenCacheDateKey)
+        logger.info("ModelRegistry zen cached \(deduped.count) models")
+        return deduped
+    }
+
     /// 合并远程顺序与历史出现模型：remote 原序优先，历史中已出现但 remote 已下架的追加到末尾字母序，避免历史堆叠柱突然无色
     static func mergedOrdered(remote: [String], historical: Set<String>) -> [String] {
         let historicalNorm = Set(historical.map { $0.lowercased().replacingOccurrences(of: "-go", with: "").replacingOccurrences(of: " (go)", with: "") })

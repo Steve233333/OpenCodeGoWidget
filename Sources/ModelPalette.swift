@@ -63,13 +63,26 @@ enum ModelPalette {
         for (k, c) in mapping where key.contains(k) {
             return c
         }
-        // 兜底：按 hash 生成柔和色，避免撞色
-        let h = Double(abs(model.hashValue) % 360) / 360.0
+        // 兜底：按内容做稳定 hash 生成柔和色。
+        // 不能用 hashValue：Swift 每次进程启动都会重新加盐，同一个模型（尤其已下架、
+        // 只能靠兜底上色的那些）每次开 App 颜色都不一样，历史柱会跳色。
+        var fnv: UInt64 = 0xcbf29ce484222325
+        for byte in model.utf8 {
+            fnv = (fnv ^ UInt64(byte)) &* 0x100000001b3
+        }
+        let h = Double(fnv % 360) / 360.0
         return Color(hue: h, saturation: 0.55, brightness: 0.88)
     }
 
     static func shortName(_ model: String) -> String {
         model.replacingOccurrences(of: " (go)", with: "").replacingOccurrences(of: "-go", with: "")
+    }
+
+    /// 图例后缀：Zen 免费模型别再一律标 (go)（usage 里的 key 是 `xxx-free` / `big-pickle` 这种）
+    static func channelSuffix(_ model: String) -> String {
+        let s = model.lowercased()
+        if s.hasSuffix("-zen") || s.hasSuffix("-free") || s == "big-pickle" { return " (zen)" }
+        return " (go)"
     }
 }
 
@@ -166,9 +179,12 @@ struct WrappingLegendView: View {
                                     .frame(width: 12, height: 8)
                                     .clipShape(RoundedRectangle(cornerRadius: 2))
                                     .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
-                                Text(ModelPalette.shortName(m) + " (go)")
+                                Text(ModelPalette.shortName(m) + ModelPalette.channelSuffix(m))
                                     .font(.system(size: 9))
                                     .lineLimit(1)
+                                    // 长名字（muse-spark-1.2-contributor-free (zen) 这种）自动缩字号，
+                                    // 别截断成和 Go 版一模一样的「muse-spark-1.2-contribu…」
+                                    .minimumScaleFactor(0.72)
                                     .foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
