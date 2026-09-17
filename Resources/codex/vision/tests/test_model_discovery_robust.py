@@ -416,6 +416,94 @@ def t_installer_key_validation():
     # test trimming
     assert not is_suspicious("  sk-12345678  ".strip())
 
+def t_effective_levels_precedence():
+    """覆盖层（手工实测）> models.dev > opencodex —— 2026-09-17 修正后的优先级。"""
+    ov = {"glm-5.3": ["low", "high", "max"]}
+    lv, manual = md._effective_levels(
+        "glm-5.3", "glm-5.3", (1000000, ["medium"], None, "GLM 5.3", "opencode-go"), None, ov)
+    assert lv == ["low", "high", "max"] and manual is True, (lv, manual)
+    lv, manual = md._effective_levels(
+        "hy3", "hy3", (256000, ["low", "medium"], None, "Hy3", "opencode-go"), None, ov)
+    assert lv == ["low", "medium"] and manual is False, (lv, manual)
+    lv, manual = md._effective_levels("x", "x", None, (1000, ["high"]), ov)
+    assert lv == ["high"] and manual is False, (lv, manual)
+    lv, manual = md._effective_levels("y", "y", None, None, ov)
+    assert lv is None and manual is False, (lv, manual)
+    # -free 剥后缀后的 lookup 也能命中覆盖层
+    lv, manual = md._effective_levels("kimi-x-free", "kimi-x", None, None, {"kimi-x": ["low"]})
+    assert lv == ["low"] and manual is True, (lv, manual)
+
+
+def t_sync_heals_stale_levels():
+    """老机器目录里的陈旧档位/上下文必须被同步纠正（覆盖层 > models.dev）。"""
+    with tempfile.TemporaryDirectory() as td:
+        td = pathlib.Path(td)
+        cache = td / "cache"
+        cache.mkdir(parents=True)
+        # 全套隔离：连 CODEX_HOME 也要指到临时目录，否则 sync_desktop_whitelist /
+        # backup 步骤会去写真机的 ~/.codex-deepseek（2026-09-17 踩过：把真 config.toml
+        codex_home = td / "codex-home"
+        codex_home.mkdir(parents=True)
+        (codex_home / "config.toml").write_text(
+            '[desktop]\nenabled-reasoning-efforts = ["low", "medium", "high"]\n')
+        models_path = codex_home / "models.json"
+        seed = {"models": [
+            {"slug": "glm-5.3-go", "display_name": "GLM-5.3 (Go)", "priority": 1,
+             "context_window": 99999, "max_context_window": 99999,
+             "supported_reasoning_levels": [{"effort": "medium", "description": "stale"}],
+             "default_reasoning_level": "medium", "input_modalities": ["text"]},
+            {"slug": "kimi-k3-go", "display_name": "Kimi-K3 (Go)", "priority": 2,
+             "context_window": 1048576, "max_context_window": 1048576,
+             "supported_reasoning_levels": [{"effort": "high", "description": "stale"}],
+             "default_reasoning_level": "high", "input_modalities": ["text"]},
+        ]}
+        models_path.write_text(json.dumps(seed, ensure_ascii=False))
+        (cache / "reasoning_overrides.json").write_text(
+            json.dumps({"kimi-k3": ["low", "high"]}, ensure_ascii=False))
+
+        saved = {k: getattr(md, k) for k in
+                 ("CODEX_HOME", "MODELS_JSON", "CACHE_DIR", "CACHE_FILE", "QUOTA_CACHE_FILE",
+                  "ZEN_CACHE_FILE", "MODELSDEV_CACHE", "PRUNE_PENDING_FILE",
+                  "fetch_quota_ids", "fetch_remote_ids", "fetch_zen_free_ids",
+                  "fetch_upstream_details", "fetch_modelsdev")}
+        mddev = {
+            "glm-5.3": (1000000, ["low", "medium", "high"], {"input": ["text", "image"]},
+                        "GLM 5.3", "opencode-go"),
+            "kimi-k3": (1048576, ["low", "high", "max"], {"input": ["text"]},
+                        "Kimi K3", "opencode-go"),
+        }
+        try:
+            md.CODEX_HOME = codex_home
+            md.MODELS_JSON = models_path
+            md.CACHE_DIR = cache
+            md.CACHE_FILE = cache / "go_models_cache.json"
+            md.QUOTA_CACHE_FILE = cache / "go_quota_cache.json"
+            md.ZEN_CACHE_FILE = cache / "zen_models_cache.json"
+            md.MODELSDEV_CACHE = cache / "modelsdev_cache.json"
+            md.PRUNE_PENDING_FILE = cache / "prune_pending.json"
+            md.fetch_quota_ids = lambda timeout=None: ["glm-5.3", "kimi-k3"]
+            md.fetch_remote_ids = lambda: []
+            md.fetch_zen_free_ids = lambda: []
+            md.fetch_upstream_details = lambda: {}
+            md.fetch_modelsdev = lambda: mddev
+            md.sync(force=True)
+        finally:
+            for k, v in saved.items():
+                setattr(md, k, v)
+
+        out = {m["slug"]: m for m in json.loads(models_path.read_text())["models"]}
+        glm = out["glm-5.3-go"]
+        assert glm["context_window"] == 1000000 and glm["max_context_window"] == 1000000, glm
+        assert [l["effort"] for l in glm["supported_reasoning_levels"]] == ["low", "medium", "high"], glm
+        assert glm["input_modalities"] == ["text", "image"], glm
+        kimi = out["kimi-k3-go"]
+        assert [l["effort"] for l in kimi["supported_reasoning_levels"]] == ["low", "high"], kimi
+        assert kimi["default_reasoning_level"] == "low", kimi
+        reg = json.loads((cache / "reasoning_registry.json").read_text())
+        assert reg["kimi-k3"] == ["low", "high"], reg.get("kimi-k3")
+        assert reg["glm-5.3"] == ["low", "medium", "high"], reg.get("glm-5.3")
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
         check(name, fn)

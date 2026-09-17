@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.5.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.6.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.5.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.6.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,21 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.5.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.5.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.6.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.6.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.6 — 换电脑点「配置」能不能复制出一样的 Codex：全链路体检 + 修掉档位映射被目录反压（2026-09-17）
+
+- **体检方法**：假 HOME + 假 launchctl，跑**应用包里**那支安装器，再和本机逐字段比对；干净安装、旧机更新两条路各跑一遍。
+- **干净安装 = 完全一致**：38 个模型、顺序一致、逐字段差异 **0**（上下文 / 最大上下文 / 模态 / 默认档位 / 搜索 / apply_patch 类型 / 显示名 / 档位表）；`vision_proxy.py`、`model_discovery.py`、`reasoning_registry.json`、`reasoning_overrides.json`、`probe-new-model.sh` 五份哈希全一致；代理与自动发现两个 launchd 任务（6h + 开机）正确落盘。
+- **旧机更新会自动纠错**：新模型自动补回（union-alpha / grok-4.6 / hy4-preview 37→40）、上下文纠回（hy3-go 200000→262144）、模态与显示名按 models.dev 纠正、陈旧代码文件按 mtime 覆盖、下架模型走 12h 宽限后清理。
+- **修掉一个真缺口：手工实测档位被旧目录反压**。以前「目录里已有、且覆盖层也有」的模型会被跳过同步，导致老机器上错误的档位永远修不回来，而 `reasoning_registry.json` 又是照着目录生成的（实测 glm-5.3-go 卡在 `['medium']`、deepseek-v4-flash-go 卡在 `['low']`，一致性检查还打印「以目录为准」）。现在抽出 `_effective_levels()`，优先级钉死 **覆盖层 > models.dev > opencodex**，不一致就纠回并打日志，一致性检查文案同步改对；新增两条回归用例（含用假 `CODEX_HOME`/`CACHE_DIR` 驱动整个 `sync()` 的端到端用例）。
+- 版本 **1.1.9.6 (26)**。
 
 ### v1.1.9.5 — Union Alpha Free 的上下文与档位对齐真实值（2026-09-17）
 

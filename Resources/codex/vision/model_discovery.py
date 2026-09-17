@@ -441,6 +441,20 @@ def _read_json(path, default):
         pass
     return default
 
+def _effective_levels(bare, lookup, md_entry, up_entry, overrides):
+    """档位优先级：覆盖层（手工实测）> models.dev > opencodex。
+
+    返回 (levels, manual)。manual=True 表示这组档位来自 reasoning_overrides.json，
+    同步时要把目录里的陈旧值纠回来（2026-09-17 修：以前有覆盖层的条目反而被目录反压，
+    老机器上错档位永远修不好，registry 还会照着错的目录生成）。
+    """
+    manual = overrides.get(bare) or overrides.get(lookup)
+    if manual:
+        return list(manual), True
+    from_remote = (md_entry[1] if md_entry else None) or (up_entry[1] if up_entry else None)
+    return (list(from_remote) if from_remote else None), False
+
+
 def load_reasoning_overrides():
     """手工实测档位覆盖层（唯一权威手工来源）。
 
@@ -907,22 +921,28 @@ def sync(force=False, dry_run=False):
                     _log(f"显示名 {slug}: {m.get('display_name')!r} -> {want_name!r} (models.dev)")
                     m["display_name"] = want_name
                     updated += 1
-            # 档位：registry 手工实测条目不动；否则 models.dev > opencodex
-            if not (_reg.get(bare) or _reg.get(lookup)):
-                levels = (md[1] if md else None) or (up[1] if up else None)
-                if levels and [lv.get("effort") for lv in m.get("supported_reasoning_levels", [])] != levels:
-                    descs = {
-                        "low": "Fast responses with lighter reasoning",
-                        "medium": "Balanced reasoning for everyday tasks",
-                        "high": "Extra high reasoning depth for complex problems",
-                        "xhigh": "Extended reasoning depth for harder tasks",
-                        "max": "Maximum reasoning depth for the hardest problems",
-                        "none": "No reasoning",
-                        "ultra": "Maximum reasoning with automatic task delegation",
-                    }
-                    m["supported_reasoning_levels"] = [{"effort": lv, "description": descs.get(lv, lv)} for lv in levels]
-                    m["default_reasoning_level"] = levels[0] if levels else m.get("default_reasoning_level", "high")
-                    updated += 1
+            # 档位：覆盖层（手工实测）> models.dev > opencodex。
+            # 2026-09-17 修：以前只在「目录里没有覆盖层条目」时才动档位，导致
+            # 老机器上目录里的陈旧档位永远修不回来（覆盖层反而被目录覆盖——
+            # registry 是按目录生成的，实测见假 HOME 回归：glm-5.3-go 卡在 ['medium']）。
+            # 现在覆盖层说了算，目录跟它不一致就纠回来。
+            levels, manual_levels = _effective_levels(bare, lookup, md, up, _reg)
+            if levels and [lv.get("effort") for lv in m.get("supported_reasoning_levels", [])] != levels:
+                descs = {
+                    "low": "Fast responses with lighter reasoning",
+                    "medium": "Balanced reasoning for everyday tasks",
+                    "high": "Extra high reasoning depth for complex problems",
+                    "xhigh": "Extended reasoning depth for harder tasks",
+                    "max": "Maximum reasoning depth for the hardest problems",
+                    "none": "No reasoning",
+                    "ultra": "Maximum reasoning with automatic task delegation",
+                }
+                if manual_levels:
+                    _log(f"档位 {slug}: {[lv.get('effort') for lv in m.get('supported_reasoning_levels', [])]}"
+                         f" -> {levels} (覆盖层纠回)")
+                m["supported_reasoning_levels"] = [{"effort": lv, "description": descs.get(lv, lv)} for lv in levels]
+                m["default_reasoning_level"] = levels[0] if levels else m.get("default_reasoning_level", "high")
+                updated += 1
         if updated:
             _log(f"auto context/reasoning updated {updated} fields (models.dev/registry)")
 
@@ -1153,7 +1173,8 @@ def validate_catalog(models, modelsdev_map=None):
             issues.append(f"{slug}: 档位 {unknown} 不在 Codex 有效档位表里")
         ov = overrides.get(bare)
         if ov and list(ov) != list(lv):
-            issues.append(f"{slug}: 覆盖层 {list(ov)} 与目录 {lv} 不一致（以目录为准）")
+            # 2026-09-17：覆盖层是手工实测真源，目录跟它不一致时同步会纠目录（以前写反了）
+            issues.append(f"{slug}: 覆盖层 {list(ov)} 与目录 {lv} 不一致（覆盖层优先，同步会纠正目录）")
     need = set()
     for m in models:
         need |= set(_levels_of(m))
