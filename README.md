@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.4.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.5.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.4.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.5.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,21 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.4.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.4.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.5.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.5.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.5 — Union Alpha Free 的上下文与档位对齐真实值（2026-09-17）
+
+- **上下文 262144 / 输出 131072，三方实锤**：超长输入触发网关原文 `Prompt too long: about 360081 tokens estimated, but the maximum context length is 262144 tokens including the completion`；`max_tokens: 999999999` 回 `max_tokens exceeds maximum of 131072`；models.dev 的 `opencode-go/union-alpha` 与 `opencode/union-alpha` 两条元数据同为 `context 262144 / output 131072`。已把 262144 钉进 `CONTEXT_OVERRIDES`，避免以后上游元数据漂移把 Codex 窗口改小。
+- **推理档位只有一档 `high`，这是真值不是漏配**：models.dev 明写 `reasoning_options: []`（`reasoning: true`，会思考但不可调）；实测 `thinking: enabled/disabled` + `budget_tokens` 512/1024/4096/32768/65536/90000、以及 `reasoning.effort` / `reasoning_effort` 全部被接受但行为一致（同题 4 次采样 output_tokens：默认 42.5 / disabled 41.0 / enabled 40），流式里也从不出现 `thinking` 块——网关吞掉了这些参数。已写进 `reasoning_overrides.json` 钉住：想「快一点」得换模型，这个旋钮是假的。
+- **抖动容忍度提高**：`union-alpha` 会成片回 `503 Endpoint is unavailable`（实测连续 3 次），messages 桥的瞬时 5xx 重试从 3 次提到 4 次（退避 0.8/1.6/2.4s）。
+- 维护手册 §29 补测段落记录全部原始证据。
+- 版本 **1.1.9.5 (25)**。
 
 ### v1.1.9.4 — Union Alpha Free 真能在 Codex 里跑了：新增 Anthropic Messages 通道（2026-09-17）
 

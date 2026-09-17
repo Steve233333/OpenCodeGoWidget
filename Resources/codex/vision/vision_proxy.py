@@ -2922,7 +2922,7 @@ class Proxy:
 
     async def _open_chat_upstream(self, chat_path, chat_body, fwd_headers, upstream, model):
         """chat 桥的上游调用：瞬时 5xx 退避重试（同样只在没往客户端写数据前重试）。"""
-        attempts = 3
+        attempts = 4
         last = None
         for attempt in range(attempts):
             resp = await self._open_upstream("POST", chat_path, chat_body, fwd_headers, upstream)
@@ -2971,7 +2971,7 @@ class Proxy:
         503 "Endpoint is unavailable"），此时没有生成任何内容、没计费，
         所以退避重试；重试只发生在「还没往客户端写一个字节」之前。
         """
-        attempts = 3
+        attempts = 4
         for attempt in range(attempts):
             try:
                 messages_resp, payload = await self._open_messages_upstream(parsed, path, headers, upstream)

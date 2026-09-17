@@ -372,3 +372,8 @@ rm -rf ~/Library/Application\ Support/Codex-Patched/GPUCache ~/Library/Applicati
 - 两条桥都加瞬时 5xx（500/502/503/504）退避重试（只在没往客户端写字节前重试，不会重复计费）；实测 `union-alpha` 会随机回 `503 Endpoint is unavailable`，重试一次即成功。
 验证（经 `127.0.0.1:19100` 真实打）：流式文本、`shell` 工具调用（`{"cmd":"pwd"}` 合法 JSON）、带 `tool_result` 的第二轮、`apply_patch` freeform（返回合法 V4A patch）、非流式、`union-alpha-go` 全部 `200`；对照组 `deepseek-v4-flash-go / mimo-v2.5-go / kimi-k3-go / qwen3.8-max-go` 仍 `200`（chat 桥恢复）；离线 66 项鲁莽用例 + 31 项单测全绿。
 教训：网关每次加严（先是「Model not supported for format openai」从 500 改 401，现在是强制 session 头），只有拿对照组同刻直打才分得清「模型个别问题」和「网关整体变更」。`big-pickle`（Zen）当前上游 `401 Model is disabled`，与本改动无关。
+
+补测（2026-09-17 2，上下文与档位对上真值）：
+- **上下文 262144 / 输出 131072**：超长输入实测触发网关原文 `Prompt too long: about 360081 tokens estimated, but the maximum context length is 262144 tokens including the completion`；`max_tokens: 999999999` 实测回 `max_tokens exceeds maximum of 131072`；`models.dev` 的 `opencode-go/union-alpha` 与 `opencode/union-alpha` 两条元数据同为 `context 262144 / output 131072`，三方一致。`context_window`/`max_context_window` 已钉在 `CONTEXT_OVERRIDES`（防上游元数据漂移），`input_modalities text+image` 与 models.dev `modalities` 一致。
+- **推理档位只有一档（`high`），不是漏配**：models.dev 明写 `reasoning_options: []`（`reasoning: true`，即「会思考但不可调」）；实测 `thinking: {enabled/disabled}`＋`budget_tokens` 512/1024/4096/32768/65536/90000 与 OpenAI 味的 `reasoning_effort`/`reasoning.effort` 全部被 200 接受但**行为完全一致**（同一题 4 次采样 output_tokens：默认 42.5 / disabled 41.0 / enabled 40），流式里也从不出现 `thinking` 块——即网关吞掉这些参数。故 registry 只声明 `high`，已写进 `reasoning_overrides.json` 钉住；想「快一点」只能换模型，别指望这个旋钮。
+- 供应商抖动：`union-alpha` 会成片回 `503 Endpoint is unavailable`（实测连续 3 次），messages 桥的瞬时 5xx 重试次数因此从 3 次提到 4 次（退避 0.8/1.6/2.4s）。

@@ -101,6 +101,10 @@ MODELSDEV_TTL = 24 * 3600
 # 手工实测过的 context 覆盖（优先于 models.dev；如 hy3 实测 262144，models.dev 写 256000）
 CONTEXT_OVERRIDES = {
     "hy3": 262144,
+    # 2026-09-17 union-alpha：网关报错原文 "the maximum context length is 262144 tokens including
+    # the completion"（超长输入实测，300k 词被拒）；models.dev 同为 262144 / output 131072，
+    # max_tokens 上限实测 131072（"max_tokens exceeds maximum of 131072"）。钉住防止上游元数据漂移。
+    "union-alpha": 262144,
 }
 
 # Codex models.json schema 的 input_modalities 只认这三个（2026-09-05 副本卡 logo 实锤：
