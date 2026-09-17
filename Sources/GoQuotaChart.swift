@@ -81,7 +81,8 @@ struct GoQuotaChart: View {
 
             VStack(spacing: 5) {
                 ForEach(sorted) { q in
-                    if q.monthly == nil || q.slug == "ox-alpha-free" {
+                    // 免费/不限量行解析出来 quota 全为空，直接画金条；不再按 slug 写死某个模型
+                    if q.monthly == nil {
                         GoldBarRow(displayName: q.displayName)
                     } else {
                         QuotaBarRowNested(quota: q, ratio: ratio, c5h: c5h, cWeekly: cWeekly, cMonthly: cMonthly)
@@ -124,7 +125,7 @@ struct GoQuotaChart: View {
             }
             .frame(height: 16)
 
-            Text("数据实时同步自 opencode.ai/docs/zh-cn/go/ 配额表，刷新自动更新；Ox Alpha Free 为限时免费不计配额。")
+            Text("数据实时同步自 opencode.ai/docs/zh-cn/go/ 配额表，刷新自动更新\(freeNote)。")
                 .font(.system(size: 8)).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
@@ -132,6 +133,13 @@ struct GoQuotaChart: View {
         .background(Color.primary.opacity(0.03))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
+    }
+
+    /// 脚注里的免费说明跟着数据走：官方换限时免费模型（Ox → Union）时不用再改代码
+    private var freeNote: String {
+        let names = quotas.filter { $0.monthly == nil }.map(\.displayName)
+        guard !names.isEmpty else { return "" }
+        return "；\(names.joined(separator: "、")) 为限时免费不计配额"
     }
 }
 

@@ -1,9 +1,9 @@
-# 模型 × 调整矩阵（基线 2026-09-14）
+# 模型 × 调整矩阵（基线 2026-09-17）
 
 > 由 `docs/gen-model-matrix.py` 生成：模型清单来自 `Resources/codex/templates/models.json`，
 > 协议/搜索列来自 `vision_proxy.py` 的名单。新增模型按 SOP 接入后重跑本脚本。
 
-总数 37（Go 27 + Zen 8 + 官方 2）
+总数 38（Go 28 + Zen 8 + 官方 2）
 
 | # | Slug | 显示名 | Context | 档位 | 协议 | 搜索 |
 |---|---|---|---|---|---|---|
@@ -34,16 +34,17 @@
 | 25 | `deepseek-v4-flash-vision-exp-go` | DeepSeek-V4-Flash-Vision-Exp (Go) | 1,000,000 | low,high,max | 原生 | 原生 |
 | 26 | `hy4-preview-go` | Hy4-Preview (Go) | 1,024,000 | high | 桥接 | 边车 |
 | 27 | `hy3-go` | Hy3 (Go) | 262,144 | high | 桥接 | 边车 |
-| 28 | `grok-4.6-go` | Grok-4.6 (Go) | 500,000 | low,high,max | 桥接 | 边车 |
-| 29 | `gpt-5.6-luna-go` | GPT-5.6-Luna (Go) | 1,050,000 | low,medium,high,xhigh,max | 原生 | 原生 |
-| 30 | `big-pickle-zen` | Big Pickle Free (Zen) | 200,000 | high | 桥接 | 边车 |
-| 31 | `deepseek-v4-flash-free-zen` | DeepSeek V4 Flash Free (Zen) | 200,000 | low,high,max | 原生 | 原生 |
-| 32 | `muse-spark-1.3-contributor-free-zen` | Muse Spark 1.3 Contributor Free (Zen) | 1,048,576 | low,medium,high,xhigh | 原生 | 原生 |
-| 33 | `muse-spark-1.2-contributor-free-zen` | Muse Spark 1.2 Free (Zen) | 1,048,576 | low,medium,high,xhigh | 原生 | 原生 |
-| 34 | `mimo-v2.5-free-zen` | MiMo V2.5 Free (Zen) | 200,000 | low,high,max | 桥接 | 边车 |
-| 35 | `ling-3.0-flash-fin-free-zen` | Ling 3.0 Flash Fin Free (Zen) | 262,144 | high | 桥接 | 边车 |
-| 36 | `nemotron-3-ultra-free-zen` | Nemotron 3 Ultra Free (Zen) | 1,000,000 | high | 桥接 | 边车 |
-| 37 | `nemotron-3.5-lightning-free-zen` | Nemotron 3.5 Lightning Free (Zen) | 262,144 | high | 桥接 | 边车 |
+| 28 | `union-alpha-go` | Union-Alpha-Free (Go) | 262,144 | high | 原生 | 边车 |
+| 29 | `grok-4.6-go` | Grok-4.6 (Go) | 500,000 | low,high,max | 桥接 | 边车 |
+| 30 | `gpt-5.6-luna-go` | GPT-5.6-Luna (Go) | 1,050,000 | low,medium,high,xhigh,max | 原生 | 原生 |
+| 31 | `big-pickle-zen` | Big Pickle Free (Zen) | 200,000 | high | 桥接 | 边车 |
+| 32 | `deepseek-v4-flash-free-zen` | DeepSeek V4 Flash Free (Zen) | 200,000 | low,high,max | 原生 | 原生 |
+| 33 | `muse-spark-1.3-contributor-free-zen` | Muse Spark 1.3 Contributor Free (Zen) | 1,048,576 | low,medium,high,xhigh | 原生 | 原生 |
+| 34 | `muse-spark-1.2-contributor-free-zen` | Muse Spark 1.2 Free (Zen) | 1,048,576 | low,medium,high,xhigh | 原生 | 原生 |
+| 35 | `mimo-v2.5-free-zen` | MiMo V2.5 Free (Zen) | 200,000 | low,high,max | 桥接 | 边车 |
+| 36 | `ling-3.0-flash-fin-free-zen` | Ling 3.0 Flash Fin Free (Zen) | 262,144 | high | 桥接 | 边车 |
+| 37 | `nemotron-3-ultra-free-zen` | Nemotron 3 Ultra Free (Zen) | 1,000,000 | high | 桥接 | 边车 |
+| 38 | `nemotron-3.5-lightning-free-zen` | Nemotron 3.5 Lightning Free (Zen) | 262,144 | high | 桥接 | 边车 |
 
 ## 图例
 - **协议**：原生=直透 `/responses`；桥接=/responses 不可用时自动切 chat；无条件桥=改走 chat 的原生端点

@@ -40,7 +40,10 @@ enum ModelPalette {
         "qwen3.7-plus": Color(red: 0.65, green: 0.76, blue: 0.92),
         "qwen3.7-max": Color(red: 0.60, green: 0.70, blue: 0.90),
         "qwen3.8-max": Color(red: 0.55, green: 0.68, blue: 0.88),
-        "ox-alpha-free": Color(red: 0.45, green: 0.85, blue: 0.45), // 限时免费 亮绿
+        "union-alpha": Color(red: 0.45, green: 0.85, blue: 0.45), // 限时免费 亮绿（2026-09 起由 Union 接手）
+        // 历史用量专用：ox-alpha-free 2026-08-28 已从 Go 下架，留着是为了 8-9 月旧柱子颜色不跳变
+        "ox-alpha-free": Color(red: 0.62, green: 0.80, blue: 0.62), // 褪色绿
+        "omen-alpha": Color(red: 0.40, green: 0.80, blue: 0.72), // 深青绿（API 有、文档配额表没有）
         // 兼容旧模型名别名
         "muse-spark": Color(red: 0.72, green: 0.92, blue: 0.72),
         "deepseek": Color(red: 0.90, green: 0.90, blue: 0.68),
@@ -50,7 +53,6 @@ enum ModelPalette {
         "minimax": Color(red: 0.78, green: 0.72, blue: 0.92),
         "qwen": Color(red: 0.65, green: 0.76, blue: 0.92),
         "hy": Color(red: 0.88, green: 0.88, blue: 0.62),
-        "ox": Color(red: 0.45, green: 0.85, blue: 0.45),
     ]
 
     static func color(for model: String) -> Color {

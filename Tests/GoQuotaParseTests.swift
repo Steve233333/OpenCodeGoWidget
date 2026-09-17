@@ -25,6 +25,8 @@ let fixtureHTML = """
 <tr><td>MiMo-V2.5</td><td>30,100</td><td>75,200</td><td>150,400</td></tr>
 <tr><td>Short Model</td><td>2,000</td><td>5,000</td><td>10,000</td></tr>
 <tr><td>Free Model</td><td>-</td><td>-</td><td>-</td></tr>
+<!-- 2026-09-17 Union Alpha Free：官方给限时免费行写「无限制」，白名单漏了它 -> 整行消失 -->
+<tr><td>Union Alpha Free</td><td>无限制</td><td>无限制</td><td>无限制</td></tr>
 <!-- 价格表行：带 $ 必须被排除 -->
 <tr><td>GLM-5.3 (Peak)</td><td>$0.30</td><td>$1.20</td><td>$0.006</td></tr>
 <!-- 模型清单表行：模型 / id / Base URL / SDK，必须被排除 -->
@@ -58,7 +60,7 @@ func testFixture() {
         check(false, "fixture 应解析成功")
         return
     }
-    check(rows.count == 14, "行数 = 14（实际 \(rows.count)）")
+    check(rows.count == 15, "行数 = 15（实际 \(rows.count)）")
 
     guard let v41 = rows.first(where: { $0.slug == "deepseek-v4.1-flash" }) else {
         check(false, "V4.1 Flash 必须在结果里")
@@ -75,6 +77,8 @@ func testFixture() {
     check(!rows.contains(where: { $0.displayName.contains("$") }), "价格表行被排除")
     check(!rows.contains(where: { $0.slug.contains("chat/completions") }), "模型清单表行被排除")
     check(rows.first(where: { $0.slug == "free-model" })?.h5 == nil, "免费行保留且配额为空")
+    check(rows.contains(where: { $0.slug == "union-alpha" }), "「无限制」行必须保留（Union Alpha Free）")
+    check(rows.first(where: { $0.slug == "union-alpha" })?.monthly == nil, "无限制行配额为空 -> 界面画金条")
     check(rows.first?.h5 == 110, "按 h5 升序排列")
 }
 
@@ -118,6 +122,8 @@ func testLive() {
     check(rows.count >= 25, "真实页面行数 ≥ 25（实际 \(rows.count)）")
     check(rows.contains(where: { $0.slug == "deepseek-v4.1-flash" && ($0.h5 ?? 0) > 0 }),
           "真实页面含 deepseek-v4.1-flash 且有配额值")
+    check(rows.contains(where: { $0.slug == "union-alpha" }),
+          "真实页面含 union-alpha（限时免费行，slug 不能猜成 union-alpha-free）")
 }
 
 // swiftc 多文件编译时只有 main.swift 允许顶层语句，所以这里用 @main 包一层

@@ -38,13 +38,16 @@ enum GoQuotaRegistry {
     static let suiteName = "2DC432GLL2.com.steve233.opencodego"
     // v2（2026-09-14）：解析器从「纯文本单元格」改成「剥标签 + 取 <strong> 当前值」，
     // 缓存键一并升级，否则升级后 12h TTL 内还会继续显示缺 V4.1 Flash 的旧列表。
-    static let cacheKey = "go_quotas_json_v2"
-    static let cacheDateKey = "go_quotas_date_v2"
+    // v3（2026-09-17）：免费行判定加上「无限制」（Union Alpha Free 三格都写这个），
+    // 不升 key 的话 12h 内还会继续显示缺 Union 的 v2 缓存。
+    static let cacheKey = "go_quotas_json_v3"
+    static let cacheDateKey = "go_quotas_date_v3"
     static let ttl: TimeInterval = 12 * 3600 // 文档日更，12h 足够及时
 
-    /// 兜底名单（离线 / 首装用）：2026-09-14 从实时配额表整表刷新，27 行含
+    /// 兜底名单（离线 / 首装用）：2026-09-17 从实时配额表整表刷新，28 行含
     /// `deepseek-v4.1-flash`（4x 促销当前值 26,000/65,000/130,000 + 备注）。
-    /// `ox-alpha-free` 不在文档配额表里（页脚标注「限时免费不计配额」），保留一行方便离线时仍能看到它。
+    /// 限时免费那行 9 月已由 `union-alpha` 接手：`ox-alpha-free` 2026-08-28 从 Go 下架（直连 401），
+    /// 它的亮绿配色留给 Union，旧配色只在历史费用里还认得出（见 ModelPalette）。
     static let fallbackQuotas: [GoQuota] = [
         GoQuota(slug: "kimi-k3", displayName: "Kimi K3", h5: 110, weekly: 250, monthly: 490),
         GoQuota(slug: "qwen3.8-max", displayName: "Qwen3.8 Max", h5: 160, weekly: 400, monthly: 810),
@@ -73,7 +76,7 @@ enum GoQuotaRegistry {
         GoQuota(slug: "mimo-v2.5", displayName: "MiMo-V2.5", h5: 30100, weekly: 75200, monthly: 150400),
         GoQuota(slug: "muse-spark-1.3-contributor", displayName: "Muse Spark 1.3 Contributor", h5: 45300, weekly: 113300, monthly: 226600),
         GoQuota(slug: "muse-spark-1.2-contributor", displayName: "Muse Spark 1.2 Contributor", h5: 45300, weekly: 113300, monthly: 226600),
-        GoQuota(slug: "ox-alpha-free", displayName: "Ox Alpha Free", h5: nil, weekly: nil, monthly: nil),
+        GoQuota(slug: "union-alpha", displayName: "Union Alpha Free", h5: nil, weekly: nil, monthly: nil, note: "限时"),
     ]
 
     private static let logger = Logger(subsystem: "com.steve233.opencodego", category: "GoQuota")
@@ -198,7 +201,9 @@ enum GoQuotaRegistry {
         let rows = rawGroups(in: html, pattern: #"<tr[^>]*>(.*?)</tr>"#)
         guard !rows.isEmpty else { return nil }
 
-        let freeTokens: Set<String> = ["-", "—", "", "限免", "免费", "无限", "∞", "不计配额", "限时免费"]
+        // 免费/不限量官方换过好几种写法：-, 限免, 限时免费, 无限, 无限制(2026-09-17 Union Alpha Free), 不限, free
+        let freeTokens: Set<String> = ["-", "—", "", "限免", "免费", "无限", "无限制", "不限", "不限量",
+                                       "∞", "不计配额", "限时免费", "限时免费不计配额", "free", "unlimited"]
         func parseInt(_ s: String) -> Int? {
             let t = s.replacingOccurrences(of: ",", with: "")
                 .replacingOccurrences(of: "，", with: "")
@@ -208,7 +213,7 @@ enum GoQuotaRegistry {
             return Int(t)
         }
         func isQuotaCell(_ s: String) -> Bool {
-            parseInt(s) != nil || freeTokens.contains(s.trimmingCharacters(in: .whitespaces))
+            parseInt(s) != nil || freeTokens.contains(s.trimmingCharacters(in: .whitespaces).lowercased())
         }
 
         var result: [GoQuota] = []
@@ -229,7 +234,7 @@ enum GoQuotaRegistry {
                                 h5: parseInt(h5s), weekly: parseInt(ws), monthly: parseInt(ms), note: note)
             if result.contains(where: { $0.slug == quota.slug }) { continue }
             result.append(quota)
-            if result.count >= 30 { break }
+            if result.count >= 40 { break }
         }
         // 需至少 10 行才认为成功，避免误抓小表；不足就返回 nil，调用方继续用缓存
         guard result.count >= 10 else { return nil }
@@ -245,8 +250,16 @@ enum GoQuotaRegistry {
         // 去掉括号备注
         if let r = s.range(of: "(") { s = String(s[..<r.lowerBound]) }
         s = s.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        // 显示名跟网关真实 id 不一致的在这里对齐：文档写 "Union Alpha Free"，网关 id 是 `union-alpha`
+        // （猜成 union-alpha-free 会 401 Model not supported，models.dev 里也没有这条可校正）
+        if let alias = slugAliases[s] { return alias }
         return s
     }
+
+    /// 显示名归一后 ≠ 网关真实 id 的对照表
+    static let slugAliases: [String: String] = [
+        "union-alpha-free": "union-alpha",
+    ]
 
     @discardableResult
     static func refreshIfNeeded(force: Bool = false) async -> [GoQuota] {

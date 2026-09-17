@@ -10,8 +10,10 @@ enum ModelRegistry {
     static let cacheDateKey = "go_model_ids_date"
     static let ttl: TimeInterval = 24 * 3600
 
-    // 回退列表：当前 Go 全量 30 项（API 2026-08-24 快照 + Muse Spark 1.3），保证首装/断网时即有完整图例
+    // 回退列表：当前 Go 全量 38 项（API 2026-09-17 快照），保证首装/断网时即有完整图例
     // 顺序与 API 返回一致，兼容文档表
+    // 2026-09-17 刷新：补 union-alpha / omen-alpha / hy4-preview / qwen3.8-flash / glm-5.3-flash /
+    // longcat-2.0 / grok-4.6 / deepseek-v4.1-flash / deepseek-flash；ox-alpha-free 8-28 已下架，移除。
     static let fallbackOrdered: [String] = [
         "minimax-m3",
         "minimax-m2.7",
@@ -19,17 +21,21 @@ enum ModelRegistry {
         "kimi-k3",
         "kimi-k2.7-code",
         "kimi-k2.6",
+        "longcat-2.0",
         "kimi-k2.5",
         "glm-5.2",
+        "glm-5.3-flash",
         "glm-5.3",
-        "ox-alpha-free",
         "glm-5.1",
         "glm-5",
         "deepseek-v4-pro",
         "deepseek-v4-flash",
+        "deepseek-flash",
+        "deepseek-v4.1-flash",
         "deepseek-v4-flash-vision-exp",
         "qwen3.7-max",
         "qwen3.8-max",
+        "qwen3.8-flash",
         "qwen3.7-plus",
         "qwen3.6-plus",
         "qwen3.5-plus",
@@ -37,13 +43,20 @@ enum ModelRegistry {
         "mimo-v2-omni",
         "mimo-v2.5-pro",
         "mimo-v2.5",
+        "hy4-preview",
         "hy3",
+        "union-alpha",
         "hy3-preview",
         "gpt-5.6-luna",
         "grok-4.5",
-        "muse-spark-1.2-contributor",
+        "grok-4.6",
         "muse-spark-1.3-contributor",
+        "muse-spark-1.2-contributor",
+        "omen-alpha",
     ]
+
+    /// 缓存里必须出现的模型，缺任何一个都视为过期（否则数量凑够也发现不了漏抓）
+    static let requiredKeys: Set<String> = ["kimi-k3", "qwen3.7-max", "qwen3.7-plus", "mimo-v2-pro", "union-alpha"]
 
     private static let logger = Logger(subsystem: "com.steve233.opencodego", category: "ModelRegistry")
     private static let endpoint = URL(string: "https://opencode.ai/zen/go/v1/models")!
@@ -59,9 +72,8 @@ enum ModelRegistry {
         if arr.count < fallbackOrdered.count {
             return fallbackOrdered
         }
-        // 若缺少关键新模型（如 kimi-k3/qwen），也视为过期回退
-        let required: Set<String> = ["kimi-k3", "qwen3.7-max", "qwen3.7-plus", "mimo-v2-pro"]
-        if !required.isSubset(of: Set(arr.map { $0.lowercased() })) {
+        // 若缺少关键新模型（如 kimi-k3/qwen/union-alpha），也视为过期回退
+        if !requiredKeys.isSubset(of: Set(arr.map { $0.lowercased() })) {
             return fallbackOrdered
         }
         return arr
@@ -72,8 +84,7 @@ enum ModelRegistry {
         guard let d = UserDefaults(suiteName: suiteName),
               let arr = d.stringArray(forKey: cacheKey), !arr.isEmpty else { return true }
         if arr.count < fallbackOrdered.count { return true }
-        let required: Set<String> = ["kimi-k3", "qwen3.7-max", "qwen3.7-plus", "mimo-v2-pro"]
-        if !required.isSubset(of: Set(arr.map { $0.lowercased() })) { return true }
+        if !requiredKeys.isSubset(of: Set(arr.map { $0.lowercased() })) { return true }
         if let date = cachedDate(), Date().timeIntervalSince(date) < ttl { return false }
         return true
     }

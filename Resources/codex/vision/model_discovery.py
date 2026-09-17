@@ -122,6 +122,7 @@ FALLBACK_IDS = [
     "qwen3.7-max","qwen3.8-max","qwen3.7-plus","qwen3.6-plus","qwen3.5-plus",
     "mimo-v2-pro","mimo-v2-omni","mimo-v2.5-pro","mimo-v2.5","hy3","hy3-preview",
     "gpt-5.6-luna","grok-4.5","grok-4.6","muse-spark-1.2-contributor",
+    "union-alpha",
 ]
 
 GO_ALIASES = {"ox-alpha": "ox-alpha-free"}  # keep for compat, but not needed for new ids
@@ -149,6 +150,9 @@ DISPLAY_TO_ID = {
     "deepseek v4 pro": "deepseek-v4-pro",
     "deepseek v4 flash vision exp": "deepseek-v4-flash-vision-exp",
     "deepseek v4 flash": "deepseek-v4-flash",
+    # 2026-09-17：文档写 "Union Alpha Free"，网关真实 id 是 union-alpha
+    # （归一猜测会得到 union-alpha-free → 401 Model not supported，models.dev 里也没有这条可校正）
+    "union alpha free": "union-alpha",
     # 2026-09-10：Go 表格行名 "DeepSeek V4.1 Flash"，网关真实 id 是 deepseek-flash
     # （models.dev 同源；猜成 deepseek-v4.1-flash 会 401 Model not supported）
     "deepseek v4.1 flash": "deepseek-flash",
@@ -189,7 +193,10 @@ def _align_remote_id(norm_display, guess):
         return hit
     return guess
 
-FREE_TOKENS = {"-", "—", "", "限免", "免费", "无限", "∞", "不计配额", "限时免费", "限时免费不计配额"}
+# 2026-09-17：Union Alpha Free 三格写「无限制」，白名单里只有「无限」-> 整行被当无效行丢掉，
+# 连带 union-alpha-go 进不了 models.json。这里补上「无限制/不限/不限量」等写法。
+FREE_TOKENS = {"-", "—", "", "限免", "免费", "无限", "无限制", "不限", "不限量",
+               "∞", "不计配额", "限时免费", "限时免费不计配额", "free", "unlimited"}
 
 def _is_free_val(v):
     t = v.strip().lower()

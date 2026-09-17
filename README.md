@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.2.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.3.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.2.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.3.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,23 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.2.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.2.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.3.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.3.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.3 — 新的限时免费模型 Union Alpha Free 能看到了（2026-09-17）
+
+- **修复「新模型显示不出来」**：官方给限时免费那行的三个配额格写的是「无限制」，而解析器的免费白名单里只有「无限」——`Int("无限制")` 转不出数字、也不在白名单里，整行被当成无效行丢掉。连带 `union-alpha` 根本没机会进入结果（同样的病根也在 Codex 侧的 `model_discovery.py` 里，导致 `union-alpha-go` 一直进不了 models.json）。现在白名单补上「无限制 / 不限 / 不限量 / free / unlimited」，并且不再靠猜 id。
+- **id 不再靠猜**：文档显示名 `Union Alpha Free` 归一后会猜成 `union-alpha-free`，而网关真实 id 是 `union-alpha`（猜错直连 401 Model not supported，models.dev 里也没有这条可校正）。加了显示名 → 网关 id 的对照表。
+- **缓存键升级到 v3**：否则升级后 12 小时 TTL 内还会继续显示缺 Union 的 v2 缓存。
+- **限时免费那行换人**：`ox-alpha-free` 2026-08-28 就从 Go 下架（直连 401），9 月起由 `union-alpha` 接手。兜底名单、配色、脚注文案全部跟着换：亮绿给了 Union，脚注改成从数据里取免费行名（以后官方再换模型不用改代码），ox 只留一个褪色绿给历史费用柱子。
+- **兜底名单整表刷新到 38 项**：补上 `union-alpha` / `omen-alpha` / `hy4-preview` / `qwen3.8-flash` / `glm-5.3-flash` / `longcat-2.0` / `grok-4.6` / `deepseek-v4.1-flash` / `deepseek-flash`；缓存过期判定里加了 `union-alpha`，数量凑够但漏抓也会被发现。
+- **回归 fixture 加固**：`无限制` 行进离线 fixture（行数闸门 15 行）、`--live` 冒烟多断言一条「真实页面含 union-alpha」。
+- 版本 **1.1.9.3 (23)**。
 
 ### v1.1.9.2 — 密钥终于能删能换 + 浏览器登录自动获取（2026-09-14）
 
