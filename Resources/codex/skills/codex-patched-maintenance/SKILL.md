@@ -385,3 +385,15 @@ rm -rf ~/Library/Application\ Support/Codex-Patched/GPUCache ~/Library/Applicati
 更新路径实测：新模型自动补回（union-alpha-go / grok-4.6-go / hy4-preview-go，37→40）、上下文纠回（hy3-go 200000→262144）、模态/显示名按 models.dev 纠正、陈旧代码文件按 mtime 覆盖、假模型进 prune-grace（12h 后下架）。
 **本次修掉的真缺口**：目录里已存在、且覆盖层有手工实测档位的模型，同步时被 `if not (_reg.get(...))` 跳过 → 老机器上的错档位永远修不回来，而 `reasoning_registry.json` 是按目录生成的，等于**错目录反压手工覆盖层**（实测 glm-5.3-go 卡在 `['medium']`、deepseek-v4-flash-go 卡在 `['low']`，一致性检查还打印「以目录为准」）。现在抽出 `_effective_levels()`，优先级固定为**覆盖层 > models.dev > opencodex**，目录跟覆盖层不一致就纠回并打日志（`档位 xxx: [...] -> [...] (覆盖层纠回)`），一致性检查文案同步改成「覆盖层优先」。回归用例 `t_effective_levels_precedence` + `t_sync_heals_stale_levels`（用假 CODEX_HOME/CACHE_DIR 驱动整个 `sync()`）。
 教训：跑任何会让 `model_discovery.sync()` 落盘的测试，必须同时 patch `CODEX_HOME`、`MODELS_JSON`、`CACHE_DIR` 及派生常量——第一次只 patch 了后两者，`sync_desktop_whitelist` 和 backup 步骤去写了真机 `~/.codex-deepseek/config.toml`，把白名单里的 `max` 抹掉了（已从备份还原，测试现已断言真机文件哈希前后一致）。
+
+### 31. 「别的电脑小组件空白、主 App 正常」= 沙盒读不到 App Group（2026-09-17 4，1.1.9.7）
+
+现象：某些机器小组件显示空（老版还写「未配置 ZEN_API_KEY」），主 App 一切正常。
+根因：主 App **非沙盒**（`app.entitlements.plist`），小组件**沙盒**（`entitlements.plist`），唯一数据桥是 App Group 容器 `~/Library/Group Containers/2DC432GLL2.com.steve233.opencodego/widget_snapshot.json`。沙盒侧 `containerURL(forSecurityApplicationGroupIdentifier:)` 一旦返回 nil（App 没进 `/Applications`、被 Gatekeeper 重定位、ZIP 传输破坏扩展签名/entitlements、容器被清），`WidgetDataStore.load()` 就全空 → 走空态分支；那句文案是硬编码的「未配置 ZEN_API_KEY」，**跟 Key 毫无关系**，属误导。主 App 用自己的内存态 + `~/Library` 直写，所以完全无感。
+排查（坏机器直接跑）：`mdfind "kMDItemCFBundleIdentifier == 'com.steve233.opencodego'"`（装了几份）、`codesign -d --entitlements - ".../OpenCodeGoWidget.appex" | grep -A2 application-groups`、`ls -la ~/Library/Group\ Containers/2DC432GLL2.com.steve233.opencodego/`、`log show --last 10m --predicate 'process == "OpenCodeGoWidget"' | grep -i deny`。已排除「App Group 名改过」这条（git 全history 只有 `2DC432GLL2.com.steve233.opencodego` 一个值）。
+修复（1.1.9.7）：
+- **备用通道**：非沙盒主 App 把快照也写进**小组件自己的沙盒容器** `~/Library/Containers/com.steve233.opencodego.widget/Data/Library/Application Support/OpenCodeGoWidget/widget_snapshot.json`——沙盒扩展读自己的容器永远允许，**不依赖任何 entitlement**。只在容器已存在时写，绝不自己建 `Containers` 目录。`save()` 现在三通道（App Group 文件 / 偏好域 / 小组件容器）逐一尝试并返回结果，失败主界面弹橙色告警（以前全是 `try?` 静默）。
+- **空态文案分情况**：读不到共享数据 / 还没有数据 / 快照读取失败，三选一，不再一律甩 Key 的锅。
+- **设置页「小组件自检」**：一键出报告（快照来源+时间、App Group 容器路径与文件是否存在、备用通道可写性、偏好域可用性）+「重写快照」按钮。
+- 验证：用独立 harness（同源文件编译）实跑 `save()`，确认三通道文件全部落盘（317B 测试载荷→已由 App 刷新覆盖回真实数据）；`loadDetailed()` 正确报出 `App Group 文件`。
+教训：这类「有的机器行有的不行」优先怀疑**进程沙盒身份/容器可见性**，而不是数据本身；给沙盒扩展留一条「读自己容器」的兜底通道，能一次性绕开签名、重定位、容器损坏三大类原因。

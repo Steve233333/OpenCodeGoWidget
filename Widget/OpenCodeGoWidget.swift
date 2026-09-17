@@ -5,6 +5,8 @@ import AppIntents
 struct GoUsageEntry: TimelineEntry {
     let date: Date
     let snapshot: WidgetSnapshot?
+    /// 读不到数据时的真实原因（空态文案用它，别再一律甩「未配置 ZEN_API_KEY」）
+    var reason: String? = nil
 }
 
 struct RefreshIntent: AppIntent {
@@ -39,18 +41,30 @@ struct Provider: TimelineProvider {
         GoUsageEntry(date: Date(), snapshot: WidgetDataStore.load() ?? WidgetSnapshot(rolling: 96, weekly: 64, monthly: 82, rollingReset: Date().addingTimeInterval(3600), weeklyReset: Date().addingTimeInterval(86400), monthlyReset: Date().addingTimeInterval(86400*7), costTotal: 1.23, costEntries: ["mimo-v2.5-go":0.6, "deepseek-v4-flash-vision-exp-go":0.4, "glm-5-go":0.23], dailyCosts: [], updatedAt: Date(), error: nil))
     }
     func getSnapshot(in context: Context, completion: @escaping (GoUsageEntry) -> Void) {
-        completion(GoUsageEntry(date: Date(), snapshot: WidgetDataStore.load()))
+        let r = WidgetDataStore.loadDetailed()
+        completion(GoUsageEntry(date: Date(), snapshot: r.snapshot, reason: Self.emptyReason(r)))
     }
     func getTimeline(in context: Context, completion: @escaping (Timeline<GoUsageEntry>) -> Void) {
         // 纯展示：Widget 不再直连网络，完全复用主 App 写入的 widget_snapshot
         // 主 App 的 ContentView.refresh() 是唯一真源（会并发拉 8/9 月并做账期合并）
-        let cached = WidgetDataStore.load()
+        let loaded = WidgetDataStore.loadDetailed()
+        let cached = loaded.snapshot
         let now = Date()
         let staleAfter: TimeInterval = 2 * 60
         // 轻量刷新模型列表（无鉴权，不影响费用）
         Task { _ = await ModelRegistry.refreshIfNeeded() }
         let next = (cached?.updatedAt ?? now).addingTimeInterval(staleAfter)
-        completion(Timeline(entries: [GoUsageEntry(date: now, snapshot: cached)], policy: .after(next)))
+        completion(Timeline(entries: [GoUsageEntry(date: now, snapshot: cached,
+                                                  reason: Self.emptyReason(loaded))],
+                            policy: .after(next)))
+    }
+
+    /// 空态给一句真话：共享容器拿不到 ≠ 没配 Key
+    static func emptyReason(_ r: WidgetSnapshotLoad) -> String? {
+        guard r.snapshot == nil else { return nil }
+        if !r.groupAvailable { return "小组件读不到共享数据" }
+        if !r.groupFileExists { return "还没有用量数据" }
+        return "快照读取失败"
     }
 }
 
@@ -146,8 +160,8 @@ struct GoWidgetView: View {
                 }
             } else {
                 Spacer()
-                Text("未配置 ZEN_API_KEY").font(.caption2).foregroundStyle(.secondary)
-                Text("打开 App 粘贴").font(.caption2).foregroundStyle(.secondary)
+                Text(entry.reason ?? "还没有用量数据").font(.caption2).foregroundStyle(.secondary)
+                Text("打开 App 点「刷新」").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
             }
         }

@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.6.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.7.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.6.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.7.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,22 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.6.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.6.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.7.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.7.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.7 — 「别的电脑小组件空白」不用再猜：加一条备用通道 + 一键自检（2026-09-17）
+
+- **根因说清楚**：主 App 是**非沙盒**进程，小组件是**沙盒**进程，两边唯一的桥是 App Group 容器里的 `widget_snapshot.json`。容器拿不到（App 没进 /Applications、被 Gatekeeper 重定位、扩展签名/entitlements 不可信、容器被清）时，小组件读不到数据 → 空白，而主 App 完全无感 —— 这就是「只有我那台正常」的原因。旧版还在这时候甩一句「未配置 ZEN_API_KEY」，与 Key 毫无关系，纯误导。
+- **新增备用通道（关键修复）**：非沙盒的主 App 现在会把快照**也写进小组件自己的沙盒容器**（`~/Library/Containers/com.steve233.opencodego.widget/Data/Library/Application Support/OpenCodeGoWidget/widget_snapshot.json`）。沙盒扩展读自己的容器永远被允许，**完全不依赖 App Group entitlement**；主通道坏掉的机器靠这条路也能显示。写入只在容器已存在（小组件跑过一次）时进行，不会自己去乱建 Containers 目录。
+- **写入不再静默**：`WidgetDataStore.save()` 现在三通道逐一尝试并返回结果，一个都没写成时主界面顶部弹橙色告警（以前全是 `try?`，失败无声无息）。
+- **空态文案说真话**：改成分情况显示「小组件读不到共享数据」/「还没有用量数据」/「快照读取失败」，而不是一律「未配置 ZEN_API_KEY」。
+- **新增「小组件自检」**：设置页一键生成报告——快照来源与时间、App Group 容器路径与文件是否存在、备用通道是否可写、偏好域是否可用，并附一句判读；旁边还有「重写快照」按钮，把三条通道重新灌一遍。
+- 版本 **1.1.9.7 (27)**。
 
 ### v1.1.9.6 — 换电脑点「配置」能不能复制出一样的 Codex：全链路体检 + 修掉档位映射被目录反压（2026-09-17）
 

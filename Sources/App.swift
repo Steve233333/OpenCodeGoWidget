@@ -125,6 +125,8 @@ struct ContentView: View {
     @State private var quotaUpdatedAt: Date? = GoQuotaRegistry.cachedDate()
     @State private var selectedKeyId: String? = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "selectedCostKeyId")
     @State private var chartAlignment: ChartAlignment = BillingCycle.loadAlignment()
+    /// 小组件共享通道的自检警告（写盘失败 / App Group 容器拿不到时置位，界面顶部显示）
+    @State private var widgetStoreWarning: String?
     @State private var autoTimer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -144,6 +146,20 @@ struct ContentView: View {
             .padding(.horizontal, 18)
             .padding(.top, 16)
             .padding(.bottom, 8)
+
+            if let warning = widgetStoreWarning {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11))
+                    Text(warning).font(.system(size: 10)).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                }
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Color.orange.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 18)
+                .padding(.bottom, 6)
+            }
 
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 16) {
@@ -310,6 +326,10 @@ struct ContentView: View {
             Task { await refresh() }
         }
         .task {
+            // 启动即自检共享通道：App Group 拿不到就先提醒（不依赖这次有没有刷新）
+            if WidgetDataStore.groupContainerURL == nil {
+                widgetStoreWarning = "App Group 容器不可用：小组件会读不到数据，已改走备用通道（齿轮 → 小组件自检）"
+            }
             // 后台同步 Go 模型列表与配额表
             Task {
                 _ = await ModelRegistry.refreshIfNeeded()
@@ -349,7 +369,17 @@ struct ContentView: View {
                 quotas = q
                 quotaUpdatedAt = GoQuotaRegistry.cachedDate()
             }
-            WidgetDataStore.save(snap)
+            // 写快照：三条通道都试一遍；一条都没写成说明小组件必然空白，界面上要说出来而不是静默
+            let savedOK = WidgetDataStore.save(snap)
+            await MainActor.run {
+                if !savedOK {
+                    widgetStoreWarning = "小组件数据写盘失败：三条通道都不可用（点右上角齿轮 → 小组件自检看详情）"
+                } else if WidgetDataStore.groupContainerURL == nil {
+                    widgetStoreWarning = "App Group 容器不可用：已改走备用通道，小组件需重开 App 后再看（齿轮 → 小组件自检）"
+                } else {
+                    widgetStoreWarning = nil
+                }
+            }
             snapshot = snap
             // 文件已原子写入，UserDefaults 也已同步，稍作延迟确保 Widget 扩展的 containerURL 可见
             try? await Task.sleep(nanoseconds: 200_000_000)
@@ -556,6 +586,50 @@ struct MonthChartView: View {
     }
 }
 
+
+/// 小组件自检：一键看清共享通道卡在哪（App Group 容器 / 备用通道 / 偏好域），
+/// 顺便提供「重写快照」把三条通道重新灌一遍。坏机器上用户点一下就能把结论贴出来。
+struct WidgetSelfCheckRow: View {
+    @State private var report: String?
+    @State private var actionNote: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("小组件自检").font(.system(size: 9)).foregroundStyle(.secondary)
+                if let note = actionNote {
+                    Text(note).font(.system(size: 9)).foregroundStyle(note.contains("失败") ? .red : .green)
+                }
+                Spacer()
+                Button("重写快照") {
+                    guard let snap = WidgetDataStore.load() else {
+                        actionNote = "没有快照可写，请先点主界面刷新"
+                        return
+                    }
+                    actionNote = WidgetDataStore.save(snap) ? "三条通道已重写 ✅" : "写盘失败 ❌"
+                    if report != nil { report = WidgetDataStore.diagnose() }
+                }
+                .controlSize(.mini)
+                Button(report == nil ? "自检" : "收起") {
+                    report = report == nil ? WidgetDataStore.diagnose() : nil
+                }
+                .controlSize(.mini)
+            }
+            if let report {
+                ScrollView {
+                    Text(report)
+                        .font(.system(size: 9, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 130)
+                .padding(6)
+                .background(Color.primary.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+        }
+    }
+}
 
 struct SettingsView: View {
     @Binding var apiKey: String
@@ -773,6 +847,8 @@ struct GoSettingsContent: View {
             }
             Divider()
             UpdateStatusRow()
+            Divider()
+            WidgetSelfCheckRow()
             HStack {
                 Spacer()
                 Text("OpenCode 小组件").font(.system(size: 9)).foregroundStyle(.secondary)

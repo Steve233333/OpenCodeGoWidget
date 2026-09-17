@@ -63,39 +63,147 @@ struct WidgetSnapshot: Codable {
     }
 }
 
+/// 读快照的结果：带「从哪个通道读到的」和「读不到时卡在哪」，供小组件空态文案与主 App 自检共用。
+struct WidgetSnapshotLoad {
+    let snapshot: WidgetSnapshot?
+    let source: String
+    let groupContainerPath: String?
+    let groupFileExists: Bool
+    let widgetChannelPath: String?
+    let widgetChannelWritable: Bool
+    var groupAvailable: Bool { groupContainerPath != nil }
+}
+
 enum WidgetDataStore {
     static let suiteName = "2DC432GLL2.com.steve233.opencodego"
     static let snapshotKey = "widget_snapshot"
-    // 文件直通：Group Container 下 Application Support/widget_snapshot.json，Widget 扩展立即可见，不走 cfprefsd
-    static var fileURL: URL? {
-        guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName) else { return nil }
-        return url.appendingPathComponent("widget_snapshot.json")
+    static let widgetBundleID = "com.steve233.opencodego.widget"
+    static let widgetSubdir = "OpenCodeGoWidget"
+    static let fileName = "widget_snapshot.json"
+
+    /// 主通道：App Group 容器（需要 entitlement 生效；沙盒小组件唯一的正规入口）
+    static var groupContainerURL: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName)
     }
+    static var fileURL: URL? { groupContainerURL?.appendingPathComponent(fileName) }
     static var defaults: UserDefaults? { UserDefaults(suiteName: suiteName) }
 
-    static func save(_ snap: WidgetSnapshot) {
-        guard let data = try? JSONEncoder().encode(snap) else { return }
-        // 1) 写文件（主路径）
-        if let url = fileURL {
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: url, options: .atomic)
+    /// 备用通道（本机视角）：小组件自己的沙盒容器。
+    /// 沙盒进程读「自己的容器」永远允许，跟 App Group entitlement 无关；
+    /// 非沙盒的主 App 用真实 home 拼同一条路径写进去（见 widgetHostFileURL）。
+    static var widgetOwnFileURL: URL? {
+        guard let base = try? FileManager.default.url(for: .applicationSupportDirectory,
+                                                      in: .userDomainMask,
+                                                      appropriateFor: nil, create: false) else { return nil }
+        return base.appendingPathComponent(widgetSubdir, isDirectory: true)
+            .appendingPathComponent(fileName)
+    }
+
+    /// 备用通道（宿主机视角）：主 App 往小组件容器里写的那份。
+    /// 只在容器已经由系统创建过（小组件至少跑过一次）时才返回路径，绝不自己乱建 Containers 目录。
+    static var widgetHostFileURL: URL? {
+        let containerData = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers", isDirectory: true)
+            .appendingPathComponent(widgetBundleID, isDirectory: true)
+            .appendingPathComponent("Data", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: containerData.path) else { return nil }
+        return containerData
+            .appendingPathComponent("Library/Application Support/\(widgetSubdir)", isDirectory: true)
+            .appendingPathComponent(fileName)
+    }
+
+    /// 所有能写的通道都写一遍：任意一条通，小组件就还有救。
+    /// 返回是否至少成功写出一条通道（失败不再静默——调用方可据此报警）。
+    @discardableResult
+    static func save(_ snap: WidgetSnapshot) -> Bool {
+        guard let data = try? JSONEncoder().encode(snap) else { return false }
+        var wrote = false
+        for url in [fileURL, widgetHostFileURL, widgetOwnFileURL].compactMap({ $0 }) {
+            do {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try data.write(to: url, options: .atomic)
+                wrote = true
+            } catch {
+                // 单条通道失败不影响其它通道（沙盒里写宿主机路径必然失败，属正常）
+            }
         }
-        // 2) 双写 UserDefaults（兼容旧版 + 调试）
+        // UserDefaults 双写（兼容旧版 + 调试）
         if let d = defaults {
             d.set(data, forKey: snapshotKey)
             d.synchronize()
             CFPreferencesAppSynchronize(suiteName as CFString)
+            wrote = true
         }
+        return wrote
     }
 
-    static func load() -> WidgetSnapshot? {
-        // 优先读文件（最新），失败回退 UserDefaults
+    static func load() -> WidgetSnapshot? { loadDetailed().snapshot }
+
+    static func loadDetailed() -> WidgetSnapshotLoad {
+        let groupPath = groupContainerURL?.path
+        let groupFile = fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let widgetHost = widgetHostFileURL
+        let widgetWritable = widgetHost.map {
+            FileManager.default.isWritableFile(atPath: $0.deletingLastPathComponent().path)
+                || FileManager.default.isWritableFile(atPath: FileManager.default.homeDirectoryForCurrentUser.path)
+        } ?? false
+
+        func wrap(_ snap: WidgetSnapshot, _ source: String) -> WidgetSnapshotLoad {
+            WidgetSnapshotLoad(snapshot: snap, source: source, groupContainerPath: groupPath,
+                               groupFileExists: groupFile, widgetChannelPath: widgetHost?.path,
+                               widgetChannelWritable: widgetWritable)
+        }
+
+        // 1) App Group 文件（最新，不走 cfprefsd）
         if let url = fileURL, let data = try? Data(contentsOf: url),
            let snap = try? JSONDecoder().decode(WidgetSnapshot.self, from: data) {
-            return snap
+            return wrap(snap, "App Group 文件")
         }
-        guard let d = defaults, let data = d.data(forKey: snapshotKey) else { return nil }
-        return try? JSONDecoder().decode(WidgetSnapshot.self, from: data)
+        // 2) App Group 偏好域（旧版兼容）
+        if let d = defaults, let data = d.data(forKey: snapshotKey),
+           let snap = try? JSONDecoder().decode(WidgetSnapshot.self, from: data) {
+            return wrap(snap, "App Group 偏好")
+        }
+        // 3) 备用通道：小组件自己的容器（沙盒里 = 自己的 Application Support；宿主机 = 主 App 写的那份）
+        for (label, url) in [("小组件容器", widgetOwnFileURL), ("小组件容器(宿主)", widgetHostFileURL)] {
+            if let url, let data = try? Data(contentsOf: url),
+               let snap = try? JSONDecoder().decode(WidgetSnapshot.self, from: data) {
+                return wrap(snap, label)
+            }
+        }
+        return WidgetSnapshotLoad(snapshot: nil, source: "无", groupContainerPath: groupPath,
+                                  groupFileExists: groupFile, widgetChannelPath: widgetHost?.path,
+                                  widgetChannelWritable: widgetWritable)
+    }
+
+    /// 主 App 里点「小组件自检」时打印的报告：一眼看出卡在哪条通道。
+    static func diagnose() -> String {
+        let r = loadDetailed()
+        var lines: [String] = []
+        if let s = r.snapshot {
+            let age = Int(Date().timeIntervalSince(s.updatedAt) / 60)
+            lines.append("快照：✅ 读到（来源：\(r.source)）")
+            lines.append("快照时间：\(s.updatedAt.formatted(date: .numeric, time: .standard))（\(age) 分钟前）")
+        } else {
+            lines.append("快照：❌ 三条通道都读不到")
+        }
+        if let p = r.groupContainerPath {
+            lines.append("App Group 容器：✅ \(p)")
+            lines.append("  · 快照文件：\(r.groupFileExists ? "存在" : "不存在")")
+        } else {
+            lines.append("App Group 容器：❌ 拿不到（entitlement/签名问题 → 沙盒小组件必然空白）")
+        }
+        if let p = r.widgetChannelPath {
+            lines.append("备用通道（小组件自己的容器）：\(r.widgetChannelWritable ? "✅ 可写" : "⚠️ 不可写")")
+            lines.append("  · \(p)")
+        } else {
+            lines.append("备用通道：⚠️ 小组件容器还没被系统创建（先把小组件加到桌面/通知中心跑一次）")
+        }
+        lines.append("用户偏好域：\(defaults == nil ? "❌ 不可用" : "✅ 可用")")
+        lines.append("")
+        lines.append("判读：容器 ❌ 或 文件 不存在 → 小组件会空白；备用通道 ✅ 的情况下重开 App 刷新一次即可自愈。")
+        return lines.joined(separator: "\n")
     }
 }
 
