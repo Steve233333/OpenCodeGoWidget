@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.3.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.4.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.3.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.4.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,22 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.3.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.3.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.4.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.4.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.4 — Union Alpha Free 真能在 Codex 里跑了：新增 Anthropic Messages 通道（2026-09-17）
+
+- **新增 `/v1/messages`（Anthropic Messages）桥**：`union-alpha` 这类模型网关只放开了 Anthropic 格式（`/responses` 和 `/chat/completions` 恒 500，同刻其它模型全 200），代理现在把 Responses 请求翻成 Messages 请求、再把 Anthropic SSE 翻回 Responses SSE，Codex 侧完全无感：`instructions→system`、`function_call→tool_use`、`function_call_output→tool_result`、工具 `→ input_schema`、连续同角色合并、`max_tokens` 必填兜底，头部换 `x-api-key` + `anthropic-version`（Bearer 会 401 Missing API key）。
+- **实测全绿**：流式文本、`shell` 工具调用（参数是合法 JSON）、带 `tool_result` 的第二轮、`apply_patch` freeform（返回合法 V4A 补丁）、非流式，全部 200。
+- **顺手修好一条线上故障**：官方开始强制 `x-opencode-session`，缺了直接 `400 MissingSessionID`，而且 chat 端点也中招——实测 chat 桥（glm/mimo/qwen 这一大批）当天已经因此 502。代理以前从不发这个头，现在按「instructions + 前几条消息 + 模型」指纹补一个：同一对话稳定、不同对话不串号。修完 glm/mimo/kimi/qwen 对照组全部恢复 200。
+- **两条桥加瞬时 5xx 重试**（500/502/503/504，只在没往客户端写字节前重试，不会重复计费）：`union-alpha` 会随机回 `503 Endpoint is unavailable`，退避一次就能成。
+- **回归**：离线 66 项鲁莽用例 + 31 项单测（新增 12 项 messages 桥用例）全绿；`docs/MODEL-MATRIX.md` 与维护手册 §29 同步。
+- 版本 **1.1.9.4 (24)**。
 
 ### v1.1.9.3 — 新的限时免费模型 Union Alpha Free 能看到了（2026-09-17）
 

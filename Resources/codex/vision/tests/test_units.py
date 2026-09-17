@@ -297,6 +297,198 @@ def t_history_coerce_float():
     assert json.loads(parsed["input"][0]["arguments"])["yield_time_ms"] == 30000
 
 
+# ------------------------------------------------- messages bridge (union-alpha, 2026-09-17)
+CODEX_MESSAGES_REQ = {
+    "model": "union-alpha",
+    "instructions": "You are Codex",
+    "stream": True,
+    "max_output_tokens": 8000,
+    "tool_choice": "auto",
+    "parallel_tool_calls": False,
+    "tools": [
+        {"type": "function", "name": "shell", "description": "run a command",
+         "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}},
+        {"type": "web_search_preview"},
+    ],
+    "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "看看目录"}]},
+        {"type": "reasoning", "summary": []},
+        {"type": "function_call", "call_id": "call_1", "name": "shell", "arguments": "{\"cmd\": \"ls\"}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "a.txt"},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "只有一个文件"}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "再列一次"}]},
+    ],
+}
+
+
+def t_messages_request_translation():
+    payload = vp._responses_request_to_messages(CODEX_MESSAGES_REQ)
+    assert payload["model"] == "union-alpha"
+    assert payload["stream"] is True
+    assert payload["max_tokens"] == 8000, payload["max_tokens"]
+    assert payload["system"] == "You are Codex"
+    # 首条必须是 user；reasoning 条目被丢掉；tool_result 自成下一轮 user
+    roles = [m["role"] for m in payload["messages"]]
+    assert roles == ["user", "assistant", "user", "assistant", "user"], payload["messages"]
+    assert payload["messages"][0]["content"] == [{"type": "text", "text": "看看目录"}]
+    assert payload["messages"][2]["content"][0]["type"] == "tool_result", payload["messages"][2]
+    assert payload["messages"][2]["content"][0]["tool_use_id"] == "call_1"
+    assert payload["messages"][3]["content"][0]["text"] == "只有一个文件"
+    # 工具：function -> input_schema；原生 web_search 不下发
+    assert len(payload["tools"]) == 1, payload["tools"]
+    tool = payload["tools"][0]
+    assert tool["name"] == "shell" and tool["input_schema"]["type"] == "object"
+    assert tool["description"] == "run a command"
+    assert payload["tool_choice"] == {"type": "auto"}
+
+
+def t_messages_tool_use_history():
+    payload = vp._responses_request_to_messages(CODEX_MESSAGES_REQ)
+    # function_call 要落成 assistant 的 tool_use 块（Anthropic 只认这个形状）
+    assistant = payload["messages"][1]
+    assert assistant["role"] == "assistant"
+    assert [b["type"] for b in assistant["content"]] == ["tool_use"], assistant
+    tool_use = assistant["content"][0]
+    assert tool_use["id"] == "call_1" and tool_use["name"] == "shell"
+    assert tool_use["input"] == {"cmd": "ls"}, tool_use
+    # 连续 assistant（tool_use 后面又跟一条 assistant 文本）要合并成一格，不能再开一轮
+    assert [b["type"] for b in payload["messages"][3]["content"]] == ["text"]
+
+
+def t_messages_request_leading_assistant():
+    parsed = {"model": "union-alpha",
+              "input": [{"type": "message", "role": "assistant", "content": "上一轮"}]}
+    payload = vp._responses_request_to_messages(parsed)
+    assert payload["messages"][0]["role"] == "user", payload["messages"]
+    assert payload["max_tokens"] > 0  # Anthropic 必填
+
+
+def t_messages_custom_tool_fallback():
+    parsed = {"model": "union-alpha", "input": [],
+              "tools": [{"type": "custom", "name": "apply_patch", "description": "V4A"}]}
+    payload = vp._responses_request_to_messages(parsed)
+    assert payload["tools"][0]["name"] == "apply_patch"
+    assert payload["tools"][0]["input_schema"]["properties"]["input"]["type"] == "string"
+
+
+def t_oc_session_stable_per_conversation():
+    first = vp._oc_session_id(CODEX_MESSAGES_REQ)
+    again = vp._oc_session_id(CODEX_MESSAGES_REQ)
+    other = vp._oc_session_id({"model": "union-alpha", "instructions": "别的对话",
+                               "input": [{"type": "message", "role": "user", "content": "hi"}]})
+    assert first == again
+    assert first != other
+    assert len(first) == 36
+
+
+MESSAGES_SSE_TEXT = (
+    'event: message_start\n'
+    'data: {"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],'
+    '"usage":{"input_tokens":11,"output_tokens":1}}}\n\n'
+    'event: content_block_start\n'
+    'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+    'event: content_block_delta\n'
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}\n\n'
+    'event: content_block_stop\n'
+    'data: {"type":"content_block_stop","index":0}\n\n'
+    'event: message_delta\n'
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}\n\n'
+    'event: message_stop\n'
+    'data: {"type":"message_stop"}\n\n'
+)
+
+MESSAGES_SSE_TOOL = (
+    'event: message_start\n'
+    'data: {"type":"message_start","message":{"id":"msg_2","role":"assistant","content":[],'
+    '"usage":{"input_tokens":20,"output_tokens":1}}}\n\n'
+    'event: content_block_start\n'
+    'data: {"type":"content_block_start","index":0,"content_block":'
+    '{"type":"tool_use","id":"toolu_1","name":"shell","input":{}}}\n\n'
+    'event: content_block_delta\n'
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta",'
+    '"partial_json":"{\\"cmd\\":"}}\n\n'
+    'event: content_block_delta\n'
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta",'
+    '"partial_json":" \\"ls -la\\"}"}}\n\n'
+    'event: content_block_stop\n'
+    'data: {"type":"content_block_stop","index":0}\n\n'
+    'event: message_delta\n'
+    'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":12}}\n\n'
+    'event: message_stop\n'
+    'data: {"type":"message_stop"}\n\n'
+)
+
+
+def _messages_events(raw_sse):
+    tr = vp.MessagesBridgeTranslator("union-alpha")
+    out = tr.ensure_created()
+    for frame in raw_sse.split("\n\n"):
+        if frame.strip():
+            out += tr.on_message_frame(frame.encode())
+    events = []
+    for line in out.decode().split("\n"):
+        if line.startswith("data: "):
+            events.append(json.loads(line[6:]))
+    return events
+
+
+def t_messages_stream_text():
+    events = _messages_events(MESSAGES_SSE_TEXT)
+    types = [e["type"] for e in events]
+    assert types[0] == "response.created", types
+    assert "response.output_text.delta" in types
+    assert types[-1] == "response.completed", types
+    delta = next(e for e in events if e["type"] == "response.output_text.delta")
+    assert delta["delta"] == "你好"
+    final = events[-1]["response"]
+    assert final["status"] == "completed"
+    assert final["output"][0]["content"][0]["text"] == "你好"
+    assert final["usage"]["input_tokens"] == 11 and final["usage"]["output_tokens"] == 7, final["usage"]
+    # sequence_number 必须连续递增（Codex 依赖它排序）
+    seqs = [e["sequence_number"] for e in events]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), seqs
+
+
+def t_messages_stream_tool_json_valid():
+    events = _messages_events(MESSAGES_SSE_TOOL)
+    final = events[-1]["response"]
+    item = final["output"][0]
+    assert item["type"] == "function_call", item
+    assert item["name"] == "shell" and item["call_id"] == "toolu_1"
+    assert json.loads(item["arguments"])["cmd"] == "ls -la", item
+    done = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+    assert done and json.loads(done[-1]["arguments"])["cmd"] == "ls -la"
+
+
+def t_messages_stream_error_frame_closes():
+    raw = ('event: message_start\n'
+           'data: {"type":"message_start","message":{"usage":{"input_tokens":3,"output_tokens":0}}}\n\n'
+           'event: error\n'
+           'data: {"type":"error","error":{"type":"overloaded_error","message":"busy"}}\n\n')
+    events = _messages_events(raw)
+    assert events[-1]["type"] == "response.completed", [e["type"] for e in events]
+
+
+def t_messages_nonstream_json():
+    obj = {"id": "msg_3", "type": "message", "role": "assistant", "stop_reason": "tool_use",
+           "content": [{"type": "text", "text": "先看看"},
+                       {"type": "tool_use", "id": "toolu_9", "name": "shell",
+                        "input": {"cmd": "pwd"}}],
+           "usage": {"input_tokens": 12, "output_tokens": 4, "cache_read_input_tokens": 3}}
+    out = vp._build_messages_fallback_json("union-alpha", obj)
+    assert out["status"] == "completed"
+    assert [i["type"] for i in out["output"]] == ["message", "function_call"], out["output"]
+    assert out["output"][0]["content"][0]["text"] == "先看看"
+    assert json.loads(out["output"][1]["arguments"])["cmd"] == "pwd"
+    assert out["usage"]["input_tokens"] == 12 and out["usage"]["total_tokens"] == 16
+    assert out["usage"]["input_tokens_details"]["cached_tokens"] == 3
+
+
+def t_union_alpha_is_messages_only_model():
+    assert "union-alpha" in vp.MESSAGES_ALWAYS_BRIDGE
+    assert "union-alpha" not in vp.RESPONSES_FALLBACK_MODELS
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from http import HTTPStatus
+import hashlib
 import json
 import os
 import re
@@ -221,6 +222,15 @@ _RESPONSES_FALLBACK_TTL = 300.0   # seconds a broken probe result stays cached
 # 2026-09-05 omen-alpha: /responses 适配层整体坏（裸 500、带工具 400），官方原生端点是
 # chat/completions（见 Go docs 端点表）——无条件走桥，不做探测，400 也不会穿透。
 RESPONSES_ALWAYS_BRIDGE = frozenset({"omen-alpha"})
+# 2026-09-17 union-alpha：Go 网关只给这个 stealth 模型开了 Anthropic Messages 格式
+# （/v1/messages 200；/responses 和 /chat/completions 恒 500，同一时刻
+# qwen3.8-max / minimax-m3 / glm-5.3 / omen-alpha / hy4-preview 全部 200，已排除网关整体故障）。
+# 这类模型直接走 messages 桥，不再浪费一次注定 500 的 /responses 探测。
+MESSAGES_ALWAYS_BRIDGE = frozenset({"union-alpha"})
+# 上游 5xx 里属于「供应商抖动、没生成任何内容」的状态码；messages 桥会退避重试
+_UPSTREAM_TRANSIENT_STATUS = frozenset({500, 502, 503, 504})
+_ANTHROPIC_VERSION = "2023-06-01"
+_OC_SESSION_FALLBACK = uuid.uuid4().hex
 _BRIDGE_NONSTREAM_MAX_BYTES = 64 * 1024 * 1024  # P5: cap for buffered non-stream chat bodies
 # Generic fallback: for any Go /responses that 500s, auto-bridge even if not in set
 
@@ -554,6 +564,235 @@ def _build_chat_fallback_json(model, obj, effort=None):
     return response
 
 
+def _oc_session_id(parsed):
+    """官方要求客户端在 x-opencode-session 里带一个稳定的会话 ID。
+
+    Codex 不会发这个头，缺了它 messages 端点直接 400 MissingSessionID；
+    这里用「instructions + 前几条消息 + 模型」的指纹生成，同一段对话稳定复用，
+    不同对话互不串号（换会话不会命中同一个 ID）。
+    """
+    if not isinstance(parsed, dict):
+        return _OC_SESSION_FALLBACK
+    try:
+        parts = []
+        instructions = parsed.get("instructions")
+        if isinstance(instructions, str) and instructions:
+            parts.append(instructions[:2000])
+        if isinstance(parsed.get("model"), str):
+            parts.append(parsed["model"])
+        for item in (parsed.get("input") or [])[:6]:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, str):
+                parts.append(content[:400])
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        parts.append(part["text"][:400])
+        blob = "\n".join(parts) or _OC_SESSION_FALLBACK
+        digest = hashlib.sha1(blob.encode("utf-8", "replace")).hexdigest()
+        return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
+    except Exception:
+        return _OC_SESSION_FALLBACK
+
+
+def _messages_content_blocks(content):
+    """Responses 的 content（str 或 parts）-> Anthropic content blocks。"""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    blocks = []
+    if not isinstance(content, list):
+        return blocks
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype in ("input_text", "output_text", "text", "summary_text"):
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                blocks.append({"type": "text", "text": text})
+        elif ptype in ("input_image", "image", "image_url"):
+            url = part.get("image_url") or part.get("url")
+            if isinstance(url, dict):
+                url = url.get("url")
+            if not isinstance(url, str):
+                continue
+            if url.startswith("data:"):
+                head, _, data = url.partition(",")
+                media = head[5:].split(";")[0] or "image/png"
+                blocks.append({"type": "image",
+                               "source": {"type": "base64", "media_type": media, "data": data}})
+            elif url.startswith("http"):
+                blocks.append({"type": "image", "source": {"type": "url", "url": url}})
+    return blocks
+
+
+def _responses_request_to_messages(parsed):
+    """Responses API 请求体 -> Anthropic Messages 请求体（union-alpha 这类 messages-only 模型）。"""
+    system_parts = []
+    instructions = parsed.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        system_parts.append(instructions.strip())
+    raw_input = parsed.get("input")
+    if isinstance(raw_input, str):
+        items = [{"type": "message", "role": "user", "content": raw_input}]
+    elif isinstance(raw_input, list):
+        items = [i for i in raw_input if isinstance(i, dict)]
+    else:
+        items = []
+
+    messages = []
+
+    def push(role, blocks):
+        if not blocks:
+            return
+        # Anthropic 侧连续同角色要合并成一格（连续 user 会被严格校验）
+        if messages and messages[-1]["role"] == role:
+            messages[-1]["content"].extend(blocks)
+        else:
+            messages.append({"role": role, "content": blocks})
+
+    for item in items:
+        itype = item.get("type") or "message"
+        if itype == "message":
+            role = item.get("role") or "user"
+            if role == "developer":
+                text = "".join(b.get("text", "") for b in _messages_content_blocks(item.get("content"))
+                               if b.get("type") == "text")
+                if text:
+                    system_parts.append(text)
+                continue
+            if role not in ("user", "assistant"):
+                role = "user"
+            push(role, _messages_content_blocks(item.get("content")))
+        elif itype in ("function_call", "custom_tool_call"):
+            raw = item.get("arguments")
+            if not isinstance(raw, str):
+                raw = json.dumps(item.get("input") or {}, ensure_ascii=False)
+            try:
+                arg_obj = json.loads(raw) if raw.strip() else {}
+            except Exception:
+                arg_obj = {}
+            if not isinstance(arg_obj, dict):
+                arg_obj = {"input": arg_obj}
+            push("assistant", [{
+                "type": "tool_use",
+                "id": item.get("call_id") or item.get("id") or ("call_" + uuid.uuid4().hex[:16]),
+                "name": item.get("name") or "",
+                "input": arg_obj,
+            }])
+        elif itype in ("function_call_output", "custom_tool_call_output"):
+            output = item.get("output")
+            if not isinstance(output, str):
+                output = json.dumps(output, ensure_ascii=False)
+            push("user", [{
+                "type": "tool_result",
+                "tool_use_id": item.get("call_id") or item.get("id") or "",
+                "content": output,
+            }])
+        # reasoning / web_search_call 等条目对 Anthropic 无意义，静默丢掉
+
+    # Anthropic 要求首条是 user
+    if messages and messages[0]["role"] != "user":
+        messages.insert(0, {"role": "user", "content": [{"type": "text", "text": "(session start)"}]})
+
+    tools = []
+    for tool in parsed.get("tools") or []:
+        if not isinstance(tool, dict):
+            continue
+        ttype = tool.get("type")
+        if ttype == "function":
+            name = tool.get("name") or ""
+            schema = tool.get("parameters") or {"type": "object", "properties": {}}
+        elif ttype == "custom":
+            # Codex 的 freeform 工具理论上已被 _rewrite_apply_patch_tool 拍平，这里兜底
+            name = tool.get("name") or ""
+            schema = {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]}
+        else:
+            continue  # web_search 等交给边车/合成注入，不下发
+        if not name:
+            continue
+        entry = {"name": name, "input_schema": schema if isinstance(schema, dict)
+                 else {"type": "object", "properties": {}}}
+        if tool.get("description"):
+            entry["description"] = tool["description"]
+        tools.append(entry)
+
+    # max_tokens 是 Anthropic 必填；Codex 的 max_output_tokens 给上就照用
+    try:
+        max_tokens = int(parsed.get("max_output_tokens") or 0)
+    except Exception:
+        max_tokens = 0
+    if max_tokens <= 0:
+        max_tokens = 32000
+    payload = {
+        "model": parsed.get("model"),
+        "max_tokens": max(1, min(max_tokens, 128000)),
+        "messages": messages,
+        "stream": bool(parsed.get("stream")),
+    }
+    if system_parts:
+        payload["system"] = "\n\n".join(system_parts)
+    if tools:
+        payload["tools"] = tools
+        choice = parsed.get("tool_choice")
+        if choice == "required":
+            payload["tool_choice"] = {"type": "any"}
+        elif choice == "none":
+            pass  # Anthropic 没有 none，直接不下发 tool_choice
+        else:
+            payload["tool_choice"] = {"type": "auto"}
+    for key in ("temperature", "top_p"):
+        value = parsed.get(key)
+        if isinstance(value, (int, float)):
+            payload[key] = value
+    return payload
+
+
+def _messages_usage_to_responses(usage):
+    usage = usage or {}
+    prompt = usage.get("input_tokens") or 0
+    completion = usage.get("output_tokens") or 0
+    cached = usage.get("cache_read_input_tokens") or 0
+    return {
+        "input_tokens": prompt,
+        "input_tokens_details": {"cached_tokens": cached},
+        "output_tokens": completion,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": prompt + completion,
+    }
+
+
+def _build_messages_fallback_json(model, obj, effort=None):
+    """非流式的 Anthropic Messages 响应 -> Responses 响应对象。"""
+    response = _bridge_base_response(model, status="completed")
+    items = []
+    text_parts = []
+    for block in (obj.get("content") if isinstance(obj, dict) else None) or []:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "text" and isinstance(block.get("text"), str):
+            text_parts.append(block["text"])
+        elif btype == "tool_use":
+            args = block.get("input")
+            args_str = args if isinstance(args, str) else json.dumps(args or {}, ensure_ascii=False)
+            items.append({
+                "id": "fc_" + uuid.uuid4().hex[:24], "type": "function_call", "status": "completed",
+                "call_id": block.get("id") or ("call_" + uuid.uuid4().hex[:16]),
+                "name": block.get("name") or "", "arguments": _sanitize_fc_args(args_str),
+            })
+    text = "".join(text_parts)
+    if text:
+        items.insert(0, {"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed",
+                         "role": "assistant",
+                         "content": [{"type": "output_text", "text": text, "annotations": []}]})
+    response["output"] = items
+    response["usage"] = _messages_usage_to_responses(obj.get("usage") if isinstance(obj, dict) else None)
+    return response
+
+
 class ChatBridgeTranslator:
     """Incremental chat-completions SSE -> Responses SSE translator (fault-23 P3/P4/P5).
 
@@ -795,6 +1034,102 @@ class ChatBridgeTranslator:
         final = self._snapshot(status=status, usage=_chat_usage_to_responses(self.usage))
         final["incomplete_details"] = ({"reason": "max_output_tokens"} if self.truncated else None)
         out += self._frame({"type": "response.completed", "response": final})
+        return out
+
+
+class MessagesBridgeTranslator(ChatBridgeTranslator):
+    """Anthropic Messages SSE -> Responses SSE（2026-09-17 union-alpha 通道）。
+
+    记账、收尾、字节预算、tool_use→function_call 全部复用 ChatBridgeTranslator，
+    只替换「怎么读上游事件」这一层：message_start / content_block_start /
+    content_block_delta / message_delta / message_stop。
+    """
+
+    def __init__(self, model, effort=None, byte_budget=16 * 1024 * 1024):
+        super().__init__(model, effort=effort, byte_budget=byte_budget)
+        self.anthropic_usage = None
+        self.stop_reason = None
+        self.created = False
+
+    def _chat_like_usage(self, usage):
+        """Anthropic usage -> chat usage（父类收尾用的是 chat 形状）。"""
+        usage = usage or {}
+        prompt = usage.get("input_tokens") or 0
+        completion = usage.get("output_tokens") or 0
+        return {"prompt_tokens": prompt, "completion_tokens": completion,
+                "total_tokens": prompt + completion}
+
+    def ensure_created(self):
+        if self.created:
+            return b""
+        self.created = True
+        return self.on_created()
+
+    def on_finish(self, finish_reason=None, usage=None):
+        if usage is None:
+            usage = self.anthropic_usage
+        return super().on_finish(finish_reason, self._chat_like_usage(usage) if usage else None)
+
+    def on_message_event(self, event):
+        etype = event.get("type")
+        if etype == "message_start":
+            message = event.get("message") or {}
+            usage = message.get("usage")
+            if isinstance(usage, dict):
+                self.anthropic_usage = dict(usage)
+            return self.ensure_created()
+        if etype == "content_block_start":
+            block = event.get("content_block") or {}
+            if block.get("type") == "tool_use":
+                return self._open_tool_if_needed(event.get("index") or 0,
+                                                 block.get("id"), block.get("name"))
+            return b""
+        if etype == "content_block_delta":
+            delta = event.get("delta") or {}
+            dtype = delta.get("type")
+            if dtype == "text_delta" and isinstance(delta.get("text"), str):
+                return self.on_content_delta(delta["text"])
+            if dtype == "input_json_delta" and isinstance(delta.get("partial_json"), str):
+                return self.on_tool_delta(event.get("index") or 0, args_delta=delta["partial_json"])
+            if dtype == "thinking_delta" and isinstance(delta.get("thinking"), str):
+                return self.on_reasoning_delta(delta["thinking"])
+            return b""
+        if etype == "message_delta":
+            delta = event.get("delta") or {}
+            if isinstance(delta.get("stop_reason"), str):
+                self.stop_reason = delta["stop_reason"]
+            usage = event.get("usage")
+            if isinstance(usage, dict):
+                merged = dict(self.anthropic_usage or {})
+                merged.update(usage)
+                self.anthropic_usage = merged
+            return b""
+        if etype == "message_stop":
+            return self.on_finish(self.stop_reason, self.anthropic_usage)
+        if etype == "error":
+            err = event.get("error") or {}
+            _log(f"[vision-proxy] messages bridge upstream error model={self.model}: "
+                 f"{json.dumps(err, ensure_ascii=False)[:200]}")
+            return self.on_finish("error", self.anthropic_usage)
+        return b""  # ping / 其它事件忽略
+
+    def on_message_frame(self, frame_bytes):
+        """解析一个上游 SSE 帧（Anthropic 的事件体里自带 type 字段）。"""
+        out = b""
+        for line in frame_bytes.decode(errors="replace").split("\n"):
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            out += self.on_message_event(event)
         return out
 
 
@@ -2134,6 +2469,10 @@ class Proxy:
                     upstream = ZEN_UPSTREAM + ("" if path.startswith("/v1") else "/v1")
                 headers = self._upstream_headers(incoming_headers)
                 headers = [(k, f"Bearer {zen_key}") if k.lower() == "authorization" else (k, v) for k, v in headers]
+                # 2026-09-17：官方开始强制 x-opencode-session（缺了直接 400 MissingSessionID，
+                # chat 端点实测也中招，会把 chat 桥一起打死），Codex 不会发这个头，由代理补。
+                if not any(k.lower() == "x-opencode-session" for k, _ in headers):
+                    headers.append(("x-opencode-session", _oc_session_id(parsed)))
             else:
                 upstream = self.upstream
                 headers = self._upstream_headers(incoming_headers)
@@ -2146,9 +2485,13 @@ class Proxy:
             # known chat-adapted models get instant fallback if TTL cached
             bridge_cached = bridge_eligible and model in RESPONSES_FALLBACK_MODELS and time.monotonic() < _RESPONSES_BROKEN_UNTIL.get(model, 0.0)
             always_bridge = bridge_eligible and model in RESPONSES_ALWAYS_BRIDGE
+            messages_now = bridge_eligible and model in MESSAGES_ALWAYS_BRIDGE
             fallback_now = False
             upstream_status = 0
-            if always_bridge:
+            if messages_now:
+                # 只认 Anthropic Messages 格式的模型：/responses 必 500，不浪费这一次探测
+                fallback_now = True
+            elif always_bridge:
                 fallback_now = True
             elif bridge_cached:
                 fallback_now = True
@@ -2173,11 +2516,24 @@ class Proxy:
                     except Exception:
                         pass
                     response = None
+                if messages_now:
+                    bridged = await self._messages_bridge_attempt(
+                        writer, parsed, model, path, headers, upstream, txn,
+                        reason="messages-only model")
+                    if bridged:
+                        return
+                    txn["status"], txn["bridge"] = 502, "messages-fallback-failed"
+                    await self._send_error(
+                        writer, 502,
+                        f"Anthropic Messages fallback failed for {model} "
+                        f"(Go gateway exposes this model only on /v1/messages)",
+                    )
+                    return
                 chat_payload = _responses_request_to_chat(parsed)
                 chat_body = json.dumps(chat_payload).encode()
                 fwd_headers = [(k, v) for k, v in headers if k.lower() not in ("content-length", "accept-encoding")]
                 chat_path = "/v1/chat/completions" if path.startswith("/v1") else "/chat/completions"
-                chat_resp = await self._open_upstream(method, chat_path, chat_body, fwd_headers, upstream)
+                chat_resp = await self._open_chat_upstream(chat_path, chat_body, fwd_headers, upstream, model)
                 try:
                     chat_status = getattr(chat_resp, "status", None) or getattr(chat_resp, "code", 0) or 0
                     if chat_status >= 400:
@@ -2186,6 +2542,11 @@ class Proxy:
                             err_text = (await asyncio.to_thread(chat_resp.read)).decode(errors="replace")[:300]
                         except Exception:
                             pass
+                        # 2026-09-17：chat 也失败时再给 messages 一次机会（Anthropic-only 模型）
+                        if await self._messages_bridge_attempt(
+                                writer, parsed, model, path, headers, upstream, txn,
+                                reason=f"chat {chat_status}"):
+                            return
                         txn["status"], txn["bridge"] = 502, "chat-fallback-failed"
                         _log(f"[vision-proxy] responses->chat fallback FAILED model={model} "
                              f"upstream_status={upstream_status} chat_status={chat_status} err={err_text[:120]}")
@@ -2422,10 +2783,31 @@ class Proxy:
             request.add_header(key, value)
 
         def open_request():
-            try:
-                return DIRECT_OPENER.open(request, timeout=600)
-            except urllib.error.HTTPError as exc:
-                return exc
+            # 2026-09-16: VPN 节点抖动/切换的瞬间，上游 TLS 会被瞬时重置
+            # (SSLEOFError / Connection reset)。以前直接把这个连接级错误翻成 502
+            # 甩给 Codex，Codex 疯狂重试刷屏；这里对连接级瞬时错误退避重试几次。
+            # 只在"没收到任何 HTTP 响应"时重试，不会重复计费/生成。
+            attempts = 4
+            last_exc = None
+            for i in range(attempts):
+                try:
+                    return DIRECT_OPENER.open(request, timeout=600)
+                except urllib.error.HTTPError as exc:
+                    return exc
+                except urllib.error.URLError as exc:
+                    last_exc = exc
+                    reason = str(getattr(exc, "reason", exc))
+                    transient = any(s in reason for s in (
+                        "EOF occurred", "Connection reset", "Broken pipe",
+                        "Connection refused", "Cannot connect",
+                        "Network is unreachable", "Temporary failure",
+                    ))
+                    if i < attempts - 1 and transient:
+                        _log(f"[vision-proxy] upstream transient error ({reason}), retry {i + 1}/{attempts - 1}")
+                        time.sleep(0.8 * (i + 1))
+                        continue
+                    raise
+            raise last_exc
 
         try:
             return await asyncio.to_thread(open_request)
@@ -2535,6 +2917,162 @@ class Proxy:
                 writer.write(out)
         if not upstream_ended_cleanly and not tr.truncated and not tr.finished:
             _log(f"[vision-proxy] bridge upstream stream ended prematurely model={model}; finalizing anyway")
+        writer.write(tr.on_finish())
+        await writer.drain()
+
+    async def _open_chat_upstream(self, chat_path, chat_body, fwd_headers, upstream, model):
+        """chat 桥的上游调用：瞬时 5xx 退避重试（同样只在没往客户端写数据前重试）。"""
+        attempts = 3
+        last = None
+        for attempt in range(attempts):
+            resp = await self._open_upstream("POST", chat_path, chat_body, fwd_headers, upstream)
+            last = resp
+            status = getattr(resp, "status", None) or getattr(resp, "code", 0) or 0
+            if status < 400 or status not in _UPSTREAM_TRANSIENT_STATUS or attempt >= attempts - 1:
+                return resp
+            err_text = ""
+            try:
+                err_text = (await asyncio.to_thread(resp.read)).decode(errors="replace")[:200]
+            except Exception:
+                pass
+            _log(f"[vision-proxy] chat bridge transient {status} model={model}, "
+                 f"retry {attempt + 1}/{attempts - 1}: {err_text[:100]}")
+            try:
+                resp.close()
+            except Exception:
+                pass
+            await asyncio.sleep(0.8 * (attempt + 1))
+        return last
+
+    async def _open_messages_upstream(self, parsed, path, headers, upstream):
+        """把 Responses 请求翻成 Messages 请求发出去。
+
+        线上实测：Go 的 /v1/messages 认 `x-api-key`（Bearer 会 401 Missing API key），
+        且必须带 x-opencode-session（否则 400 MissingSessionID），另需 anthropic-version。
+        """
+        zen_key = os.environ.get("ZEN_API_KEY") or ""
+        payload = _responses_request_to_messages(parsed)
+        body = json.dumps(payload, ensure_ascii=False).encode()
+        messages_path = "/v1/messages" if path.startswith("/v1") else "/messages"
+        fwd_headers = [(k, v) for k, v in headers
+                       if k.lower() not in ("content-length", "accept-encoding", "authorization", "content-type")]
+        fwd_headers.append(("Content-Type", "application/json"))
+        fwd_headers.append(("x-api-key", zen_key))
+        fwd_headers.append(("anthropic-version", _ANTHROPIC_VERSION))
+        if not any(k.lower() == "x-opencode-session" for k, _ in fwd_headers):
+            fwd_headers.append(("x-opencode-session", _oc_session_id(parsed)))
+        response = await self._open_upstream("POST", messages_path, body, fwd_headers, upstream)
+        return response, payload
+
+    async def _messages_bridge_attempt(self, writer, parsed, model, path, headers, upstream, txn, reason=""):
+        """试一次 messages 桥。返回 True = 已经把响应写回客户端。
+
+        上游 5xx 有一种是供应商抖动（实测 union-alpha 会随机回
+        503 "Endpoint is unavailable"），此时没有生成任何内容、没计费，
+        所以退避重试；重试只发生在「还没往客户端写一个字节」之前。
+        """
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                messages_resp, payload = await self._open_messages_upstream(parsed, path, headers, upstream)
+            except Exception as exc:
+                _log(f"[vision-proxy] messages bridge open failed model={model} "
+                     f"attempt={attempt + 1}/{attempts}: {exc!r} ({reason})")
+                if attempt < attempts - 1:
+                    await asyncio.sleep(0.8 * (attempt + 1))
+                    continue
+                return False
+            try:
+                status = getattr(messages_resp, "status", None) or getattr(messages_resp, "code", 0) or 0
+                txn["messages_bridge"] = status
+                if status < 400:
+                    txn["status"], txn["bridge"] = 200, "messages-fallback"
+                    _log(f"[vision-proxy] responses->messages fallback engaged model={model} status={status} "
+                         f"tools={len(payload.get('tools') or [])} msgs={len(payload.get('messages') or [])} "
+                         f"({reason})")
+                    await self._send_messages_bridge(writer, messages_resp, parsed, model, txn)
+                    return True
+                err_text = ""
+                try:
+                    err_text = (await asyncio.to_thread(messages_resp.read)).decode(errors="replace")[:300]
+                except Exception:
+                    pass
+                txn["messages_bridge_error"] = err_text[:200]
+                if status in _UPSTREAM_TRANSIENT_STATUS and attempt < attempts - 1:
+                    _log(f"[vision-proxy] messages bridge transient {status} model={model}, "
+                         f"retry {attempt + 1}/{attempts - 1}: {err_text[:100]}")
+                else:
+                    _log(f"[vision-proxy] messages bridge FAILED model={model} status={status} "
+                         f"tools={len(payload.get('tools') or [])} msgs={len(payload.get('messages') or [])} "
+                         f"err={err_text[:160]} ({reason})")
+                    return False
+            finally:
+                try:
+                    messages_resp.close()
+                except Exception:
+                    pass
+            await asyncio.sleep(0.8 * (attempt + 1))
+        return False
+
+    async def _send_messages_bridge(self, writer, messages_resp, original_parsed, model, txn=None):
+        """把 Anthropic Messages 上游响应翻成 Responses 线上格式（流式 + 非流式）。"""
+        content_type = messages_resp.headers.get("Content-Type", "")
+        wants_stream = "event-stream" in content_type or (
+            isinstance(original_parsed, dict) and original_parsed.get("stream"))
+
+        if not wants_stream:
+            raw = bytearray()
+            while len(raw) < _BRIDGE_NONSTREAM_MAX_BYTES:
+                chunk = await asyncio.to_thread(messages_resp.read, 262144)
+                if not chunk:
+                    break
+                raw.extend(chunk)
+            try:
+                obj = json.loads(bytes(raw))
+            except json.JSONDecodeError:
+                await self._send_error(writer, 502, f"messages fallback returned non-JSON for {model}")
+                return
+            payload = _build_messages_fallback_json(model, obj)
+            body = json.dumps(payload, ensure_ascii=False).encode()
+            await self._write_head(writer, 200, [("Content-Type", "application/json")], len(body))
+            writer.write(body)
+            await writer.drain()
+            return
+
+        tr = MessagesBridgeTranslator(model)
+        sse_headers = [("Content-Type", "text/event-stream; charset=utf-8"), ("Cache-Control", "no-cache")]
+        await self._write_head(writer, 200, sse_headers, None)
+        writer.write(tr.ensure_created())
+        await writer.drain()
+
+        read_chunk = getattr(messages_resp, "read1", messages_resp.read)
+        buffer = bytearray()
+        upstream_ended_cleanly = False
+        while not tr.truncated and not tr.finished:
+            try:
+                chunk = await asyncio.to_thread(read_chunk, 65536)
+            except Exception as exc:
+                _log(f"[vision-proxy] messages bridge upstream read error model={model}: {exc!r}")
+                break
+            if not chunk:
+                upstream_ended_cleanly = True
+                break
+            buffer.extend(chunk)
+            while not tr.truncated and not tr.finished:
+                frame, rest = _split_sse_frame(buffer)
+                if frame is None:
+                    break
+                buffer = rest
+                out = tr.on_message_frame(frame)
+                if out:
+                    writer.write(out)
+            await writer.drain()
+        if buffer and not tr.finished:
+            out = tr.on_message_frame(bytes(buffer))
+            if out:
+                writer.write(out)
+        if not upstream_ended_cleanly and not tr.truncated and not tr.finished:
+            _log(f"[vision-proxy] messages bridge stream ended prematurely model={model}; finalizing anyway")
         writer.write(tr.on_finish())
         await writer.drain()
 
