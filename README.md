@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.8.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.9.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.8.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.9.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,20 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.8.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.8.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.9.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.9.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.9.9 — 续费换新账期后，顶部数字不再挂着上个月的钱（2026-09-19）
+
+- **修「账期显示 24、图却是空的」**：顶部那个大数字以前是**把快照里所有天相加**，不受账期/自然月开关影响；而柱子是按窗口过滤的。续费开新账期后，新周期还没用量 → 图是空的，数字却还是上个月自然月的 $24.11。现在总数和柱子共用同一套窗口（`ChartWindow`），账期新周期显示 $0.00，切「自然月」才是本月的钱。
+- **修「换周期就丢半个自然月」**：抓取器以前只保留「账期窗口内」的天，新账期一开始就把 9/1–9/17 那段丢掉（自然月视图随即变空）。现在保留抓到的整月数据（这些月份天然覆盖当前账期 + 当前自然月），由各视图各自按窗口过滤 —— 账期看 9/19–10/18，自然月看 9/1–9/30，两边都完整。
+- **顺手**：`build.sh` 不再每次构建都往桌面拷 DMG/ZIP（桌面清干净了，需要时 `COPY_TO_DESKTOP=1 ./build.sh`）。
+- 版本 **1.1.9.9 (29)**。
 
 ### v1.1.9.8 — 图例只列「还在架」的模型，下架的不再占格子（2026-09-17）
 

@@ -83,8 +83,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.1.9.8</string>
-	<key>CFBundleVersion</key><string>28</string>
+	<key>CFBundleShortVersionString</key><string>1.1.9.9</string>
+	<key>CFBundleVersion</key><string>29</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
@@ -106,8 +106,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.1.9.8</string>
-	<key>CFBundleVersion</key><string>28</string>
+	<key>CFBundleShortVersionString</key><string>1.1.9.9</string>
+	<key>CFBundleVersion</key><string>29</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
 	<key>NSExtension</key><dict>
@@ -119,13 +119,13 @@ PLIST
 
 echo "==> 编译 App"
 swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
-  Sources/App.swift Sources/CodexInstaller.swift Sources/CodexSetupView.swift Sources/UpdateChecker.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift Sources/OpenCodeKeyFetcher.swift Sources/OpenCodeLoginView.swift \
+  Sources/App.swift Sources/CodexInstaller.swift Sources/CodexSetupView.swift Sources/UpdateChecker.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift Sources/ChartWindow.swift Sources/OpenCodeKeyFetcher.swift Sources/OpenCodeLoginView.swift \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"
 swiftc -parse-as-library -application-extension -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
   -Xlinker -e -Xlinker _NSExtensionMain \
-  Widget/OpenCodeGoWidget.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift \
+  Widget/OpenCodeGoWidget.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift Sources/ChartWindow.swift \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS/${WIDGET_NAME}"
 
 SIGN_IDENTITY="-"
@@ -193,11 +193,16 @@ fi
 # 也保留未压缩的 .app 到 dist 供直接分发
 ditto "build/${APP_BUNDLE_NAME}.app" "$DIST_DIR/${APP_BUNDLE_NAME}.app"
 echo "APP 已复制: $DIST_DIR/${APP_BUNDLE_NAME}.app"
-# 顺手拷一份到桌面，方便发
-DESKTOP_DMG="$HOME/Desktop/${APP_BUNDLE_NAME}-${VERSION}.dmg"
-DESKTOP_ZIP="$HOME/Desktop/${APP_BUNDLE_NAME}-${VERSION}.zip"
-if [ -f "build/${DMG_NAME}" ]; then ditto "build/${DMG_NAME}" "$DESKTOP_DMG" 2>/dev/null && echo "已拷到桌面: $DESKTOP_DMG" || true; fi
-if [ -f "build/${ZIP_NAME}" ]; then ditto "build/${ZIP_NAME}" "$DESKTOP_ZIP" 2>/dev/null && echo "已拷到桌面: $DESKTOP_ZIP" || true; fi
+# 桌面副本改成可选（2026-09-19）：以前每次构建都往桌面丢一份，几版下来桌面堆一片。
+# 需要顺手拿一份时：COPY_TO_DESKTOP=1 ./build.sh
+if [ "${COPY_TO_DESKTOP:-0}" = "1" ]; then
+  DESKTOP_DMG="$HOME/Desktop/${APP_BUNDLE_NAME}-${VERSION}.dmg"
+  DESKTOP_ZIP="$HOME/Desktop/${APP_BUNDLE_NAME}-${VERSION}.zip"
+  if [ -f "build/${DMG_NAME}" ]; then ditto "build/${DMG_NAME}" "$DESKTOP_DMG" 2>/dev/null && echo "已拷到桌面: $DESKTOP_DMG" || true; fi
+  if [ -f "build/${ZIP_NAME}" ]; then ditto "build/${ZIP_NAME}" "$DESKTOP_ZIP" 2>/dev/null && echo "已拷到桌面: $DESKTOP_ZIP" || true; fi
+else
+  echo "（跳过桌面副本；要的话 COPY_TO_DESKTOP=1 ./build.sh）"
+fi
 # 清理 build 中间产物（保留 dist）
 rm -rf build
 

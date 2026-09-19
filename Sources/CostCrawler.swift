@@ -143,12 +143,15 @@ final class CostCrawler: @unchecked Sendable {
                 }
             }
         }
-        let (startStr, endStr, _) = BillingCycle.billingDateStrings(monthlyReset: monthlyReset)
-        func inBilling(_ s: String) -> Bool { !s.isEmpty && s >= startStr && s < endStr }
-        let daily = byDate.filter { inBilling($0.key) }.map { DailyCost(date: $0.key, entries: $0.value) }.sorted { $0.date < $1.date }
+        // 2026-09-19 修：以前这里只留「账期窗口内」的天，新账期刚开、还没任何用量时结果就是空 →
+        // 上层（WidgetSnapshotRefresher）会走"保旧"回退，把上一个月的数据继续当结果用
+        // （用户实拍：账期 9/19-10/18 顶部挂着自然月的 $24.11）。
+        // 现在保留抓到的整月数据（这些月份天然覆盖"当前账期 + 当前自然月"），
+        // 由各视图自己按窗口过滤：账期图、自然月图、顶部总数都走 MonthChartView.windowDates。
+        let daily = byDate.map { DailyCost(date: $0.key, entries: $0.value) }.sorted { $0.date < $1.date }
         var dailyByKey: [String: [DailyCost]] = [:]
         for (k, dict) in byDateByKey {
-            dailyByKey[k] = dict.filter { inBilling($0.key) }.map { DailyCost(date: $0.key, entries: $0.value) }.sorted { $0.date < $1.date }
+            dailyByKey[k] = dict.map { DailyCost(date: $0.key, entries: $0.value) }.sorted { $0.date < $1.date }
         }
         if daily.isEmpty { return nil }
         return MonthlyCost(daily: daily, keys: allKeys, dailyByKey: dailyByKey)

@@ -168,7 +168,13 @@ struct ContentView: View {
                             // 账期/自然月堆叠柱状图 — 账期默认对齐 Go 月重置日，解决月中开套餐被自然月切断
                             VStack(alignment: .leading, spacing: 6) {
                                 let filteredDaily = snap.filteredDaily(for: selectedKeyId)
-                                let monthlyTotal = filteredDaily.reduce(0) { $0 + $1.total }
+                                // 顶部总数必须跟图表用同一个窗口（2026-09-19 修）：
+                                // 以前是"把快照里所有天加起来"，于是新账期刚开、图是空的，
+                                // 数字却还挂着上一个自然月的钱（用户实拍：账期 9/19-10/18 显示 $24.11）
+                                let monthlyTotal = ChartWindow.total(
+                                    dailyCosts: filteredDaily,
+                                    monthlyReset: snap.monthlyReset,
+                                    alignment: chartAlignment)
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                                     let isBilling = chartAlignment == .billing
                                     Text(isBilling ? BillingCycle.titleRange(monthlyReset: snap.monthlyReset) : "本月花费").font(.caption).foregroundStyle(.secondary)
@@ -501,22 +507,7 @@ struct MonthChartView: View {
     }
 
     private var effectiveDates: [Date] {
-        if alignment == .billing, let reset = monthlyReset {
-            let d = BillingCycle.billingDates(monthlyReset: reset)
-            if !d.isEmpty { return d }
-        }
-        // calendar fallback — currentMonth by last daily or now
-        let cal = Calendar(identifier: .gregorian)
-        let refDate: Date = {
-            if let last = dailyCosts.last?.date,
-               let d = ChartFormatters.day.date(from: last) { return d }
-            return Date()
-        }()
-        guard let monthInterval = cal.dateInterval(of: .month, for: refDate),
-              let days = cal.range(of: .day, in: .month, for: refDate) else { return [] }
-        return days.compactMap { day -> Date? in
-            cal.date(byAdding: .day, value: day - 1, to: monthInterval.start)
-        }
+        ChartWindow.dates(dailyCosts: dailyCosts, monthlyReset: monthlyReset, alignment: alignment)
     }
 
     private var flat: [DayModelCost] {
