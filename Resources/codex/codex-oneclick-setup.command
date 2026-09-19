@@ -81,10 +81,21 @@ sync_newer_file() {
     if cp -p "$src" "$dst" 2>/dev/null; then log "同步新增：${base}"; else log "WARN: 拷贝失败 $src"; fi
     return 0
   fi
-  if [[ "$src" -nt "$dst" ]]; then
-    if cp -p "$src" "$dst" 2>/dev/null; then log "同步更新：${base}（包更新）"; else log "WARN: 拷贝失败 $src"; fi
+  # 2026-09-19：原来只比 mtime（src -nt dst），本机那份只要 mtime 更新就永远跳过覆盖
+  # （日志写"本机更新，无需降级"），结果新包装的 vision_proxy.py 永远落不到那台机器上 ——
+  # 用户更新了 App、点了配置，跑的却还是旧代理。改成比内容：内容不同就备份旧文件再覆盖。
+  if cmp -s "$src" "$dst"; then
+    log "无需同步：${base}（内容一致）"
+    return 0
+  fi
+  local backup="${dst}.bak.$(date +%Y%m%d%H%M%S)"
+  if cp -p "$dst" "$backup" 2>/dev/null; then
+    log "备份旧文件：${base} → $(basename "$backup")"
+  fi
+  if cp -p "$src" "$dst" 2>/dev/null; then
+    log "同步更新：${base}（内容有变）"
   else
-    log "跳过覆盖：${base}（本机更新，无需降级）"
+    log "WARN: 拷贝失败 $src"
   fi
   return 0
 }

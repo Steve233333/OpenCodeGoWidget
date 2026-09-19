@@ -2478,6 +2478,15 @@ class Proxy:
                     upstream = ZEN_UPSTREAM + ("" if path.startswith("/v1") else "/v1")
                 headers = self._upstream_headers(incoming_headers)
                 headers = [(k, f"Bearer {zen_key}") if k.lower() == "authorization" else (k, v) for k, v in headers]
+                # 2026-09-19：客户端没带 Authorization 时必须补上，不能裸奔。
+                # 上游实测可区分两种 401：无 Authorization -> "Missing API key."，
+                # 错误 key -> "Invalid API key."（都带 cf-ray）。Codex 那侧只要 config.toml
+                # 缺 experimental_bearer_token（或被「清除」过 / 用的是没读这份 config 的副本），
+                # 就会发一个没有 Authorization 的请求，以前代理原样转发 → 用户看到
+                # 401 Missing API key。go/zen 路由的上游凭据本来就固定是 ZEN_API_KEY，
+                # 所以缺了直接补。
+                if not any(k.lower() == "authorization" for k, _ in headers):
+                    headers.append(("Authorization", f"Bearer {zen_key}"))
                 # 2026-09-17：官方开始强制 x-opencode-session（缺了直接 400 MissingSessionID，
                 # chat 端点实测也中招，会把 chat 桥一起打死），Codex 不会发这个头，由代理补。
                 if not any(k.lower() == "x-opencode-session" for k, _ in headers):
@@ -2771,7 +2780,12 @@ class Proxy:
             _log(f"[vision-proxy] handler error: {exc!r}\n{__import__('traceback').format_exc()}")
             if not response_started:
                 txn["status"] = 502
-                await self._send_error(writer, 502, "Upstream proxy request failed")
+                # 2026-09-19：把底层异常类型带出去，Codex 里那句 502 才有信息量
+                # （以前只有 "Upstream proxy request failed"，看不出是 TLS/DNS/超时还是别的）。
+                await self._send_error(
+                    writer, 502,
+                    f"Upstream proxy request failed: {type(exc).__name__}: {str(exc)[:160]}",
+                )
         finally:
             if txn["path"].endswith("/responses") or "/completions" in txn["path"] or "/messages" in txn["path"]:
                 _log("[vision-proxy] txn {method} {path} model={model} route={route} "
