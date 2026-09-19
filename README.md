@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.9.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.0.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.9.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.0.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,21 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.9.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.9.9.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.0.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.0.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.10.0 — 窗口高度可拉伸 + 一键配置不再拿 Key 背锅（2026-09-19）
+
+- **窗口可以上下拉伸了**（像「系统设置」）：宽度仍锁 620 保持排版，高度改成弹性（最小 480，往上不限），拖下边框就能拉高，拉高后是**多显示内容**（配额图、图例一次看全）而不是留白；原来的 `.frame(width:height:) + .fixedSize()` 写死了尺寸，现在换成 min/ideal/max 约束 + `windowResizability(.contentSize)`。
+- **修「新机点配置报 models.json 生成为空，请检查 key 是否有效」这个误导错误**：真凶是那台机器**没装 Xcode 命令行工具** —— macOS 的 `/usr/bin/python3` 在没装 CLT 时只是个占位程序，一执行就弹「请求安装开发者工具」然后失败。安装器原来的依赖检查只判断"命令存在"，占位程序存在 → 检查通过 → 后面所有 python 步骤（生成 models.json、config.toml、MCP 注入、picker 补丁）静默挂掉，统计那步 `|| echo 0` 兜底成 0，最后报成 Key 有问题（Key 明明在上一行刚校验通过）。
+  现在改成：**真跑一次 `python3 -c 'print(1)'`**，失败就直接提示「先运行 `xcode-select --install`，装完（约 1GB，5~15 分钟）再点配置」；models.json 为空时也按真实原因分流（python3 不可用 / 模板缺失 / Key 过滤后无模型）。
+- 实测：用假 `python3`（模拟没装 CLT 的机器）跑安装器，第一步就报明确的 `xcode-select --install` 指引，不再走到后面误报。
+- 版本 **1.1.10.0 (30)**。
 
 ### v1.1.9.9 — 续费换新账期后，顶部数字不再挂着上个月的钱（2026-09-19）
 

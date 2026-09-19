@@ -399,11 +399,23 @@ EXTEOF
 # ---------------------------------------------------------------------------
 # 3. 依赖检查
 # ---------------------------------------------------------------------------
-for tool in python3 openssl clang security codesign; do
+for tool in openssl clang security codesign; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     die "缺少依赖：$tool。请先运行 xcode-select --install 安装命令行工具后重试。"
   fi
 done
+# python3 必须"真跑一次"才算通过（2026-09-19 新机实测教训）：
+# macOS 没装命令行工具时 /usr/bin/python3 只是个占位程序 —— 执行它只弹"请求安装开发者工具"
+# 然后失败退出，而 `command -v python3` 却能看到文件、检查形同虚设，后面所有 python 步骤
+# 静默挂掉，最后报成一句驴唇不对马嘴的"请检查 key 是否有效"。
+if ! command -v python3 >/dev/null 2>&1; then
+  die "缺少依赖：python3。请先运行 xcode-select --install 安装命令行工具后重试。"
+fi
+if ! python3 -c 'print(1)' >/dev/null 2>&1; then
+  die "python3 无法运行：macOS 没装 Xcode 命令行工具时 /usr/bin/python3 只是个占位程序（会弹安装窗口然后失败）。
+请先运行：xcode-select --install
+在弹出的窗口点「安装」，等它装完（约 1GB，5~15 分钟，需要联网），再回来点「配置」。"
+fi
 if [[ "$SKIP_PATCH" -eq 0 && ! -d "/Applications/ChatGPT.app" && ! -d "$HOME/Applications/ChatGPT.app" ]]; then
   die "没有找到 /Applications/ChatGPT.app 或 ~/Applications/ChatGPT.app。请先安装原版 Codex / ChatGPT 桌面版再运行。"
 fi
@@ -522,7 +534,15 @@ else
 fi
 
 if [[ -z "$DEFAULT_MODEL" || -z "$EXTRACT_MODEL" ]]; then
-  die "models.json 生成为空，请检查 key 是否有效。"
+  # 分清真实原因，别再一律甩锅给 Key（2026-09-19：新机没装命令行工具时就是这里报错的）
+  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'print(1)' >/dev/null 2>&1; then
+    die "python3 跑不起来（macOS 没装命令行工具时 /usr/bin/python3 只是占位程序），所以 models.json 根本没生成。
+请先运行：xcode-select --install  然后回来重新点「配置」。"
+  elif [[ ! -s "$MODEL_TMPL" ]]; then
+    die "模板文件缺失或为空：$MODEL_TMPL（重装「OpenCode 小组件」App 可修复）。"
+  else
+    die "models.json 生成为空：模板里按当前 Key 过滤后没有可用模型（Go=$HAS_GO DeepSeek=$HAS_DS）。请检查 Key 是否有效。"
+  fi
 fi
 
 USE_PROXY=0

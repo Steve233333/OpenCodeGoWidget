@@ -13,8 +13,10 @@ struct OpenCodeGoWidgetApp: App {
         // every external URL event, which is exactly what a widget tap sends.
         Window("OpenCode Go", id: "main") {
             ContentView()
-                .frame(width: 620, height: 860)
-                .fixedSize()
+                // 宽度锁死 620（保持原来的排版），高度留活口：
+                // 像「系统设置」那样拖上下边框就能调高矮，拉高会多显示内容而不是留白
+                .frame(minWidth: 620, idealWidth: 620, maxWidth: 620,
+                       minHeight: 480, idealHeight: 860, maxHeight: .infinity)
         }
         .handlesExternalEvents(matching: Set(arrayLiteral: "opencodego"))
         .windowStyle(.hiddenTitleBar)
@@ -326,7 +328,8 @@ struct ContentView: View {
                 .padding(.vertical, 12)
             }
         }
-        .frame(width: 620, height: 860)
+        // 高度跟窗口走（窗口可拉伸），宽度锁 620
+        .frame(minWidth: 620, maxWidth: 620, minHeight: 480, maxHeight: .infinity)
         .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
         .onReceive(NotificationCenter.default.publisher(for: .openCodeGoOpenSettings)) { _ in
             showSettings = true
