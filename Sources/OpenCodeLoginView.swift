@@ -233,7 +233,9 @@ struct LoginSheetView: View {
     @Environment(\.dismiss) var dismiss
     @StateObject private var webHandle = WebViewHandle()
 
-    private let authURL = URL(string: "https://opencode.ai/auth")!
+    // 2026-09-19：OpenCode 换成新控制台，老 /auth 已下线 → 直接开新控制台的登录页，
+    // 否则用户在这个 WebView 里登录完也拿不到新控制台的会话 cookie。
+    private let authURL = URL(string: "https://opencode.ai/console/login")!
 
     var body: some View {
         VStack(spacing: 0) {

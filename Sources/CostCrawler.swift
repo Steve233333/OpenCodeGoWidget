@@ -110,6 +110,13 @@ final class CostCrawler: @unchecked Sendable {
             logger.info("CostCrawler: billing fetch skipped — workspace credentials missing")
             return nil
         }
+        // 2026-09-19：OpenCode 上线新控制台（/console/），老的 /_server server-fn 接口直接 303 到登录页。
+        // 先走新 API（正规 REST，带 x-org-id），失败再回落到老路径，保证过渡期不彻底断数据。
+        if let mc = await fetchConsoleAPI(workspaceID: workspaceID, authCookie: authCookie, monthlyReset: monthlyReset) {
+            logger.info("CostCrawler: 新控制台 API 拉取成功（\(mc.daily.count) 天）")
+            return mc
+        }
+        logger.warning("CostCrawler: 新控制台 API 未成功，回落老 /_server 路径")
         let months = BillingCycle.monthsInCycle(monthlyReset: monthlyReset)
         guard !months.isEmpty else { return nil }
         var fetched: [MonthlyCost] = []
@@ -156,6 +163,94 @@ final class CostCrawler: @unchecked Sendable {
         if daily.isEmpty { return nil }
         return MonthlyCost(daily: daily, keys: allKeys, dailyByKey: dailyByKey)
     }
+    /// 新控制台 API（2026-09-19 改版后）：
+    ///   GET https://opencode.ai/console/api/usage/cost-by-day?range=30d
+    ///   头：Cookie: oc_locale=zh; auth=<cookie>   +   x-org-id: <wrk_... 或 org_...>
+    /// 老接口 /_server 已随改版下线（返回 303 到 /console/login）。
+    /// 返回结构官方没公开，这里**防御式解析**并把原始响应存下来（自检会显示样本），
+    /// 拿到真实样本后再收紧。
+    func fetchConsoleAPI(workspaceID: String, authCookie: String, monthlyReset: Date) async -> MonthlyCost? {
+        var comps = URLComponents(string: "https://opencode.ai/console/api/usage/cost-by-day")!
+        comps.queryItems = [URLQueryItem(name: "range", value: "30d")]
+        var req = URLRequest(url: comps.url!)
+        req.timeoutInterval = 20
+        req.setValue("oc_locale=zh; auth=\(authCookie)", forHTTPHeaderField: "Cookie")
+        req.setValue(workspaceID, forHTTPHeaderField: "x-org-id")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("https://opencode.ai/console/\(workspaceID)/usage", forHTTPHeaderField: "Referer")
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+                     forHTTPHeaderField: "User-Agent")
+
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse else {
+            logger.error("CostCrawler: 新控制台 API 请求发不出去")
+            return nil
+        }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        // 存样本：出问题时自检里直接能看到官方返回了什么（也便于我远程诊断）
+        UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
+            .set(String(text.prefix(8000)), forKey: "lastConsoleAPISample")
+        guard (200...299).contains(http.statusCode) else {
+            logger.error("CostCrawler: 新控制台 API HTTP \(http.statusCode)：\(text.prefix(160))")
+            return nil
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        let daily = Self.parseCostByDay(json)
+        guard !daily.isEmpty else {
+            logger.warning("CostCrawler: 新控制台 API 解析出 0 天；样本=\(text.prefix(200))")
+            return nil
+        }
+        return MonthlyCost(daily: daily, keys: [], dailyByKey: [:])
+    }
+
+    /// 防御式解析「按天花费」：在 JSON 里找同时带日期和金额的对象。
+    /// 支持的字段名覆盖常见几种；找不到就继续往深处走。
+    static func parseCostByDay(_ json: Any) -> [DailyCost] {
+        var byDate: [String: [String: Double]] = [:]
+        let dateKeys = ["date", "day", "bucket", "timestamp", "time", "createdAt"]
+        let costKeys = ["cost", "total", "amount", "spend", "value", "totalCost", "costUsd", "usd"]
+        let modelKeys = ["model", "modelId", "model_id", "name"]
+
+        func dayString(_ value: Any?) -> String? {
+            if let s = value as? String, s.count >= 10 { return String(s.prefix(10)) }
+            if let n = value as? Double {
+                let d = Date(timeIntervalSince1970: n > 1e11 ? n / 1000 : n)
+                return ChartFormatters.day.string(from: d)
+            }
+            if let n = value as? Int { return dayString(Double(n)) }
+            return nil
+        }
+
+        func walk(_ node: Any, inheritedDate: String?, inheritedModel: String?) {
+            if let arr = node as? [Any] {
+                for el in arr { walk(el, inheritedDate: inheritedDate, inheritedModel: inheritedModel) }
+                return
+            }
+            guard let dict = node as? [String: Any] else { return }
+            var date = inheritedDate
+            for k in dateKeys where date == nil { date = dayString(dict[k]) }
+            var model = inheritedModel
+            for k in modelKeys where model == nil { if let s = dict[k] as? String, !s.isEmpty { model = s } }
+            var amount: Double?
+            for k in costKeys {
+                if let v = dict[k] as? Double { amount = v; break }
+                if let v = dict[k] as? Int { amount = Double(v); break }
+                if let s = dict[k] as? String, let v = Double(s) { amount = v; break }
+            }
+            if let d = date, let a = amount {
+                byDate[d, default: [:]][model ?? "(total)", default: 0] += a
+                return
+            }
+            for value in dict.values { walk(value, inheritedDate: date, inheritedModel: model) }
+        }
+
+        walk(json, inheritedDate: nil, inheritedModel: nil)
+        return byDate
+            .map { DailyCost(date: $0.key, entries: $0.value.filter { $0.value > 0 }) }
+            .filter { !$0.entries.isEmpty }
+            .sorted { $0.date < $1.date }
+    }
+
     private func mergeModelDict(into base: [String: Double], from add: [String: Double]) -> [String: Double] {
         var r = base
         for (k,v) in add { r[k, default: 0] += v }

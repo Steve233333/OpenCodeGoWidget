@@ -286,40 +286,31 @@ enum HealthCheck {
 
     /// 费用凭据实测：复刻 CostCrawler 的 `_server` 请求，只判断"能不能拿到数据"
     static func testCostCredentials(_ ws: String, _ cookie: String) async -> (HealthItem.Level, String) {
-        let cal = Calendar(identifier: .gregorian)
-        let comps = cal.dateComponents([.year, .month], from: Date())
-        var req = URLRequest(url: URL(string: "https://opencode.ai/_server")!)
-        req.httpMethod = "POST"
+        // 2026-09-19 改版：改测新控制台 API（老 /_server 已下线，测它只会误报）
+        var comps = URLComponents(string: "https://opencode.ai/console/api/usage/cost-by-day")!
+        comps.queryItems = [URLQueryItem(name: "range", value: "30d")]
+        var req = URLRequest(url: comps.url!)
         req.timeoutInterval = 20
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("*/*", forHTTPHeaderField: "Accept")
-        req.setValue("https://opencode.ai", forHTTPHeaderField: "Origin")
-        req.setValue("https://opencode.ai/workspace/\(ws)/usage", forHTTPHeaderField: "Referer")
         req.setValue("oc_locale=zh; auth=\(cookie)", forHTTPHeaderField: "Cookie")
+        req.setValue(ws, forHTTPHeaderField: "x-org-id")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
         req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                      forHTTPHeaderField: "User-Agent")
-        req.setValue("15702f3a12ff8bff357f8c2aa154a17e65b746d5f6b96adc9002c86ee0c15205", forHTTPHeaderField: "X-Server-Id")
-        req.setValue("server-fn:0", forHTTPHeaderField: "X-Server-Instance")
-        let payload: [String: Any] = [
-            "t": ["t": 9, "i": 0, "l": 4,
-                  "a": [["t": 1, "s": ws], ["t": 0, "s": comps.year ?? 2026],
-                        ["t": 0, "s": (comps.month ?? 1) - 1], ["t": 1, "s": "+08:00"]], "o": 0],
-            "f": 31, "m": [],
-        ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse else {
             return (.warn, "请求发不出去（网络/DNS 问题）")
         }
         let text = String(data: data, encoding: .utf8) ?? ""
         if (200...299).contains(http.statusCode) {
-            if text.contains("<!DOCTYPE") || text.contains("登录") {
-                return (.fail, "拿回来的是登录页 → authCookie 过期，费用不会更新；重新点「浏览器登录自动获取」")
-            }
-            return (.ok, "实测可用（HTTP \(http.statusCode)，\(text.count) 字节）")
+            return (.ok, "新控制台接口可用（HTTP \(http.statusCode)，\(text.count) 字节）样本：\(text.prefix(220))")
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            return (.fail, "HTTP \(http.statusCode)：cookie 失效 → 重新点「浏览器登录自动获取」")
+        if http.statusCode == 401 {
+            return (.fail, "HTTP 401：cookie 已失效（改版后新控制台要用新登录态）→ 重新点「浏览器登录自动获取」"
+                           + "（必要时先「清除登录」）")
+        }
+        if text.contains("OrgRequired") || text.contains("org_required") {
+            return (.warn, "HTTP \(http.statusCode)：缺 x-org-id（App 会带 workspace 值，正常不该出现）：\(text.prefix(120))")
         }
         return (.warn, "HTTP \(http.statusCode)：\(text.prefix(90))")
     }

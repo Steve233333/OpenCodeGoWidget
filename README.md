@@ -105,6 +105,15 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.10.4 — OpenCode 换新控制台：费用抓取迁到新接口（2026-09-19）
+
+- **背景**：OpenCode 上线新控制台，地址从 `/workspace/...` 变成 **`/console/...`**；老的 `/_server` server-fn 接口直接返回 303 跳登录页 → 我们抓费用的那条路彻底断了，表现就是**费用/图表数字不涨**（一直显示缓存里的旧值）。
+- **迁移到新 API**：`GET /console/api/usage/cost-by-day?range=30d`，带上 **`x-org-id: <wrk_...>`** 头（新接口必带，缺了返回 `OrgRequired`）+ 老 cookie。新接口是正规 REST（还有 `usage/models`、`usage/rows`、`usage/export` 等，后续可以做得比老接口更细）。老路径保留为回落，过渡期不会彻底断。
+- **登录页也跟着换**：内嵌浏览器的入口从老的 `opencode.ai/auth` 改成 **`opencode.ai/console/login`** —— 不改的话用户在新控制台里登录完，App 也拿不到新会话 cookie。
+- **自检跟着更新**：「费用凭据」这项改测新接口，401 会明确说"改版后要用新登录态，重新点浏览器登录自动获取（必要时先清除登录）"；接口通了会把**返回样本前 220 字符**直接显示出来（也存进 `lastConsoleAPISample`），方便我远程看结构。
+- **说明**：新接口的返回结构官方没公开，这版用**防御式解析**（在 JSON 里找同时带日期和金额的对象，字段名覆盖 date/day/timestamp × cost/total/amount/spend…），拿到真实样本后再收紧；模型维度的按天拆分暂时可能退化成单色（老接口那套 model 维度要看新 API 给不给）。
+- 版本 **1.1.10.4 (34)**。
+
 ### v1.1.10.3 — 修「新机器 502」的真凶：Python 缺 CA 证书（2026-09-19）
 
 - **502 的真凶找到了**：新机器上代理日志写着 `RuntimeError: Upstream network error: [SSL: CERTIFICATE_VERIFY_FAILED] ... unable to get local issuer certificate` —— python.org 的 Python 没跑过官方的 `Install Certificates.command` 时**没有 CA 根证书**，所有 HTTPS 直接失败。表现很有迷惑性：同机 Swift 侧（走 macOS 系统信任库）一切正常、Key 检测也通过，只有代理连不上上游 → Codex 只看到 `502 Upstream proxy request failed`。
