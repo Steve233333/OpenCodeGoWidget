@@ -356,7 +356,22 @@ int main(int argc, char **argv) {
     return 1;
 }
 EOF
-  clang -O2 -o "$bindir/ChatGPT" "$BASE/scripts/launcher.c" >> "$LOG" 2>&1
+  # 2026-09-19：没装 Xcode 命令行工具（没有 clang）的机器，用随 App 附带的预编译启动器
+  # （resources/patch/launcher-universal，arm64+x86_64 通用二进制，源码见 launcher.c）。
+  # 这样新电脑不需要命令行工具也能打出双开副本。
+  # 同样不能只看 `command -v clang`：没装命令行工具时 /usr/bin/clang 是占位程序
+  if command -v clang >/dev/null 2>&1 && clang --version >/dev/null 2>&1; then
+    clang -O2 -o "$bindir/ChatGPT" "$BASE/scripts/launcher.c" >> "$LOG" 2>&1
+  elif [ -f "$BASE/launcher-universal" ]; then
+    cp "$BASE/launcher-universal" "$bindir/ChatGPT"
+    chmod +x "$bindir/ChatGPT"
+    log "clang 不可用 → 使用随包附带的预编译启动器（launcher-universal）"
+  else
+    # 最后兜底：把原二进制放回去，副本仍可运行，只是和官方版共用配置目录
+    cp "$bindir/ChatGPT.bin" "$bindir/ChatGPT"
+    chmod +x "$bindir/ChatGPT"
+    log "WARN: 既没有 clang 也没有预编译启动器，副本将直接运行（未注入独立 --user-data-dir）"
+  fi
   log "main executable wrapped with user-data-dir launcher ($uddir)"
 
   # The asar header hash in Info.plist was refreshed above (it covers the header

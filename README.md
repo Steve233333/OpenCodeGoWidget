@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.0.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.1.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.0.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.1.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,21 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.0.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.0.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.1.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.1.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.10.1 — 新电脑不再需要 Xcode 命令行工具（自带预编译启动器）（2026-09-19）
+
+- **打补丁不再依赖 clang**：补丁流程里唯一需要编译器的地方，是给双开副本编一个 30 行的 C 启动器（注入 `--user-data-dir` 隔离配置目录）。现在把它**预编译成通用二进制**（`resources/patch/launcher-universal`，arm64 + x86_64，源码 `launcher.c` 一并入库）随 App 分发；检测不到可用 clang 时直接用预编译版，实测补丁照常完成。clang 真的不可用、包也丢了时才退到最后兜底（直接放回原二进制，副本仍能跑，只是与官方版共用配置目录，并在日志里明说）。
+- **clang 检查也改成"真跑一次"**：和 python3 同一个套路 —— 没装命令行工具时 `/usr/bin/clang` 也是占位程序，`command -v` 会骗过检查，所以现在必须 `clang --version` 成功才算可用。
+- **python3 提示改成二选一**：A) 装 python.org 的 Python（不需要命令行工具）B) 装 Xcode 命令行工具；并直接说明「无法从软件更新服务器获得」那类报错是系统从 Apple 下载失败（多半是 VPN 把 Apple 域名也走了代理），可先关 VPN 再试。
+- 配合：U 盘里放了 `python-3.14.7-macos11.pkg`（python.org 官方通用包），新电脑装它一个就能跑完整流程。
+- 版本 **1.1.10.1 (31)**。
 
 ### v1.1.10.0 — 窗口高度可拉伸 + 一键配置不再拿 Key 背锅（2026-09-19）
 
