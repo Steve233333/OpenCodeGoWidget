@@ -63,7 +63,11 @@ struct GoQuotaChart: View {
                     LegendDot(color: c5h, label: "5h")
                     LegendDot(color: cWeekly, label: "周")
                     LegendDot(color: cMonthly, label: "月")
-                    LegendDot(color: goldTop, label: "免费")
+                    // 「免费」只在真有免费/不限量行时才显示（2026-09-19：官方表里已经没有免费行，
+                    // 但那个金点一直挂着，会让人以为漏了行）
+                    if quotas.contains(where: { $0.monthly == nil }) {
+                        LegendDot(color: goldTop, label: "免费")
+                    }
                 }
                 if let d = updatedAt {
                     Text(d.formatted(date: .omitted, time: .shortened))
