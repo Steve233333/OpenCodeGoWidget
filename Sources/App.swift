@@ -272,6 +272,17 @@ struct ContentView: View {
                                             .lineLimit(1)
                                             .truncationMode(.middle)
                                     }
+                                    // 历史明细回填进度（2026-09-19）：只在还没补完时显示，
+                                    // 免得用户以为"点了刷新却没动静"
+                                    let backfillDone = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
+                                        .bool(forKey: "historyBackfillDone") ?? false
+                                    if !backfillDone {
+                                        let withDetail = filteredDaily.filter { $0.entries.count > 1 }.count
+                                        Text("历史明细补齐中：\(withDetail)/\(filteredDaily.count) 天已带模型明细（后台拉取，约 2–3 分钟；补完请再点一次「刷新」看到颜色）")
+                                            .font(.system(size: 8))
+                                            .foregroundStyle(.orange)
+                                            .lineLimit(2)
+                                    }
                                 }
                                 // 今日模型：跟随 Key 筛选
                                 let filteredCostEntries = snap.filteredCostEntries(for: selectedKeyId)
