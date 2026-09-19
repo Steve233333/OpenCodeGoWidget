@@ -665,6 +665,18 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   chmod 600 "$ENV_FILE"
 
   PY_BIN="$(command -v python3)"
+  # 2026-09-19：python.org 的 Python 没跑过 "Install Certificates.command" 时没有 CA 根证书，
+  # 代理所有 HTTPS 会 SSL: CERTIFICATE_VERIFY_FAILED（Codex 侧只看到 502，很难查）。
+  # 能自动跑官方修复脚本就跑一次，别让用户自己去 /Applications 里双击。
+  for _certcmd in /Applications/Python\ 3.*/Install\ Certificates.command; do
+    if [[ -x "$_certcmd" ]]; then
+      if "$_certcmd" >>"$LOG" 2>&1; then
+        log "已自动运行 Python 证书修复：$(basename "$(dirname "$_certcmd")")"
+      else
+        log "WARN: Python 证书修复脚本执行失败（代理会走 /etc/ssl/cert.pem 兜底）"
+      fi
+    fi
+  done
   PLIST="$HOME/Library/LaunchAgents/com.agent-vision-toolkit.proxy.plist"
   mkdir -p "$HOME/Library/LaunchAgents"
   cat > "$PLIST" <<EOF
@@ -681,6 +693,10 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
     <string>--upstream</string><string>https://api.deepseek.com/</string>
     <string>--env-file</string><string>$ENV_FILE</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SSL_CERT_FILE</key><string>/etc/ssl/cert.pem</string>
+  </dict>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>$VISION_DIR/proxy.log</string>
@@ -725,6 +741,10 @@ EOF
     <string>$VISION_DIR/model_discovery.py</string>
     <string>--sync</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SSL_CERT_FILE</key><string>/etc/ssl/cert.pem</string>
+  </dict>
   <key>StartInterval</key><integer>21600</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>$VISION_DIR/discovery.log</string>

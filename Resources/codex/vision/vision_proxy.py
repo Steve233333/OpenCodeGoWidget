@@ -16,6 +16,15 @@ import urllib.error
 import urllib.request
 import uuid
 
+# 2026-09-19：python.org 装的 Python 如果没跑过 "Install Certificates.command"，
+# 是没有 CA 根证书的 —— 所有 HTTPS 会直接抛
+#   [SSL: CERTIFICATE_VERIFY_FAILED] unable to get local issuer certificate
+# 表现是代理能把 502 吐给 Codex，但 Codex 只说 "Upstream proxy request failed"，很难查。
+# macOS 自带一份 CA bundle（/etc/ssl/cert.pem），这里在发起任何 TLS 之前指过去兜底，
+# 用户就不用再去双击那个 .command 了（1.1.10.3）。
+if not os.environ.get("SSL_CERT_FILE") and os.path.exists("/etc/ssl/cert.pem"):
+    os.environ["SSL_CERT_FILE"] = "/etc/ssl/cert.pem"
+
 HOP_HEADERS = {"connection", "content-length", "host", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"}
 CODEX_HEADERS = {"originator", "session-id", "thread-id", "user-agent"}
 

@@ -96,26 +96,48 @@ enum HealthCheck {
         }
 
         // ---- 6. 双开副本 ----
-        let official = versionOf(home.appendingPathComponent("Applications/ChatGPT.app"))
+        // 官方 app 可能装在两处：/Applications（标准）或 ~/Applications（我这台就是）
+        // —— 2026-09-19 修：以前只查 ~/Applications，装在 /Applications 的机器被误报"找不到官方 app"
+        let officialCandidates = [
+            URL(fileURLWithPath: "/Applications/ChatGPT.app"),
+            home.appendingPathComponent("Applications/ChatGPT.app"),
+        ]
+        let official = officialCandidates.compactMap { versionOf($0) }.first
         let patched = versionOf(home.appendingPathComponent("Applications/ChatGPT-Patched.app"))
         switch (official, patched) {
         case let (o?, p?):
             items.append(HealthItem(level: o == p ? .ok : .warn, title: "双开副本",
                                     detail: "官方 \(o) · 副本 \(p)" + (o == p ? "" : "（不一致，点「配置」会按官方版重建副本）")))
         case (nil, _):
-            items.append(HealthItem(level: .fail, title: "双开副本", detail: "找不到官方 app（~/Applications/ChatGPT.app）→ 先装官方 Codex 再点「配置」"))
+            items.append(HealthItem(level: .fail, title: "双开副本",
+                                    detail: "找不到官方 app（/Applications/ChatGPT.app 和 ~/Applications/ChatGPT.app 都没有）→ 先装官方 Codex 再点「配置」"))
         default:
             items.append(HealthItem(level: .fail, title: "双开副本", detail: "官方版在，但没生成副本 → 点「配置」（会显示补丁日志）"))
         }
 
-        // ---- 7. 小组件共享通道（复用已有诊断） ----
+        // ---- 7. Python 的 CA 证书：新机器 502 的头号原因 ----
+        let (certLevel, certDetail) = pythonCertCheck()
+        items.append(HealthItem(level: certLevel, title: "Python 证书", detail: certDetail))
+
+        // ---- 8. 费用凭据（workspace + cookie）：决定"费用/额度刷不刷新" ----
+        let ws = groupValue("workspaceID")
+        let cookie = groupValue("authCookie")
+        if ws.isEmpty || cookie.isEmpty {
+            items.append(HealthItem(level: .warn, title: "费用凭据",
+                                    detail: "workspace \(ws.isEmpty ? "缺" : "有") · authCookie \(cookie.isEmpty ? "缺" : "有") → 费用图/额度不会更新；点「浏览器登录自动获取」"))
+        } else {
+            let (level, detail) = await testCostCredentials(ws, cookie)
+            items.append(HealthItem(level: level, title: "费用凭据", detail: detail))
+        }
+
+        // ---- 9. 小组件共享通道（复用已有诊断） ----
         let widgetLoad = WidgetDataStore.loadDetailed()
         items.append(HealthItem(level: widgetLoad.snapshot == nil ? .warn : .ok, title: "小组件数据通道",
                                 detail: widgetLoad.snapshot == nil
                                     ? "读不到快照（来源：\(widgetLoad.source)）；装完 App 刷新一次即可"
                                     : "来源：\(widgetLoad.source)"))
 
-        // ---- 8. 代理最近一次报错：502 的真正原因就写在这儿 ----
+        // ---- 10. 代理最近一次报错：502 的真正原因就写在这儿 ----
         let logPath = home.appendingPathComponent(".local/share/agent-vision-toolkit/proxy.err.log")
         if let text = try? String(contentsOf: logPath, encoding: .utf8) {
             let recent = text.split(separator: "\n", omittingEmptySubsequences: true).suffix(600).filter {
@@ -224,6 +246,83 @@ enum HealthCheck {
     }
 
     // MARK: - 小工具
+
+    /// 跑一次 python3 的 HTTPS 请求，专门抓 python.org 缺 CA 的经典错误
+
+    /// 读 App Group 里的值时，UserDefaults 在非沙盒/无 entitlement 的进程里可能读不到，
+    /// 直接兜底读容器里的 plist（组套件在容器内有自己的一份）。避免自检误报「没配置」。
+    static func groupValue(_ key: String) -> String {
+        if let v = UserDefaults(suiteName: WidgetDataStore.suiteName)?.string(forKey: key), !v.isEmpty { return v }
+        let plist = home.appendingPathComponent(
+            "Library/Group Containers/\(WidgetDataStore.suiteName)/Library/Preferences/\(WidgetDataStore.suiteName).plist")
+        if let data = try? Data(contentsOf: plist),
+           let obj = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let v = obj[key] as? String {
+            return v
+        }
+        return ""
+    }
+
+    static func pythonCertCheck() -> (HealthItem.Level, String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["python3", "-c",
+                       "import urllib.request; urllib.request.urlopen('https://opencode.ai', timeout=8)"]
+        let errPipe = Pipe()
+        p.standardError = errPipe
+        p.standardOutput = Pipe()
+        do { try p.run() } catch { return (.warn, "跑不了 python3（\(error.localizedDescription)）") }
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let errText = String(data: errData, encoding: .utf8) ?? ""
+        if errText.contains("CERTIFICATE_VERIFY_FAILED") {
+            return (.fail, "python3 缺 CA 证书（代理会因此全部 502）→ 双击 /Applications/Python 3.x/ 里的 "
+                           + "Install Certificates.command，或重新点一次「配置」（1.1.10.3 起会自动兜底 /etc/ssl/cert.pem）")
+        }
+        // 403/404 之类是服务器正常回话，说明 TLS 没问题
+        if p.terminationStatus == 0 || errText.contains("HTTP Error") { return (.ok, "python3 能正常验证 HTTPS 证书") }
+        return (.warn, "python3 请求异常：\(errText.split(separator: "\n").last.map(String.init) ?? "未知")")
+    }
+
+    /// 费用凭据实测：复刻 CostCrawler 的 `_server` 请求，只判断"能不能拿到数据"
+    static func testCostCredentials(_ ws: String, _ cookie: String) async -> (HealthItem.Level, String) {
+        let cal = Calendar(identifier: .gregorian)
+        let comps = cal.dateComponents([.year, .month], from: Date())
+        var req = URLRequest(url: URL(string: "https://opencode.ai/_server")!)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        req.setValue("https://opencode.ai", forHTTPHeaderField: "Origin")
+        req.setValue("https://opencode.ai/workspace/\(ws)/usage", forHTTPHeaderField: "Referer")
+        req.setValue("oc_locale=zh; auth=\(cookie)", forHTTPHeaderField: "Cookie")
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+                     forHTTPHeaderField: "User-Agent")
+        req.setValue("15702f3a12ff8bff357f8c2aa154a17e65b746d5f6b96adc9002c86ee0c15205", forHTTPHeaderField: "X-Server-Id")
+        req.setValue("server-fn:0", forHTTPHeaderField: "X-Server-Instance")
+        let payload: [String: Any] = [
+            "t": ["t": 9, "i": 0, "l": 4,
+                  "a": [["t": 1, "s": ws], ["t": 0, "s": comps.year ?? 2026],
+                        ["t": 0, "s": (comps.month ?? 1) - 1], ["t": 1, "s": "+08:00"]], "o": 0],
+            "f": 31, "m": [],
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse else {
+            return (.warn, "请求发不出去（网络/DNS 问题）")
+        }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        if (200...299).contains(http.statusCode) {
+            if text.contains("<!DOCTYPE") || text.contains("登录") {
+                return (.fail, "拿回来的是登录页 → authCookie 过期，费用不会更新；重新点「浏览器登录自动获取」")
+            }
+            return (.ok, "实测可用（HTTP \(http.statusCode)，\(text.count) 字节）")
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            return (.fail, "HTTP \(http.statusCode)：cookie 失效 → 重新点「浏览器登录自动获取」")
+        }
+        return (.warn, "HTTP \(http.statusCode)：\(text.prefix(90))")
+    }
 
     static func readEnvKey() -> String? {
         guard let text = try? String(contentsOf: envFile, encoding: .utf8) else { return nil }

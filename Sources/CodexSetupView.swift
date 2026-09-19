@@ -46,16 +46,11 @@ struct CodexSetupView: View {
                 Text("Codex 一键配置")
                     .font(.headline)
                 Spacer()
-                if let onOpenLogin {
-                    Button {
-                        onOpenLogin()
-                    } label: {
-                        Label("浏览器登录自动获取", systemImage: "globe")
-                            .font(.caption2)
-                    }
-                    .controlSize(.small)
-                    .help("用内嵌浏览器登录 opencode.ai，自动获取 Go Key")
-                }
+                // 按钮去重（2026-09-19）：这里原来也有一个「浏览器登录自动获取」，
+                // 跟上面「Go 额度设置」那一栏的完全重复（调的是同一个登录弹窗）。
+                // 统一保留「Go 额度设置」里的那个；这里只留一行提示，避免用户看到两个一样的按钮。
+                Text("Go Key 用上方「Go 额度设置」里的「浏览器登录自动获取」")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
             }
             Text("填写后点击「配置」即可完成安装或更新（有旧 Key 时留空自动复用；输入新值即替换）")
                 .font(.caption2).foregroundStyle(.secondary)

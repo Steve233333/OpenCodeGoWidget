@@ -30,6 +30,12 @@ import os
 import re
 import sys
 import time
+
+# 2026-09-19：python.org 的 Python 没跑过 "Install Certificates.command" 时没有 CA 根证书，
+# 任何 HTTPS 都会 SSL: CERTIFICATE_VERIFY_FAILED（新机器上表现为"自动发现静默失败"）。
+# macOS 自带 /etc/ssl/cert.pem，这里兜底指过去。
+if not os.environ.get("SSL_CERT_FILE") and os.path.exists("/etc/ssl/cert.pem"):
+    os.environ["SSL_CERT_FILE"] = "/etc/ssl/cert.pem"
 import urllib.request
 from pathlib import Path
 

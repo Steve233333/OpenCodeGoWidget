@@ -105,6 +105,14 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.10.3 — 修「新机器 502」的真凶：Python 缺 CA 证书（2026-09-19）
+
+- **502 的真凶找到了**：新机器上代理日志写着 `RuntimeError: Upstream network error: [SSL: CERTIFICATE_VERIFY_FAILED] ... unable to get local issuer certificate` —— python.org 的 Python 没跑过官方的 `Install Certificates.command` 时**没有 CA 根证书**，所有 HTTPS 直接失败。表现很有迷惑性：同机 Swift 侧（走 macOS 系统信任库）一切正常、Key 检测也通过，只有代理连不上上游 → Codex 只看到 `502 Upstream proxy request failed`。
+  三层修复：① `vision_proxy.py` / `model_discovery.py` 启动时若 `SSL_CERT_FILE` 未设且 `/etc/ssl/cert.pem` 存在就指过去（macOS 自带 CA bundle，用户什么都不用做）；② 两个 launchd plist 显式带上 `SSL_CERT_FILE`；③ 安装时若发现 `/Applications/Python 3.*/Install Certificates.command` 就自动跑一次。
+- **「环境自检」三项增强**：新增 **Python 证书**检查（专门抓 `CERTIFICATE_VERIFY_FAILED` 并给出修法）、新增 **费用凭据**检查（workspace + authCookie 是否存在，并实测 `_server` 接口 —— cookie 过期就是"费用/额度不刷新"的常见原因，返回登录页会明确指出）；修掉 **双开副本**误报：以前只查 `~/Applications/ChatGPT.app`，装在 `/Applications` 的机器会被误判"找不到官方 app"，现在两处都查。
+- **设置页按钮去重**：「Codex 一键配置」里那个重复的「浏览器登录自动获取」去掉（和「Go 额度设置」里的是同一个登录弹窗），统一保留 Go 额度那一栏的。
+- 版本 **1.1.10.3 (33)**。
+
 ### v1.1.10.2 — 新增「环境自检」：哪一步没配上，点一下就知道（2026-09-19）
 
 - **设置页新增「环境自检」**（在「Codex 一键配置」下面）：11 项逐条给结论，还能「复制报告」直接发人。覆盖：
