@@ -130,6 +130,9 @@ struct ContentView: View {
     /// 小组件共享通道的自检警告（写盘失败 / App Group 容器拿不到时置位，界面顶部显示）
     @State private var widgetStoreWarning: String?
     @State private var autoTimer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
+    /// 历史回填在跑时，每 5 秒把快照重读回界面 —— 否则进度条要等 5 分钟自动刷新才动一次
+    @State private var liveTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    @State private var backfillRunning = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -272,16 +275,23 @@ struct ContentView: View {
                                             .lineLimit(1)
                                             .truncationMode(.middle)
                                     }
-                                    // 历史明细回填进度（2026-09-19）：只在还没补完时显示，
-                                    // 免得用户以为"点了刷新却没动静"
-                                    let backfillDone = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
-                                        .bool(forKey: "historyBackfillDone") ?? false
-                                    if !backfillDone {
-                                        let withDetail = filteredDaily.filter { $0.entries.count > 1 }.count
-                                        Text("历史明细补齐中：\(withDetail)/\(filteredDaily.count) 天已带模型明细（后台拉取，约 2–3 分钟；补完请再点一次「刷新」看到颜色）")
-                                            .font(.system(size: 8))
+                                    // 历史明细回填进度（2026-09-19）：改成进度条。
+                                    // 判断依据是"实际还差几天明细"，不看那个一次性闩锁 ——
+                                    // 历史被粗数据冲掉时也要能提示、能补回来。
+                                    let withDetail = filteredDaily.filter { $0.entries.contains { $0.key != "(total)" && $0.value > 0 } }.count
+                                    if withDetail < filteredDaily.count {
+                                        let frac = filteredDaily.isEmpty ? 0 : Double(withDetail) / Double(filteredDaily.count)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack(spacing: 6) {
+                                                Text(backfillRunning ? "历史明细补齐中（后台，可关窗口）" : "历史明细待补齐（下次刷新自动补）")
+                                                    .font(.system(size: 8, weight: .medium))
+                                                Spacer()
+                                                Text("\(withDetail)/\(filteredDaily.count) 天")
+                                                    .font(.system(size: 8).monospacedDigit())
+                                            }
                                             .foregroundStyle(.orange)
-                                            .lineLimit(2)
+                                            MiniProgressBar(fraction: frac, tint: .orange)
+                                        }
                                     }
                                 }
                                 // 今日模型：跟随 Key 筛选
@@ -381,6 +391,12 @@ struct ContentView: View {
             guard !loading else { return }
             Task { await refresh() }
         }
+        // 回填在跑：每 5 秒把刚写到盘上的明细读回界面，进度条与柱子同步往前爬
+        .onReceive(liveTimer) { _ in
+            let running = BackfillProgress.isRunning()
+            if running != backfillRunning { backfillRunning = running }
+            if running, !loading, let s = WidgetDataStore.load() { snapshot = s }
+        }
         .onOpenURL { url in
             if url.scheme == "opencodego" {
                 NSApp.activate(ignoringOtherApps: true)
@@ -431,7 +447,14 @@ struct ContentView: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
             // 后台补历史明细（改版前那几天只有总额、没有模型维度 → 图上纯色）；不阻塞界面，可续跑
-            Task { await CostCrawler.shared.backfillHistoryIfNeeded() }
+            // 2026-09-19：补完直接把快照读回界面 + 通知小组件，不用用户再点一次「刷新」
+            Task {
+                let repaired = await CostCrawler.shared.backfillHistoryIfNeeded()
+                if repaired, let s = WidgetDataStore.load() {
+                    await MainActor.run { snapshot = s }
+                    WidgetCenter.shared.reloadAllTimelines()
+                }
+            }
         } catch {
             let models = await modelRefresh
             _ = await zenRefresh
@@ -447,6 +470,22 @@ struct ContentView: View {
             if var s = snapshot { s.error = msg; WidgetDataStore.save(s); snapshot = s }
         }
         loading = false
+    }
+}
+
+/// 细进度条（历史明细回填进度用）
+struct MiniProgressBar: View {
+    let fraction: Double
+    var tint: Color = .accentColor
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.12))
+                Capsule().fill(tint)
+                    .frame(width: max(2, geo.size.width * CGFloat(min(max(fraction, 0), 1))))
+            }
+        }
+        .frame(height: 5)
     }
 }
 

@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.8.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.9.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.8.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.9.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,22 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.8.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.8.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.9.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.9.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.9 — 历史明细「被冲掉能自愈」+ 自然月「刷新」真的会抓数据
+
+- **修「重启之后 9/1–9/18 又全变纯色，点刷新也没用」**：历史明细回填以前是一次性闩锁（`historyBackfillDone` 置位后再也不跑），明细一旦被某次"粗数据"覆盖就永久补不回来。现在改成**按需修复**：快照里还有"只有每天一个总额、没有模型维度"的天，就自动重跑回填；跑完仍补不上的天会记下来，同样的缺口不重复打接口。
+- **最后一道护栏**：同一天的新数据只有 `(total)`、旧数据却有逐模型明细时，**保留旧的**。老 `/_server` 回落、HAR 缓存、cost-by-day 兜底这几条路径都不可能再把已经细化过的历史冲成纯色。
+- **修「自然月里点刷新没反应」**：自然月视图以前只重读本地缓存、根本不抓数据，现在和账期一样真抓一次，抓失败才退回缓存。
+- **回填补齐更耐造**：单页失败会重试 4 次（原来是失败一次就整轮中断，只爬到几小时前就停了）；半轮中断不再写"已尝试"备忘，下次刷新从游标接着爬；长跑期间还会上锁，避免两个爬虫同时改游标互相拖。
+- 回填跑完**自动上色**（不用再点一次「刷新」）。
+- 版本 **1.1.11.9 (50)**。
 
 ### v1.1.11.8 — 修「401 Missing API key」：请求没带凭据也不再裸奔
 

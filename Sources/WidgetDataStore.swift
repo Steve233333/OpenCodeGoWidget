@@ -74,6 +74,19 @@ struct WidgetSnapshotLoad {
     var groupAvailable: Bool { groupContainerPath != nil }
 }
 
+/// 历史回填的运行状态：界面用它决定要不要显示进度条、要不要每 5 秒把快照重读回界面。
+enum BackfillProgress {
+    static let suiteName = "2DC432GLL2.com.steve233.opencodego"
+    static func isRunning() -> Bool {
+        let d = UserDefaults(suiteName: suiteName)
+        guard d?.bool(forKey: "historyBackfillRunning") == true else { return false }
+        // 标记超过 15 分钟没更新 = 上次是被杀掉留下的陈旧标记，别让界面一直显示"补齐中"
+        if let at = d?.object(forKey: "historyBackfillRunningAt") as? Date,
+           Date().timeIntervalSince(at) > 900 { return false }
+        return true
+    }
+}
+
 enum WidgetDataStore {
     static let suiteName = "2DC432GLL2.com.steve233.opencodego"
     static let snapshotKey = "widget_snapshot"
@@ -217,9 +230,16 @@ enum WidgetSnapshotRefresher {
         let usage = try await manager.fetchUsage()
         // 账期模式：按月重置日对齐并跨月合并，避免月中开套餐被自然月切断
         let alignment = BillingCycle.loadAlignment()
+        let costShared = UserDefaults(suiteName: BillingCycle.suiteName)
+        // 2026-09-19：两种视图都先**真抓一次**。以前自然月分支只重读缓存，
+        // 用户点「刷新」等于什么都没干（历史丢了也永远补不回来）。
+        let liveCycle = await CostCrawler.shared.fetchBillingCycleCosts(
+            workspaceID: costShared?.string(forKey: "workspaceID") ?? "",
+            authCookie: costShared?.string(forKey: "authCookie") ?? "",
+            monthlyReset: usage.monthly.resetsAt)
         let cost: (total: Double, entries: [CostEntry], daily: [DailyCost], dailyByKey: [String: [DailyCost]])
         if alignment == .billing {
-            if let bc = await CostCrawler.shared.fetchBillingCycleCosts(workspaceID: UserDefaults(suiteName: BillingCycle.suiteName)?.string(forKey: "workspaceID") ?? "", authCookie: UserDefaults(suiteName: BillingCycle.suiteName)?.string(forKey: "authCookie") ?? "", monthlyReset: usage.monthly.resetsAt) {
+            if let bc = liveCycle {
                 let todayEntries = bc.todayEntries
                 let tot = todayEntries.values.reduce(0,+)
                 let ents = todayEntries.map { CostEntry(model: $0.key, cost: $0.value, percent: tot>0 ? $0.value/tot*100:0) }.sorted{ $0.cost>$1.cost }
@@ -239,8 +259,14 @@ enum WidgetSnapshotRefresher {
                 cost = await manager.fetchCostToday()
             }
         } else {
-            // 自然月视图直接从账期缓存派生，不再单拉单月，避免切回账期时数据被截断
-            if let cached = WidgetDataStore.load(), !cached.dailyCosts.isEmpty,
+            // 自然月视图：同样先用这次真抓的结果（保留整段，不裁 —— 切回账期才不会缺天），
+            // 抓失败才退回缓存派生
+            if let bc = liveCycle, !bc.daily.isEmpty {
+                let todayEntries = bc.todayEntries
+                let tot = todayEntries.values.reduce(0,+)
+                let ents = todayEntries.map { CostEntry(model: $0.key, cost: $0.value, percent: tot>0 ? $0.value/tot*100:0) }.sorted{ $0.cost>$1.cost }
+                cost = (tot, ents, bc.daily, bc.dailyByKey)
+            } else if let cached = WidgetDataStore.load(), !cached.dailyCosts.isEmpty,
                let monthInterval = BillingCycle.calendar.dateInterval(of: .month, for: Date()) {
                 let cal = BillingCycle.calendar
                 let startStr = ChartFormatters.day.string(from: monthInterval.start)
@@ -263,16 +289,28 @@ enum WidgetSnapshotRefresher {
                 cost = await manager.fetchCostToday()
             }
         }
+        // 2026-09-19 最后一道护栏：任何一条抓取路径（老 /_server 回落、HAR 缓存、cost-by-day 兜底）
+        // 都可能只给"每天一个总额"，把已经补好的逐模型明细整片冲掉（用户实拍：重启后 9/1–9/18
+        // 又变纯色）。同一天新旧都有时，新的只有 (total) 而旧的有明细 → 保留旧的。
+        var dailyFinal = cost.daily
+        var byKeyFinal = cost.dailyByKey
+        if let cached = WidgetDataStore.load() {
+            dailyFinal = Self.preferDetail(new: dailyFinal, old: cached.dailyCosts)
+            var merged: [String: [DailyCost]] = [:]
+            for (k, arr) in byKeyFinal { merged[k] = Self.preferDetail(new: arr, old: cached.dailyByKey[k] ?? []) }
+            for (k, arr) in cached.dailyByKey where merged[k] == nil { merged[k] = arr }
+            byKeyFinal = merged
+        }
         // 2026-09-19 修「今日模型和实际用量对不上」：
         // 以前这一块单独调老接口（fetchCostTodayPerKey），新控制台上线后两边数据源不一致 ——
         // 实测同一天同一个 Key：daily（新接口 rows）$1.12 vs 老接口 $0.60，界面上就打架。
         // 现在统一从**同一份当日数据**派生：今日模型取 daily 里今天那格，按 Key 取 dailyByKey 今天那格。
         let todayStr = ChartFormatters.day.string(from: Date())
-        var entries: [String: Double] = (cost.daily.first { $0.date == todayStr }?.entries ?? [:])
+        var entries: [String: Double] = (dailyFinal.first { $0.date == todayStr }?.entries ?? [:])
             .filter { $0.value > 0 }
         var byKeyEntries: [String: [String: Double]] = [:]
         var byKeyTotal: [String: Double] = [:]
-        for (key, arr) in cost.dailyByKey {
+        for (key, arr) in byKeyFinal {
             guard let day = arr.first(where: { $0.date == todayStr }) else { continue }
             let m = day.entries.filter { $0.value > 0 }
             guard !m.isEmpty else { continue }
@@ -298,7 +336,7 @@ enum WidgetSnapshotRefresher {
         // 已删除 Key 的历史用量仍保留在"所有密钥"里（和控制台一致：它算在 Legacy 服务账号名下）。
         let keys = await CostCrawler.shared.cachedOrFetchedKeys()
         // dailyByKey 从 CostCrawler 的 MonthlyCost 中获得
-        let dailyByKey = cost.dailyByKey
+        let dailyByKey = byKeyFinal
 
         return WidgetSnapshot(
             rolling: usage.rolling.percent,
@@ -309,7 +347,7 @@ enum WidgetSnapshotRefresher {
             monthlyReset: usage.monthly.resetsAt,
             costTotal: cost.total,
             costEntries: entries,
-            dailyCosts: cost.daily,
+            dailyCosts: dailyFinal,
             availableKeys: keys,
             dailyByKey: dailyByKey,
             costEntriesByKey: byKeyEntries,
@@ -317,5 +355,25 @@ enum WidgetSnapshotRefresher {
             updatedAt: Date(),
             error: nil
         )
+    }
+
+    /// 同一天新旧两份数据：新的只有「(total)」一个格子、旧的却有逐模型明细 → 用旧的。
+    /// 细数据永远优先，粗数据只在"这天本来就没细数据"时才写进去（防"重启后历史变纯色"复发）。
+    static func preferDetail(new: [DailyCost], old: [DailyCost]) -> [DailyCost] {
+        guard !old.isEmpty else { return new }
+        var oldMap: [String: DailyCost] = [:]
+        for d in old { oldMap[d.date] = d }
+        var out: [String: DailyCost] = [:]
+        for d in new {
+            let onlyTotal = !d.entries.contains { $0.key != "(total)" && $0.value > 0 }
+            if onlyTotal, let o = oldMap[d.date],
+               o.entries.contains(where: { $0.key != "(total)" && $0.value > 0 }) {
+                out[d.date] = o
+            } else {
+                out[d.date] = d
+            }
+        }
+        for (date, o) in oldMap where out[date] == nil { out[date] = o }
+        return out.values.sorted { $0.date < $1.date }
     }
 }

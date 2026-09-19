@@ -13,6 +13,17 @@ struct DailyCost: Codable, Equatable {
     var total: Double { entries.values.reduce(0, +) }
 }
 
+/// 历史回填的"只允许一个在跑"闸门（actor 版，从 async 上下文里调用不会报警告）
+actor BackfillGate {
+    private var running = false
+    func acquire() -> Bool {
+        if running { return false }
+        running = true
+        return true
+    }
+    func release() { running = false }
+}
+
 struct MonthlyCost {
     let daily: [DailyCost]
     let keys: [ApiKeyInfo]
@@ -61,6 +72,9 @@ struct MonthlyCost {
 final class CostCrawler: @unchecked Sendable {
     private let logger = Logger(subsystem: "com.steve233.opencodego", category: "CostCrawler")
     static let shared = CostCrawler()
+    /// 回填是长跑（30 天 ≈ 170 页），而刷新每 5 分钟来一次 —— 不加锁会有两个爬虫
+    /// 同时写同一个游标，互相把进度往回拽。这里只允许一个在跑。
+    private let backfillGate = BackfillGate()
 
     func fetchMonthlyCosts(for month: Date = Date()) async -> MonthlyCost? {
         // Try workspace-based cost crawling first (real stacked data), then fallback to JSON endpoints
@@ -189,7 +203,16 @@ final class CostCrawler: @unchecked Sendable {
         // 24h 约 500 条 → 6 次请求，拿到「按模型」+「按 Key」的当日拆分。
         // 30 天全量要 169 次请求，太重 → 采用增量累积：每天刷新把当日明细并进快照，
         // 历史逐日堆起来（老快照里的旧天原样保留）。
-        let rows = await consoleFetchRows(cookie: cookie, ws: workspaceID, range: "24h")
+        // 2026-09-19：24h 也切片并行（4 × 6 小时）—— 串行翻 10 页 ×6s ≈ 1 分钟，并行后约 20 秒
+        let now24 = Date()
+        let windows24: [(start: Date, end: Date)] = (0..<4).map { i in
+            let end = now24.addingTimeInterval(-Double(i) * 6 * 3600)
+            return (start: end.addingTimeInterval(-6 * 3600), end: end)
+        }
+        var rows: [[String: Any]] = []
+        await consoleRowsInWindows(windows24, cookie: cookie, ws: workspaceID, concurrency: 4) { batch, _ in
+            rows += batch
+        }
         let (rowDaily, rowByKey) = Self.aggregateRows(rows)
         if !rowDaily.isEmpty {
             let previous = WidgetDataStore.load()
@@ -239,25 +262,86 @@ final class CostCrawler: @unchecked Sendable {
         return map.values.sorted { $0.date < $1.date }
     }
 
-    /// 翻页拉 usage/rows（cursor 分页，pageSize 上限 100；24h 最多 12 页 = 1200 条足够）
-    private func consoleFetchRows(cookie: String, ws: String, range: String) async -> [[String: Any]] {
-        var items: [[String: Any]] = []
-        var cursor: String?
-        for _ in 0..<12 {
-            guard let page = await consoleRowsPage(cookie: cookie, ws: ws, range: range, cursor: cursor) else {
-                if items.isEmpty { logger.error("CostCrawler: usage/rows 拉取失败") }
-                break
-            }
-            items += page.items
-            cursor = page.next
-            if cursor == nil || cursor!.isEmpty { break }
-        }
-        return items
+    // MARK: - 2026-09-19 提速：合成游标 + 按时间窗并行
+    //
+    // 新控制台只有 `usage/rows` 带 per-row 费用，而它 **100 条/页封顶**、每次请求服务端要
+    // 4–6s 才吐第一个字节（实测 TTFB）。30 天 ≈ 1.7 万条 = 170 页，串行翻要 17 分钟以上
+    // —— 这就是"官网改版后慢得要命"的直接原因（老接口 /_server 一次请求给整月）。
+    //
+    // 但游标不是服务端会话，它只是 base64({"createdAt":"…","id":N}) 的 keyset 游标，
+    // 所以可以**自己造游标直接跳到任意时刻**，按天/按小时切片并行抓。
+
+    /// 造一个 keyset 游标：`{"createdAt": ISO8601, "id": N}`（取 id 上限即可定位到该时刻之前）
+    static func syntheticCursor(date: Date, id: Int = 9_000_000_000) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let payload = "{\"createdAt\":\"\(f.string(from: date))\",\"id\":\(id)}"
+        return Data(payload.utf8).base64EncodedString()
     }
 
-    /// 单页 usage/rows（返回 items + nextCursor）
+    /// rows 里的 createdAt（带毫秒的 ISO8601）→ Date
+    static func rowDate(_ s: String) -> Date? {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        let f2 = ISO8601DateFormatter()
+        return f2.date(from: s)
+    }
+
+    /// 抓 [start, end) 这个时间窗的 rows：用合成游标跳到 end，再往前翻直到跨过 start。
+    private func consoleRowsInWindow(cookie: String, ws: String, start: Date, end: Date,
+                                     maxPages: Int = 120) async -> (rows: [[String: Any]], ok: Bool) {
+        var out: [[String: Any]] = []
+        var ok = true
+        var cursor: String? = Self.syntheticCursor(date: end)
+        for _ in 0..<maxPages {
+            var page: (items: [[String: Any]], next: String?, status: Int)?
+            for attempt in 0..<3 {
+                page = await consoleRowsPage(cookie: cookie, ws: ws, range: "30d", cursor: cursor)
+                if page?.status == 200 { break }
+                page = nil
+                if attempt < 2 { try? await Task.sleep(nanoseconds: UInt64(1_200_000_000) * UInt64(attempt + 1)) }
+            }
+            guard let p = page else { ok = false; break }   // 这一窗拉不动就算了，别拖垮整轮
+            var sawOlder = false
+            for it in p.items {
+                guard let s = it["createdAt"] as? String, let d = Self.rowDate(s) else { continue }
+                if d >= start && d < end { out.append(it) } else if d < start { sawOlder = true }
+            }
+            guard let n = p.next, !n.isEmpty, !sawOlder else { break }
+            cursor = n
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+        return (out, ok)
+    }
+
+    /// 多个时间窗并行抓（窗口内部顺序翻页，窗口之间并发 4 个）。
+    /// 每个窗口抓完就把结果交给 onBatch，方便边抓边落盘（进度条能看到）。
+    private func consoleRowsInWindows(_ windows: [(start: Date, end: Date)], cookie: String, ws: String,
+                                      concurrency: Int = 4,
+                                      onBatch: ([[String: Any]], Bool) -> Void) async {
+        var idx = 0
+        while idx < windows.count {
+            let slice = Array(windows[idx..<min(idx + concurrency, windows.count)])
+            idx += slice.count
+            await withTaskGroup(of: (rows: [[String: Any]], ok: Bool).self) { group in
+                for w in slice {
+                    group.addTask { await self.consoleRowsInWindow(cookie: cookie, ws: ws, start: w.start, end: w.end) }
+                }
+                var rows: [[String: Any]] = []
+                var allOK = true
+                for await r in group {
+                    rows += r.rows
+                    if !r.ok { allOK = false }
+                }
+                onBatch(rows, allOK)
+            }
+        }
+    }
+
+    /// 单页 usage/rows（返回 items + nextCursor + HTTP 状态；status=0 表示传输层失败/超时）
     private func consoleRowsPage(cookie: String, ws: String, range: String,
-                                 cursor: String?) async -> (items: [[String: Any]], next: String?)? {
+                                 cursor: String?) async -> (items: [[String: Any]], next: String?, status: Int) {
         var comps = URLComponents(string: "https://opencode.ai/console/api/usage/rows")!
         var query = [URLQueryItem(name: "range", value: range), URLQueryItem(name: "pageSize", value: "100")]
         if let c = cursor, !c.isEmpty { query.append(URLQueryItem(name: "cursor", value: c)) }
@@ -271,42 +355,114 @@ final class CostCrawler: @unchecked Sendable {
         req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                      forHTTPHeaderField: "User-Agent")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let arr = obj["items"] as? [[String: Any]] else { return nil }
-        return (arr, obj["nextCursor"] as? String)
+              let http = resp as? HTTPURLResponse else { return ([], nil, 0) }
+        guard (200...299).contains(http.statusCode) else { return ([], nil, http.statusCode) }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = obj["items"] as? [[String: Any]] else { return ([], nil, http.statusCode) }
+        return (arr, obj["nextCursor"] as? String, http.statusCode)
     }
 
-    /// 历史明细回填（2026-09-19）：新接口的 cost-by-day 只给每天总额，改版前的历史天没有模型维度
-    /// （用户看到"账期之前的日期全是纯色"）。这里分页拉 30 天 rows 把历史按天按模型补回来。
-    /// 可中断可续：游标和完成标记都存 UserDefaults。默认一次刷新就把剩余全部拉完
-    /// （30 天约 1.7 万条 = 170 页，后台跑 2~3 分钟；页间 0.15s 礼貌间隔），
-    /// 中途中断也没关系 —— 游标存在 UserDefaults 里，下次刷新接着拉。
-    func backfillHistoryIfNeeded(maxPages: Int = 220) async {
+    /// 一小段数据里"只有每天一个总额、没有模型维度"的天 —— 就是图上纯色的那些天。
+    static func daysMissingDetail(_ snap: WidgetSnapshot?) -> Set<String> {
+        guard let snap else { return [] }
+        var out: Set<String> = []
+        for d in snap.dailyCosts {
+            guard d.total > 0 else { continue }
+            let hasModel = d.entries.contains { $0.key != "(total)" && $0.value > 0 }
+            if !hasModel { out.insert(d.date) }
+        }
+        return out
+    }
+
+    /// 历史明细回填（2026-09-19，当晚改成"按需修复"）：新接口的 cost-by-day 只给每天一个总额，
+    /// 改版前的历史天没有模型维度（用户看到"账期之前的日期全是纯色"）。这里分页拉 30 天 rows
+    /// 把历史按天按模型补回来。可中断可续：游标存 UserDefaults，下次刷新接着拉。
+    ///
+    /// ⚠️ 以前是一次性闩锁（`historyBackfillDone` 置位后再也不跑）。明细一旦被某次"粗数据"覆盖
+    /// （老 /_server 回落 / HAR 缓存 / cost-by-day 兜底都可能只给每天一个总额），用户点多少次
+    /// 「刷新」都补不回来 —— 实测就是这样，用户重启后 9/1–9/18 又全变纯色。
+    /// 现在按需修复：快照里还有"只有 (total) 的天"就重跑；跑完仍补不上的天记进
+    /// `historyRepairMissing`，同样缺口不再重复打接口（缺口变了才再跑一次）。
+    /// 返回 true = 快照被改写（调用方应重读并刷新界面）。
+    @discardableResult
+    func backfillHistoryIfNeeded() async -> Bool {
+        guard await backfillGate.acquire() else { return false }
+        let updated = await runBackfill()
+        await backfillGate.release()
+        return updated
+    }
+
+    private func runBackfill() async -> Bool {
         let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
-        guard suite?.bool(forKey: "historyBackfillDone") != true else { return }
+        let missing = Self.daysMissingDetail(WidgetDataStore.load())
+        // 只有"跑完整轮且缺口没变"才跳过：半轮中断绝不写备忘录，否则自己把自己挡住
+        let lastMissing = Set((suite?.dictionary(forKey: "historyRepairLast")?["missing"] as? [String]) ?? [])
+        guard !missing.isEmpty, missing != lastMissing else { return false }
+        logger.info("CostCrawler: 历史明细缺失 \(missing.count) 天 → 触发回填")
         let ws = suite?.string(forKey: "workspaceID") ?? ""
         let auth = suite?.string(forKey: "authCookie") ?? ""
         let session = suite?.string(forKey: "consoleSession") ?? ""
-        guard !ws.isEmpty, !session.isEmpty else { return }
+        guard !ws.isEmpty, !session.isEmpty else { return false }
         let cookie = Self.consoleCookieHeader(auth: auth, session: session)
 
-        var cursor = suite?.string(forKey: "historyBackfillCursor")
-        var collected: [[String: Any]] = []
-        for _ in 0..<maxPages {
-            guard let page = await consoleRowsPage(cookie: cookie, ws: ws, range: "30d", cursor: cursor) else { break }
-            collected += page.items
-            cursor = page.next
-            if cursor == nil || cursor!.isEmpty { suite?.set(true, forKey: "historyBackfillDone"); break }
-            try? await Task.sleep(nanoseconds: 150_000_000)   // 页间 0.15s，别把人家接口打爆
-        }
-        suite?.set(cursor, forKey: "historyBackfillCursor")
-        guard !collected.isEmpty, var snap = WidgetDataStore.load() else { return }
+        // 回填是长跑：给界面留一个"在跑"的标记（进度条 + 每 5 秒重读快照靠它）
+        suite?.set(true, forKey: "historyBackfillRunning")
+        suite?.set(Date(), forKey: "historyBackfillRunningAt")
+        defer { suite?.set(false, forKey: "historyBackfillRunning") }
 
+        // 2026-09-19 提速：不再从头串行翻 170 页，而是"缺哪天抓哪天"——
+        // 用合成游标直接跳到那天，4 天并行。实测把 17 分钟压到几分钟。
+        let fmt = ChartFormatters.day
+        let deadline = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        var windows: [(start: Date, end: Date)] = []
+        for dayStr in missing.sorted() {
+            guard let start = fmt.date(from: dayStr),
+                  let end = Calendar.current.date(byAdding: .day, value: 1, to: start) else { continue }
+            guard end > deadline else { continue }   // 超出 30 天窗口的天接口根本给不了，别浪费请求
+            windows.append((start, end))
+        }
+        guard !windows.isEmpty else {
+            suite?.set(["missing": Array(missing), "at": Date()], forKey: "historyRepairLast")
+            logger.info("CostCrawler: 缺的 \(missing.count) 天全在 30 天窗口外，无法回填")
+            return false
+        }
+        logger.info("CostCrawler: 回填 \(windows.count) 天（每天一个窗口，4 并发）")
+
+        var total = 0
+        var failedWindows = 0
+        await consoleRowsInWindows(windows, cookie: cookie, ws: ws, concurrency: 4) { rows, ok in
+            total += rows.count
+            if !ok { failedWindows += 1 }
+            self.mergeRowsIntoSnapshot(rows)   // 每批落盘：进度条往前走、中途被杀也不白跑
+        }
+        suite?.set(failedWindows, forKey: "historyBackfillFailedWindows")
+        suite?.set(total, forKey: "historyBackfillLastCount")
+        guard total > 0, let snap = WidgetDataStore.load() else {
+            logger.warning("CostCrawler: 回填一条也没抓到（接口抖动），不写备忘，下次刷新再试")
+            return false
+        }
+        let still = Self.daysMissingDetail(snap)
+        // 只在"这一轮没有窗口失败"时才记备忘：有失败说明是网络/接口问题，下次必须重试，
+        // 不能像以前那样把自己挡住（用户实拍：挡了一次就永远补不回来）
+        if failedWindows == 0 {
+            suite?.set(["missing": Array(still), "at": Date()], forKey: "historyRepairLast")
+        }
+        logger.info("CostCrawler: 历史回填 \(total) 条，仍缺 \(still.count) 天，失败窗口 \(failedWindows)")
+        return true
+    }
+
+    /// 把这一轮爬到（或爬到一半）的明细并进快照；只补"没有明细的天"，不冲掉已经更细的。
+    @discardableResult
+    private func mergeRowsIntoSnapshot(_ collected: [[String: Any]]) -> Bool {
+        guard !collected.isEmpty, var snap = WidgetDataStore.load() else { return false }
         let (daily, byKey) = Self.aggregateRows(collected)
         var dayMap: [String: DailyCost] = [:]
-        for d in snap.dailyCosts where daily[d.date] == nil { dayMap[d.date] = d }
-        for (date, entries) in daily { dayMap[date] = DailyCost(date: date, entries: entries) }
+        for d in snap.dailyCosts { dayMap[d.date] = d }
+        for (date, entries) in daily {
+            let current = dayMap[date]?.entries ?? [:]
+            if current.contains(where: { $0.key != "(total)" && $0.value > 0 }) { continue }
+            dayMap[date] = DailyCost(date: date, entries: entries)
+        }
         snap.dailyCosts = dayMap.values.sorted { $0.date < $1.date }
 
         var byKeyMap: [String: [String: DailyCost]] = [:]
@@ -316,8 +472,7 @@ final class CostCrawler: @unchecked Sendable {
         }
         snap.dailyByKey = byKeyMap.mapValues { $0.values.sorted { $0.date < $1.date } }
         snap.updatedAt = Date()
-        WidgetDataStore.save(snap)
-        logger.info("CostCrawler: 历史回填 \(collected.count) 条，天数 \(snap.dailyCosts.count)，done=\(suite?.bool(forKey: "historyBackfillDone") ?? false)")
+        return WidgetDataStore.save(snap)
     }
 
     /// 明细行 → (date→model→美元, keyId→date→model→美元)
