@@ -293,14 +293,10 @@ enum WidgetSnapshotRefresher {
                 }
             }
         }
-        // availableKeys：优先用明细里出现过的 Key，再并上缓存（保证下拉框里能看到实际用过的）
-        let cachedKeys = await CostCrawler.shared.cachedOrFetchedKeys()
-        var mergedKeys = cachedKeys
-        let knownIds = Set(cachedKeys.map(\.id))
-        for key in cost.dailyByKey.keys where !knownIds.contains(key) {
-            mergedKeys.append(ApiKeyInfo(id: key, displayName: key))
-        }
-        let keys = mergedKeys
+        // availableKeys：只用控制台密钥列表里的 Key（2026-09-19 修：以前会把"明细里出现过的 Key"
+        // 也并进来，导致**已删除的 Key**以裸 id 形式出现在下拉框里 —— 用户明明只有 2 把却看到 3 个。
+        // 已删除 Key 的历史用量仍保留在"所有密钥"里（和控制台一致：它算在 Legacy 服务账号名下）。
+        let keys = await CostCrawler.shared.cachedOrFetchedKeys()
         // dailyByKey 从 CostCrawler 的 MonthlyCost 中获得
         let dailyByKey = cost.dailyByKey
 

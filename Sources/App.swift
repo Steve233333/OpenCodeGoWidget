@@ -419,6 +419,8 @@ struct ContentView: View {
             // 再补一次，规避 WidgetKit 节流对单次 reload 的限频
             try? await Task.sleep(nanoseconds: 300_000_000)
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
+            // 后台补历史明细（改版前那几天只有总额、没有模型维度 → 图上纯色）；不阻塞界面，可续跑
+            Task { await CostCrawler.shared.backfillHistoryIfNeeded() }
         } catch {
             let models = await modelRefresh
             _ = await zenRefresh

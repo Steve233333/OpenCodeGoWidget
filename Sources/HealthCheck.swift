@@ -206,7 +206,21 @@ enum HealthCheck {
             (usage[k] as? [String: Any])?["percent"].flatMap { "\(k) \($0)%" } ?? "\(k) ?"
         }
         let mine = WidgetDataStore.load().map { "（App 显示 \($0.rolling)%/\($0.weekly)%/\($0.monthly)%）" } ?? ""
-        return (true, "官方：" + [pct("rolling"), pct("weekly"), pct("monthly")].joined(separator: " · ") + mine)
+        // 顺带体检账期日期：monthly.resetsAt 是官方给的「本期到期时间」，往前推一个月就是账期开始
+        var cycle = ""
+        if let m = usage["monthly"] as? [String: Any], let resetStr = m["resetsAt"] as? String {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let iso2 = ISO8601DateFormatter()
+            if let reset = iso.date(from: resetStr) ?? iso2.date(from: resetStr) {
+                cycle = " ｜ 账期（官方 resetsAt 推算）：\(BillingCycle.titleRange(monthlyReset: reset)) · \(BillingCycle.subtitleDetail(monthlyReset: reset))"
+            } else {
+                cycle = " ｜ resetsAt 解析失败：\(resetStr)"
+            }
+        } else {
+            cycle = " ｜ 官方没返回 monthly.resetsAt（账期日期拿不到）"
+        }
+        return (true, "官方：" + [pct("rolling"), pct("weekly"), pct("monthly")].joined(separator: " · ") + mine + cycle)
     }
 
     static func launchctlHas(_ label: String) -> Bool {

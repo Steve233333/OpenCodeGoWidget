@@ -195,7 +195,10 @@ final class CostCrawler: @unchecked Sendable {
             let previous = WidgetDataStore.load()
             var merged: [String: DailyCost] = [:]
             for d in (previous?.dailyCosts ?? []) { merged[d.date] = d }
-            for d in daily where rowDaily[d.date] == nil { merged[d.date] = d }   // cost-by-day 里的旧天
+            // ⚠️ cost-by-day 只有「每天一个总额」，是无明细时的兜底 —— **不能覆盖**已有明细的天
+            // （2026-09-19 实测：写成"覆盖"会把回填好的历史明细每轮冲掉，于是"所有密钥"永远纯色，
+            //   而按 Key 视图走 dailyByKey 的合并逻辑、反而有颜色 —— 就是用户看到的怪现象）
+            for d in daily where merged[d.date] == nil { merged[d.date] = d }
             for (date, entries) in rowDaily { merged[date] = DailyCost(date: date, entries: entries) }
             daily = merged.values.sorted { $0.date < $1.date }
 
@@ -209,9 +212,31 @@ final class CostCrawler: @unchecked Sendable {
                 }
             }
             let byKey = mergedByKey.mapValues { $0.values.sorted { $0.date < $1.date } }
+            daily = Self.applyUnionDetail(daily: daily, byKey: byKey)
             return MonthlyCost(daily: daily, keys: [], dailyByKey: byKey)
         }
         return MonthlyCost(daily: daily, keys: [], dailyByKey: [:])
+    }
+
+    /// 自愈：所有密钥视图的每天数据，若「各 Key 明细的并集」比它更细，就用并集。
+    /// （历史天只有 cost-by-day 的单个总额时会被替换成按模型的明细 → 图上就有颜色了）
+    static func applyUnionDetail(daily: [DailyCost], byKey: [String: [DailyCost]]) -> [DailyCost] {
+        var union: [String: [String: Double]] = [:]
+        for (_, arr) in byKey {
+            for day in arr {
+                for (model, v) in day.entries where v > 0 {
+                    union[day.date, default: [:]][model, default: 0] += v
+                }
+            }
+        }
+        guard !union.isEmpty else { return daily }
+        var map: [String: DailyCost] = [:]
+        for d in daily { map[d.date] = d }
+        for (date, entries) in union {
+            let current = map[date]?.entries ?? [:]
+            if entries.count > current.count { map[date] = DailyCost(date: date, entries: entries) }
+        }
+        return map.values.sorted { $0.date < $1.date }
     }
 
     /// 翻页拉 usage/rows（cursor 分页，pageSize 上限 100；24h 最多 12 页 = 1200 条足够）
@@ -219,30 +244,80 @@ final class CostCrawler: @unchecked Sendable {
         var items: [[String: Any]] = []
         var cursor: String?
         for _ in 0..<12 {
-            var comps = URLComponents(string: "https://opencode.ai/console/api/usage/rows")!
-            var query = [URLQueryItem(name: "range", value: range), URLQueryItem(name: "pageSize", value: "100")]
-            if let c = cursor, !c.isEmpty { query.append(URLQueryItem(name: "cursor", value: c)) }
-            comps.queryItems = query
-            var req = URLRequest(url: comps.url!)
-            req.timeoutInterval = 20
-            req.setValue(cookie, forHTTPHeaderField: "Cookie")
-            req.setValue(ws, forHTTPHeaderField: "x-org-id")
-            req.setValue("application/json", forHTTPHeaderField: "Accept")
-            req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
-            req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-                         forHTTPHeaderField: "User-Agent")
-            guard let (data, resp) = try? await URLSession.shared.data(for: req),
-                  let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let arr = obj["items"] as? [[String: Any]] else {
+            guard let page = await consoleRowsPage(cookie: cookie, ws: ws, range: range, cursor: cursor) else {
                 if items.isEmpty { logger.error("CostCrawler: usage/rows 拉取失败") }
                 break
             }
-            items += arr
-            cursor = obj["nextCursor"] as? String
+            items += page.items
+            cursor = page.next
             if cursor == nil || cursor!.isEmpty { break }
         }
         return items
+    }
+
+    /// 单页 usage/rows（返回 items + nextCursor）
+    private func consoleRowsPage(cookie: String, ws: String, range: String,
+                                 cursor: String?) async -> (items: [[String: Any]], next: String?)? {
+        var comps = URLComponents(string: "https://opencode.ai/console/api/usage/rows")!
+        var query = [URLQueryItem(name: "range", value: range), URLQueryItem(name: "pageSize", value: "100")]
+        if let c = cursor, !c.isEmpty { query.append(URLQueryItem(name: "cursor", value: c)) }
+        comps.queryItems = query
+        var req = URLRequest(url: comps.url!)
+        req.timeoutInterval = 25
+        req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        req.setValue(ws, forHTTPHeaderField: "x-org-id")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+                     forHTTPHeaderField: "User-Agent")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let arr = obj["items"] as? [[String: Any]] else { return nil }
+        return (arr, obj["nextCursor"] as? String)
+    }
+
+    /// 历史明细回填（2026-09-19）：新接口的 cost-by-day 只给每天总额，改版前的历史天没有模型维度
+    /// （用户看到"账期之前的日期全是纯色"）。这里分页拉 30 天 rows 把历史按天按模型补回来。
+    /// 可中断可续：游标和完成标记都存 UserDefaults。默认一次刷新就把剩余全部拉完
+    /// （30 天约 1.7 万条 = 170 页，后台跑 2~3 分钟；页间 0.15s 礼貌间隔），
+    /// 中途中断也没关系 —— 游标存在 UserDefaults 里，下次刷新接着拉。
+    func backfillHistoryIfNeeded(maxPages: Int = 220) async {
+        let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        guard suite?.bool(forKey: "historyBackfillDone") != true else { return }
+        let ws = suite?.string(forKey: "workspaceID") ?? ""
+        let auth = suite?.string(forKey: "authCookie") ?? ""
+        let session = suite?.string(forKey: "consoleSession") ?? ""
+        guard !ws.isEmpty, !session.isEmpty else { return }
+        let cookie = Self.consoleCookieHeader(auth: auth, session: session)
+
+        var cursor = suite?.string(forKey: "historyBackfillCursor")
+        var collected: [[String: Any]] = []
+        for _ in 0..<maxPages {
+            guard let page = await consoleRowsPage(cookie: cookie, ws: ws, range: "30d", cursor: cursor) else { break }
+            collected += page.items
+            cursor = page.next
+            if cursor == nil || cursor!.isEmpty { suite?.set(true, forKey: "historyBackfillDone"); break }
+            try? await Task.sleep(nanoseconds: 150_000_000)   // 页间 0.15s，别把人家接口打爆
+        }
+        suite?.set(cursor, forKey: "historyBackfillCursor")
+        guard !collected.isEmpty, var snap = WidgetDataStore.load() else { return }
+
+        let (daily, byKey) = Self.aggregateRows(collected)
+        var dayMap: [String: DailyCost] = [:]
+        for d in snap.dailyCosts where daily[d.date] == nil { dayMap[d.date] = d }
+        for (date, entries) in daily { dayMap[date] = DailyCost(date: date, entries: entries) }
+        snap.dailyCosts = dayMap.values.sorted { $0.date < $1.date }
+
+        var byKeyMap: [String: [String: DailyCost]] = [:]
+        for (k, arr) in snap.dailyByKey { for d in arr { byKeyMap[k, default: [:]][d.date] = d } }
+        for (k, byDate) in byKey {
+            for (date, entries) in byDate { byKeyMap[k, default: [:]][date] = DailyCost(date: date, entries: entries) }
+        }
+        snap.dailyByKey = byKeyMap.mapValues { $0.values.sorted { $0.date < $1.date } }
+        snap.updatedAt = Date()
+        WidgetDataStore.save(snap)
+        logger.info("CostCrawler: 历史回填 \(collected.count) 条，天数 \(snap.dailyCosts.count)，done=\(suite?.bool(forKey: "historyBackfillDone") ?? false)")
     }
 
     /// 明细行 → (date→model→美元, keyId→date→model→美元)
