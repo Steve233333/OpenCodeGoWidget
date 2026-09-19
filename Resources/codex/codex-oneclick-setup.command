@@ -593,7 +593,19 @@ if os.path.exists(dst) and open(dst).read().strip():
     out = re.sub(r"^model\s*=.*", f'model = "{default_model}"', out, flags=re.MULTILINE)
     out = re.sub(r"^model_reasoning_effort\s*=.*", 'model_reasoning_effort = "low"', out, flags=re.MULTILINE)
     out = re.sub(r"base_url\s*=.*", f'base_url = "{base_url}"', out)
-    out = re.sub(r"experimental_bearer_token\s*=.*", f'experimental_bearer_token = "{bearer}"', out)
+    # 2026-09-19：以前这行只会"替换已存在的行"。被「清除」按钮删过、或老配置里本来就没这行时，
+    # 再点多少次「配置」也补不回来 —— Codex 发的请求于是没有 Authorization，
+    # 上游回 401 AuthError: Missing API key（带 cf-ray，看着像网络问题，其实是缺凭据）。
+    if re.search(r"(?m)^[ \t]*experimental_bearer_token[ \t]*=", out):
+        out = re.sub(r"experimental_bearer_token\s*=.*", f'experimental_bearer_token = "{bearer}"', out)
+    elif re.search(r"(?m)^wire_api[ \t]*=", out):
+        out = re.sub(r"(?m)^(wire_api[ \t]*=.*)$",
+                     lambda m: m.group(1) + f'\nexperimental_bearer_token = "{bearer}"', out, count=1)
+    elif re.search(r"(?m)^\[model_providers\.", out):
+        out = re.sub(r"(?m)^(\[model_providers\.[^\]]+\]\n)",
+                     lambda m: m.group(1) + f'experimental_bearer_token = "{bearer}"\n', out, count=1)
+    else:
+        out = out.rstrip("\n") + f'\nexperimental_bearer_token = "{bearer}"\n'
     out = re.sub(r"extract_model\s*=.*", f'extract_model = "{extract_model}"', out)
     out = re.sub(r"consolidation_model\s*=.*", f'consolidation_model = "{extract_model}"', out)
     # 默认关闭记忆以省 token，用户可在 config.toml 手动改回 true
