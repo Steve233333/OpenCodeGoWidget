@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.7.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.8.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.7.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.8.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,20 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.7.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.7.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.8.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.8.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.8 — 修「401 Missing API key」：请求没带凭据也不再裸奔
+
+- **修 Codex 里那条 `401 Unauthorized: Missing API key`（带 cf-ray）**：上游实测能区分两种 401 —— 不带 Authorization 回 `Missing API key.`、key 错了才回 `Invalid API key.`。也就是说那条报错**不是 key 失效**，是请求压根没带凭据（config.toml 少了 `experimental_bearer_token`，或被「清除」删过）。代理现在在 Go/Zen 路由上**自己补 Go Key**：客户端没带 Authorization 也照常发得出去。本机用同一条无凭据请求实测：**修前 401，修后 200**。
+- **修「点了配置也不生效」的两个坑**：① 同步代理文件以前只比 mtime，本机那份只要"看着更新"就永远跳过覆盖（日志写"本机更新，无需降级"）—— 改成按内容比对，有差异先备份旧文件再覆盖；② `experimental_bearer_token` 行被红色「清除」删掉后，再点多少次「配置」都补不回来（老脚本只替换已存在的行）—— 现在缺这行会自动补在 `wire_api` 后面。
+- **502 不再是一句空话**：代理把 `502 Upstream proxy request failed` 带上真实异常类型与摘要，TLS / DNS / 超时一眼可辨。
+- 版本 **1.1.11.8 (48)**。
 
 ### v1.1.11.7 — 历史回填进度可见
 
