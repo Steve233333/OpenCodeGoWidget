@@ -120,6 +120,8 @@ enum HealthCheck {
         items.append(HealthItem(level: certLevel, title: "Python 证书", detail: certDetail))
 
         // ---- 8. 费用凭据（workspace + cookie）：决定"费用/额度刷不刷新" ----
+        // 先自愈：把 WKWebView cookie 库里最新的 auth 同步过来（改版后 SPA 不触发旧的检测回调）
+        _ = await CookieSync.syncAuthCookie()
         let ws = groupValue("workspaceID")
         let cookie = groupValue("authCookie")
         if ws.isEmpty || cookie.isEmpty {
@@ -127,7 +129,8 @@ enum HealthCheck {
                                     detail: "workspace \(ws.isEmpty ? "缺" : "有") · authCookie \(cookie.isEmpty ? "缺" : "有") → 费用图/额度不会更新；点「浏览器登录自动获取」"))
         } else {
             let (level, detail) = await testCostCredentials(ws, cookie)
-            items.append(HealthItem(level: level, title: "费用凭据", detail: detail))
+            let lib = await CookieSync.describeCookies()
+            items.append(HealthItem(level: level, title: "费用凭据", detail: detail + " ｜ cookie 库：\(lib)"))
         }
 
         // ---- 9. 小组件共享通道（复用已有诊断） ----
@@ -287,11 +290,13 @@ enum HealthCheck {
     /// 费用凭据实测：复刻 CostCrawler 的 `_server` 请求，只判断"能不能拿到数据"
     static func testCostCredentials(_ ws: String, _ cookie: String) async -> (HealthItem.Level, String) {
         // 2026-09-19 改版：改测新控制台 API（老 /_server 已下线，测它只会误报）
+        // 关键：新控制台要 __Host-console_session（只有 auth 会 401）
+        let session = groupValue("consoleSession")
         var comps = URLComponents(string: "https://opencode.ai/console/api/usage/cost-by-day")!
         comps.queryItems = [URLQueryItem(name: "range", value: "30d")]
         var req = URLRequest(url: comps.url!)
         req.timeoutInterval = 20
-        req.setValue("oc_locale=zh; auth=\(cookie)", forHTTPHeaderField: "Cookie")
+        req.setValue(CostCrawler.consoleCookieHeader(auth: cookie, session: session), forHTTPHeaderField: "Cookie")
         req.setValue(ws, forHTTPHeaderField: "x-org-id")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
@@ -306,8 +311,9 @@ enum HealthCheck {
             return (.ok, "新控制台接口可用（HTTP \(http.statusCode)，\(text.count) 字节）样本：\(text.prefix(220))")
         }
         if http.statusCode == 401 {
-            return (.fail, "HTTP 401：cookie 已失效（改版后新控制台要用新登录态）→ 重新点「浏览器登录自动获取」"
-                           + "（必要时先「清除登录」）")
+            let hasSession = session.isEmpty ? "缺 __Host-console_session" : "有 __Host-console_session"
+            return (.fail, "HTTP 401（\(hasSession)）→ 登录态失效：点「浏览器登录自动获取」重新登录，"
+                           + "再刷新一次（App 会自动把新 cookie 同步过来）")
         }
         if text.contains("OrgRequired") || text.contains("org_required") {
             return (.warn, "HTTP \(http.statusCode)：缺 x-org-id（App 会带 workspace 值，正常不该出现）：\(text.prefix(120))")

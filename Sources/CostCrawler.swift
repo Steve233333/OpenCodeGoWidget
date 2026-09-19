@@ -170,42 +170,184 @@ final class CostCrawler: @unchecked Sendable {
     /// 返回结构官方没公开，这里**防御式解析**并把原始响应存下来（自检会显示样本），
     /// 拿到真实样本后再收紧。
     func fetchConsoleAPI(workspaceID: String, authCookie: String, monthlyReset: Date) async -> MonthlyCost? {
-        var comps = URLComponents(string: "https://opencode.ai/console/api/usage/cost-by-day")!
-        comps.queryItems = [URLQueryItem(name: "range", value: "30d")]
+        // 新控制台要两个 cookie：auth（老站）+ __Host-console_session（新会话，缺它必 401）
+        let session = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
+            .string(forKey: "consoleSession") ?? ""
+        let cookie = Self.consoleCookieHeader(auth: authCookie, session: session)
+
+        guard let days = await consoleFetch(path: "usage/cost-by-day", query: "range=30d",
+                                            cookie: cookie, ws: workspaceID),
+              let json = try? JSONSerialization.jsonObject(with: days) else {
+            return nil
+        }
+        var daily = Self.parseCostByDay(json)
+        guard !daily.isEmpty else {
+            logger.warning("CostCrawler: cost-by-day 解析出 0 天：\(String(data: days, encoding: .utf8)?.prefix(200) ?? "")")
+            return nil
+        }
+        // 明细：`usage/rows` 每条带 costMicroCents + model + serviceApiKeyId（pageSize 上限 100）。
+        // 24h 约 500 条 → 6 次请求，拿到「按模型」+「按 Key」的当日拆分。
+        // 30 天全量要 169 次请求，太重 → 采用增量累积：每天刷新把当日明细并进快照，
+        // 历史逐日堆起来（老快照里的旧天原样保留）。
+        let rows = await consoleFetchRows(cookie: cookie, ws: workspaceID, range: "24h")
+        let (rowDaily, rowByKey) = Self.aggregateRows(rows)
+        if !rowDaily.isEmpty {
+            let previous = WidgetDataStore.load()
+            var merged: [String: DailyCost] = [:]
+            for d in (previous?.dailyCosts ?? []) { merged[d.date] = d }
+            for d in daily where rowDaily[d.date] == nil { merged[d.date] = d }   // cost-by-day 里的旧天
+            for (date, entries) in rowDaily { merged[date] = DailyCost(date: date, entries: entries) }
+            daily = merged.values.sorted { $0.date < $1.date }
+
+            var mergedByKey: [String: [String: DailyCost]] = [:]
+            for (key, arr) in (previous?.dailyByKey ?? [:]) {
+                for d in arr where rowByKey[key]?[d.date] == nil { mergedByKey[key, default: [:]][d.date] = d }
+            }
+            for (key, byDate) in rowByKey {
+                for (date, entries) in byDate {
+                    mergedByKey[key, default: [:]][date] = DailyCost(date: date, entries: entries)
+                }
+            }
+            let byKey = mergedByKey.mapValues { $0.values.sorted { $0.date < $1.date } }
+            return MonthlyCost(daily: daily, keys: [], dailyByKey: byKey)
+        }
+        return MonthlyCost(daily: daily, keys: [], dailyByKey: [:])
+    }
+
+    /// 翻页拉 usage/rows（cursor 分页，pageSize 上限 100；24h 最多 12 页 = 1200 条足够）
+    private func consoleFetchRows(cookie: String, ws: String, range: String) async -> [[String: Any]] {
+        var items: [[String: Any]] = []
+        var cursor: String?
+        for _ in 0..<12 {
+            var comps = URLComponents(string: "https://opencode.ai/console/api/usage/rows")!
+            var query = [URLQueryItem(name: "range", value: range), URLQueryItem(name: "pageSize", value: "100")]
+            if let c = cursor, !c.isEmpty { query.append(URLQueryItem(name: "cursor", value: c)) }
+            comps.queryItems = query
+            var req = URLRequest(url: comps.url!)
+            req.timeoutInterval = 20
+            req.setValue(cookie, forHTTPHeaderField: "Cookie")
+            req.setValue(ws, forHTTPHeaderField: "x-org-id")
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
+            req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+                         forHTTPHeaderField: "User-Agent")
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                  let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let arr = obj["items"] as? [[String: Any]] else {
+                if items.isEmpty { logger.error("CostCrawler: usage/rows 拉取失败") }
+                break
+            }
+            items += arr
+            cursor = obj["nextCursor"] as? String
+            if cursor == nil || cursor!.isEmpty { break }
+        }
+        return items
+    }
+
+    /// 明细行 → (date→model→美元, keyId→date→model→美元)
+    static func aggregateRows(_ rows: [[String: Any]]) -> ([String: [String: Double]], [String: [String: [String: Double]]]) {
+        var daily: [String: [String: Double]] = [:]
+        var byKey: [String: [String: [String: Double]]] = [:]
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoNoFrac = ISO8601DateFormatter()
+        for row in rows {
+            guard let model = row["model"] as? String else { continue }
+            let usd = microCents(row["costMicroCents"]) / 100_000_000.0
+            guard usd > 0 else { continue }
+            guard let created = row["createdAt"] as? String else { continue }
+            let date = (iso.date(from: created) ?? isoNoFrac.date(from: created))
+                .map { ChartFormatters.day.string(from: $0) } ?? String(created.prefix(10))
+            daily[date, default: [:]][model, default: 0] += usd
+            if let key = row["serviceApiKeyId"] as? String, !key.isEmpty {
+                byKey[key, default: [:]][date, default: [:]][model, default: 0] += usd
+            }
+        }
+        return (daily, byKey)
+    }
+
+    /// 新控制台的 cookie 头
+    static func consoleCookieHeader(auth: String, session: String) -> String {
+        var parts = ["oc_locale=zh"]
+        if !auth.isEmpty { parts.append("auth=\(auth)") }
+        if !session.isEmpty { parts.append("__Host-console_session=\(session)") }
+        return parts.joined(separator: "; ")
+    }
+
+    /// 调一个新控制台接口，返回响应体（非 2xx 返回 nil 并把样本存下来）
+    private func consoleFetch(path: String, query: String, cookie: String, ws: String) async -> Data? {
+        var comps = URLComponents(string: "https://opencode.ai/console/api/\(path)")!
+        comps.query = query
         var req = URLRequest(url: comps.url!)
         req.timeoutInterval = 20
-        req.setValue("oc_locale=zh; auth=\(authCookie)", forHTTPHeaderField: "Cookie")
-        req.setValue(workspaceID, forHTTPHeaderField: "x-org-id")
+        req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        req.setValue(ws, forHTTPHeaderField: "x-org-id")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("https://opencode.ai/console/\(workspaceID)/usage", forHTTPHeaderField: "Referer")
+        req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
         req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                      forHTTPHeaderField: "User-Agent")
-
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse else {
-            logger.error("CostCrawler: 新控制台 API 请求发不出去")
+            logger.error("CostCrawler: 新控制台 \(path) 请求发不出去")
             return nil
         }
         let text = String(data: data, encoding: .utf8) ?? ""
-        // 存样本：出问题时自检里直接能看到官方返回了什么（也便于我远程诊断）
         UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
             .set(String(text.prefix(8000)), forKey: "lastConsoleAPISample")
         guard (200...299).contains(http.statusCode) else {
-            logger.error("CostCrawler: 新控制台 API HTTP \(http.statusCode)：\(text.prefix(160))")
+            logger.error("CostCrawler: 新控制台 \(path) HTTP \(http.statusCode)：\(text.prefix(160))")
             return nil
         }
-        guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
-        let daily = Self.parseCostByDay(json)
-        guard !daily.isEmpty else {
-            logger.warning("CostCrawler: 新控制台 API 解析出 0 天；样本=\(text.prefix(200))")
-            return nil
+        return data
+    }
+
+    /// 解析 usage/models：{items:[{model, totalCostMicroCents, ...}]} → 模型 → 美元
+    static func parseModelCosts(_ json: Any) -> [String: Double] {
+        var out: [String: Double] = [:]
+        let items: [[String: Any]]
+        if let d = json as? [String: Any], let arr = d["items"] as? [[String: Any]] { items = arr }
+        else if let arr = json as? [[String: Any]] { items = arr }
+        else { return out }
+        for item in items {
+            guard let model = item["model"] as? String else { continue }
+            let micro = Self.microCents(item["totalCostMicroCents"])
+            if micro > 0 { out[model, default: 0] += micro / 100_000_000.0 }
         }
-        return MonthlyCost(daily: daily, keys: [], dailyByKey: [:])
+        return out.filter { $0.value > 0 }
+    }
+
+    /// 新接口的金额字段是「微美分」字符串：100,000,000 微美分 = 1 美元
+    static func microCents(_ value: Any?) -> Double {
+        if let s = value as? String { return Double(s) ?? 0 }
+        if let d = value as? Double { return d }
+        if let i = value as? Int { return Double(i) }
+        return 0
     }
 
     /// 防御式解析「按天花费」：在 JSON 里找同时带日期和金额的对象。
     /// 支持的字段名覆盖常见几种；找不到就继续往深处走。
     static func parseCostByDay(_ json: Any) -> [DailyCost] {
+        // 新控制台的确定结构（2026-09-19 实测）：
+        //   [{"date":"2026-09-19","totalCostMicroCents":"64094470","totalTokens":"…","totalRequests":"…"}]
+        // 金额是「微美分」字符串，1 美元 = 100,000,000。
+        if let arr = json as? [[String: Any]],
+           arr.contains(where: { $0["date"] != nil && $0["totalCostMicroCents"] != nil }) {
+            let rows = arr.compactMap { item -> DailyCost? in
+                guard let date = item["date"] as? String else { return nil }
+                let usd = microCents(item["totalCostMicroCents"]) / 100_000_000.0
+                let key = (item["model"] as? String) ?? "(total)"
+                return DailyCost(date: String(date.prefix(10)), entries: [key: usd])
+            }
+            var merged: [String: [String: Double]] = [:]
+            for r in rows {
+                for (k, v) in r.entries where v > 0 { merged[r.date, default: [:]][k, default: 0] += v }
+            }
+            if !merged.isEmpty {
+                return merged.map { DailyCost(date: $0.key, entries: $0.value) }.sorted { $0.date < $1.date }
+            }
+        }
+
         var byDate: [String: [String: Double]] = [:]
         let dateKeys = ["date", "day", "bucket", "timestamp", "time", "createdAt"]
         let costKeys = ["cost", "total", "amount", "spend", "value", "totalCost", "costUsd", "usd"]

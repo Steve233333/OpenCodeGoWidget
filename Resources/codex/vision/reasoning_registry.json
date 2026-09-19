@@ -150,6 +150,9 @@
  "hy3": [
   "high"
  ],
+ "union-alpha": [
+  "high"
+ ],
  "grok-4.6": [
   "low",
   "high",
@@ -196,7 +199,7 @@
  "nemotron-3.5-lightning-free": [
   "high"
  ],
- "union-alpha": [
+ "jev-1.13-free": [
   "high"
  ]
 }

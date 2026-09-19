@@ -191,6 +191,13 @@ struct LoginWebView: NSViewRepresentable {
 
         func load(into web: WKWebView, cookie: String?, url: URL) {
             let doLoad = { DispatchQueue.main.async { web.load(URLRequest(url: url)) } }
+            // 2026-09-19：不再把 App 里存着的（可能已失效的）auth cookie 注入 WebView。
+            // 老逻辑每次打开登录页都注入旧值，结果是：控制台改版后旧会话无效、页面又不让你重新登录，
+            // 新 cookie（__Host-console_session）永远拿不到。WebView 自己就是持久化存储，
+            // 之前登录过就直接是登录态；需要重新登录时也能正常走登录流程。
+            _ = cookie
+            return doLoad()
+            /*
             guard let cookie, !cookie.isEmpty else { return doLoad() }
             let props: [HTTPCookiePropertyKey: Any] = [
                 .domain: ".opencode.ai",
@@ -202,6 +209,7 @@ struct LoginWebView: NSViewRepresentable {
             ]
             guard let c = HTTPCookie(properties: props) else { return doLoad() }
             web.configuration.websiteDataStore.httpCookieStore.setCookie(c, completionHandler: doLoad)
+            */
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

@@ -258,7 +258,10 @@ struct ContentView: View {
                                         .filter { !liveGoLower.contains($0.lowercased()) }
                                     let liveLower = liveGoLower.union(Set(liveZen.map { $0.lowercased() }))
                                     let legend = liveGo + liveZen.filter { allModels.contains($0.lowercased()) }
-                                    let delisted = allModels.subtracting(liveLower).sorted()
+                                    // 别把内部用的合成 key 当成"下架模型"（(total) 是新接口只给当天总额时的占位）
+                                    let delisted = allModels.subtracting(liveLower)
+                                        .filter { !$0.hasPrefix("(") }
+                                        .sorted()
                                     if !legend.isEmpty {
                                         WrappingLegendView(models: legend)
                                     }
@@ -377,6 +380,11 @@ struct ContentView: View {
     private func refresh() async {
         guard !loading else { return }
         loading = true; error = nil
+        // 先把 WKWebView 里最新的 opencode.ai 登录态同步过来（改版后 SPA 路由不触发旧的检测回调），
+        // 否则用的是过期 cookie，新控制台 API 会一直 401、费用不更新
+        if await CookieSync.syncAuthCookie() {
+            widgetStoreWarning = nil
+        }
         // 刷新额度/费用前强制同步模型列表与配额表（用户主动刷新应立即体现官方新增，失败静默）
         async let modelRefresh: [String] = ModelRegistry.refreshIfNeeded(force: true)
         async let zenRefresh: [String] = ModelRegistry.refreshZenIfNeeded(force: true)
