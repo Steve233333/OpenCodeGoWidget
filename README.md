@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.9.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.6.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.9.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.6.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.9.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.10.9.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.6.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.6.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -284,7 +284,7 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 - **修复 kimi-k3 不可用**：Go 网关把「该模型不支持 responses 格式」的报错从 500 改成 401，代理只在 500 时切 chat 桥，导致 kimi-k3 文/图都失败。现在已知 chat 适配模型吃 401 也会切桥（kimi-k3 文本与图片实测通过）。
 - **档位三层一致**：`model_discovery.py` 每次同步会一起生成代理档位表 `reasoning_registry.json` 和桌面端 `enabled-reasoning-efforts` 白名单，并做一致性自检——以前目录声明 3 档、界面只显示 2 档、发出去还可能被压成第 2 档的问题不会再出现。手工档位改 `reasoning_overrides.json`（registry 从此是生成物）。
 - **模型 id 归一**：Go 配额表里的新模型会用 models.dev 官方 id 校正（`DeepSeek V4.1 Flash` 曾猜成 `deepseek-v4.1-flash` 导致 401，正确 id 是 `deepseek-flash`）。
-- **发布资产改名**：DMG/ZIP 以 ASCII 名发布（`OpenCodeGoWidget-1.1.10.9.zip`），README 直链不再 404。
+- **发布资产改名**：DMG/ZIP 以 ASCII 名发布（`OpenCodeGoWidget-1.1.11.6.zip`），README 直链不再 404。
 - 版本 **1.1.8.8 (18)**。
 
 ### v1.1.8.7 — 清死代码 + 新模型 SOP 工具化（2026-09-05）
