@@ -105,6 +105,16 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
+### v1.1.11.0 — 大体检 + 统一数据源（今日模型不再和图表打架）
+
+- **修「今日模型和实际用量对不上」**：这一块以前单独调老接口（`fetchCostTodayPerKey`），新控制台上线后两套数据源打架 —— 实测同一天同一个 Key：`dailyByKey`（新接口 rows）$1.12 vs 老接口 $0.60。现在**统一从同一份当日数据派生**：今日模型取 `daily` 今天那格、按 Key 取 `dailyByKey` 今天那格；实测四源已完全一致（$1.165）。
+- **`availableKeys` 会并上明细里出现过的 Key**，下拉框不再漏。
+- **环境自检升级成「大体检」**（设置页 → 环境自检）：
+  - 大体检①：快照四源对账（今日 daily / 今日模型 / 按Key明细 / 按Key汇总），不一致直接报偏差
+  - 大体检②：直连官方 `/zen/go/v1/usage`，把 rolling/weekly/monthly 三档百分比打出来，与我们界面显示并列对照
+  - 大体检③：Go 配额表抓取状态（多少行、多久前抓的）
+- 版本 **1.1.11.0 (40)**。
+
 ### v1.1.10.9 — 新控制台数据接全：按模型/按 Key 拆分恢复 + 明细增量累积
 
 - **`usage/rows` 明细接入**：新控制台的 `cost-by-day` 只给每天总额（所以图上一天只有一色、`(total)` 还混进了图例）。现在改为翻页拉 `usage/rows?range=24h`（每条带 `costMicroCents` / `model` / `serviceApiKeyId`，pageSize 上限 100），聚合出**按模型**和**按 Key**的当日拆分。

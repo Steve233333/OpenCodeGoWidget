@@ -157,10 +157,57 @@ enum HealthCheck {
             items.append(HealthItem(level: .warn, title: "代理错误日志", detail: "读不到 \(logPath.path)"))
         }
 
+        // ---- 11. 大体检①：快照内部各数据源对账（防"今日模型和图表对不上"）----
+        if let snap = WidgetDataStore.load() {
+            let today = ChartFormatters.day.string(from: Date())
+            let dailyToday = snap.dailyCosts.first { $0.date == today }?.entries.values.reduce(0, +) ?? 0
+            let entriesToday = snap.costEntries.values.reduce(0, +)
+            let perKeyDailyToday = snap.dailyByKey.values
+                .compactMap { $0.first { $0.date == today }?.entries.values.reduce(0, +) }.reduce(0, +)
+            let perKeyEntriesToday = snap.costTotalByKey.values.reduce(0, +)
+            let spread = max(dailyToday, entriesToday, perKeyDailyToday, perKeyEntriesToday)
+                - min(dailyToday, entriesToday, perKeyDailyToday, perKeyEntriesToday)
+            let detail = String(format: "今日 daily $%.3f · 今日模型 $%.3f · 按Key(明细) $%.3f · 按Key(汇总) $%.3f",
+                                dailyToday, entriesToday, perKeyDailyToday, perKeyEntriesToday)
+            items.append(HealthItem(level: spread < 0.02 ? .ok : .warn, title: "大体检① 快照对账",
+                                    detail: detail + (spread < 0.02 ? "（四源一致）"
+                                                      : "（偏差 $\(String(format: "%.3f", spread))，四个源应一致）")))
+        }
+
+        // ---- 12/13. 大体检②③：Go 配额接口探活 + 配额表抓取 ----
+        if let k = goKey, !k.isEmpty {
+            let (ok, detail) = await probeGatewayUsage(k)
+            items.append(HealthItem(level: ok ? .ok : .warn, title: "大体检② Go 配额接口", detail: detail))
+        }
+        let quotaRows = GoQuotaRegistry.cachedSync()
+        let quotaAge = GoQuotaRegistry.cachedDate().map { Int(Date().timeIntervalSince($0) / 60) }
+        items.append(HealthItem(level: quotaRows.count >= 20 ? .ok : .warn, title: "大体检③ Go 配额表",
+                                detail: "\(quotaRows.count) 行" + (quotaAge.map { " · \($0) 分钟前抓的" } ?? " · 从没抓过")))
+
         return items
     }
 
     // MARK: - 具体检查
+
+    /// 直连官方 Go 配额接口，把三档百分比打出来，与我们界面上的对照
+    static func probeGatewayUsage(_ key: String) async -> (Bool, String) {
+        var req = URLRequest(url: URL(string: "https://opencode.ai/zen/go/v1/usage")!)
+        req.timeoutInterval = 20
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.setValue("opencodego-selftest/1.0", forHTTPHeaderField: "User-Agent")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse else { return (false, "请求发不出去（网络/DNS）") }
+        guard (200...299).contains(http.statusCode),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let usage = obj["usage"] as? [String: Any] else {
+            return (false, "HTTP \(http.statusCode)：\(String(data: data, encoding: .utf8)?.prefix(100) ?? "")")
+        }
+        func pct(_ k: String) -> String {
+            (usage[k] as? [String: Any])?["percent"].flatMap { "\(k) \($0)%" } ?? "\(k) ?"
+        }
+        let mine = WidgetDataStore.load().map { "（App 显示 \($0.rolling)%/\($0.weekly)%/\($0.monthly)%）" } ?? ""
+        return (true, "官方：" + [pct("rolling"), pct("weekly"), pct("monthly")].joined(separator: " · ") + mine)
+    }
 
     static func launchctlHas(_ label: String) -> Bool {
         let p = Process()

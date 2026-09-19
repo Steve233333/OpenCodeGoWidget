@@ -263,22 +263,44 @@ enum WidgetSnapshotRefresher {
                 cost = await manager.fetchCostToday()
             }
         }
-        let costPerKey = await manager.fetchCostTodayPerKey()
-        var entries: [String: Double] = [:]
-        for entry in cost.entries where entry.cost > 0 {
-            entries[entry.model] = entry.cost
-        }
-        // availableKeys 从 CostCrawler 的缓存或本次拉取中获得，与官网同步
-        let keys = await CostCrawler.shared.cachedOrFetchedKeys()
+        // 2026-09-19 修「今日模型和实际用量对不上」：
+        // 以前这一块单独调老接口（fetchCostTodayPerKey），新控制台上线后两边数据源不一致 ——
+        // 实测同一天同一个 Key：daily（新接口 rows）$1.12 vs 老接口 $0.60，界面上就打架。
+        // 现在统一从**同一份当日数据**派生：今日模型取 daily 里今天那格，按 Key 取 dailyByKey 今天那格。
+        let todayStr = ChartFormatters.day.string(from: Date())
+        var entries: [String: Double] = (cost.daily.first { $0.date == todayStr }?.entries ?? [:])
+            .filter { $0.value > 0 }
         var byKeyEntries: [String: [String: Double]] = [:]
         var byKeyTotal: [String: Double] = [:]
-        for (k, v) in costPerKey {
-            var m: [String: Double] = [:]
-            var tot: Double = 0
-            for e in v where e.cost > 0 { m[e.model] = e.cost; tot += e.cost }
-            byKeyEntries[k] = m
-            byKeyTotal[k] = tot
+        for (key, arr) in cost.dailyByKey {
+            guard let day = arr.first(where: { $0.date == todayStr }) else { continue }
+            let m = day.entries.filter { $0.value > 0 }
+            guard !m.isEmpty else { continue }
+            byKeyEntries[key] = m
+            byKeyTotal[key] = m.values.reduce(0, +)
         }
+        // 回退：daily/dailyByKey 都没有今天的数据时，沿用老路径（老接口/缓存）
+        if entries.isEmpty || byKeyEntries.isEmpty {
+            let costPerKey = await manager.fetchCostTodayPerKey()
+            if entries.isEmpty {
+                for entry in cost.entries where entry.cost > 0 { entries[entry.model] = entry.cost }
+            }
+            if byKeyEntries.isEmpty {
+                for (k, v) in costPerKey {
+                    var m: [String: Double] = [:]
+                    for e in v where e.cost > 0 { m[e.model] = e.cost }
+                    if !m.isEmpty { byKeyEntries[k] = m; byKeyTotal[k] = m.values.reduce(0, +) }
+                }
+            }
+        }
+        // availableKeys：优先用明细里出现过的 Key，再并上缓存（保证下拉框里能看到实际用过的）
+        let cachedKeys = await CostCrawler.shared.cachedOrFetchedKeys()
+        var mergedKeys = cachedKeys
+        let knownIds = Set(cachedKeys.map(\.id))
+        for key in cost.dailyByKey.keys where !knownIds.contains(key) {
+            mergedKeys.append(ApiKeyInfo(id: key, displayName: key))
+        }
+        let keys = mergedKeys
         // dailyByKey 从 CostCrawler 的 MonthlyCost 中获得
         let dailyByKey = cost.dailyByKey
 
