@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.10.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.11.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.10.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.11.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,35 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.10.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.10.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.11.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.11.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.11 — Muse Spark 兼容层（依据 muse-codex-compat）
+
+**背景**：Muse Spark（Meta 后端，走 opencode Zen/Go）的 tool-schema 校验与 tool-call 流式行为和同网关的 DeepSeek / GLM / MiMo 都不一样 —— 同一份 Codex payload，只有它会挂：`400 Invalid JSON schema`、`400 Recursive JSON schemas are not currently supported`、工具名带点号导致 Codex 报 `unsupported call`、以及"只写「马上改」却不调用工具"的空转。
+
+**代理里新增的改写（全部只对 `muse-spark*` 生效，其他模型 payload 字节不变）**：
+
+1. **修空 schema stub**：Codex 给延迟工具发的 `{"type": {}, "description": {}}` 非法 → 修成 `string`（只走 schema 语义子键，不会误伤名字就叫 `description` 的属性）。
+2. **本地 `$ref` 就地展开**：Meta 不支持递归 schema；展开后爆量（>3 倍且 >200 KB）就放弃这次改写，宁可不修也不撑爆请求。
+3. **工具 schema 嵌套砍到 8 层**（实测第 9 层起必拒）。
+4. **`strict` 保险放松**（实测不是根因，属廉价保险）。
+5. **响应侧拆点号工具名**：`multi_agent_v1.spawn_agent` → `name=spawn_agent` + `namespace=multi_agent_v1`，流式和非流式都做。
+6. **空转兜底**：请求尾补「要么调用工具、要么给最终答复」的硬约束（`instructions` + `input` 末尾各一条）；流式响应先缓冲判断，确实空转就用同一份请求体重发（最多 2 次，同一份响应 2 分钟 6 次熔断），最后一次不管怎样都原样发给客户端，绝不把调用方吊着。
+
+**开关**（写在 `~/.config/agent-vision-toolkit/env`，不改代码就能关）：
+`VISION_PROXY_MUSE_SCHEMA_FIX` / `VISION_PROXY_MUSE_NO_PREAMBLE` / `VISION_PROXY_MUSE_STALL_RETRY` / `VISION_PROXY_MUSE_TOOLNAME_FIX`
+
+**验证**：13 项离线断言全过（Muse 命中、非 Muse 字节不变、空转判定不误判回显的 instructions），实机 Muse / DeepSeek / GLM 请求各一条均 200，非 Muse 日志无任何 muse 改写行。
+
+**注意**：Muse 的流式响应现在会先缓冲再吐（要判断是否空转），所以它表现为"想完一次性出现"，不再逐字流式。另外 `muse-codex-compat` 技能（探针脚本 + 离线测试 + 实测限制清单）已一起放进 App 包的 `skills/` 目录。
+
+版本 **1.1.11.11 (52)**。
 
 ### v1.1.11.10 — 修「别的电脑点配置失败、日志停在半路」（zsh glob 静默杀脚本）
 

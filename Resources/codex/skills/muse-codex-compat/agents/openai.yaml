@@ -1,0 +1,4 @@
+interface:
+  display_name: "Muse Codex Compat"
+  short_description: "Fix Muse Spark through a Codex proxy"
+  default_prompt: "A Muse Spark model fails through my Codex proxy — diagnose it and patch the proxy without affecting other models."

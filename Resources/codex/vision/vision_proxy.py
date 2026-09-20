@@ -1613,6 +1613,444 @@ def _fix_tool_required(parsed):
     return changed
 
 
+# ---------------------------------------------------------------------------
+# Muse Spark ⇄ Codex 兼容层（2026-09-20，依据 muse-codex-compat skill）
+#
+# Meta 后端的 tool-schema 校验与 tool-call 流式行为跟同网关的 DeepSeek/GLM/MiMo 都不一样，
+# 所以同一份客户端 payload 可能只有 Muse 挂。四条已知限制（直连网关实测）：
+#   1. 空 property stub {"type": {}, "description": {}} 非法（Codex 的延迟工具会发）；
+#   2. schema 嵌套深度 ≤ 8 层（root 算第 1 层），第 9 层起 400；
+#   3. 递归 $ref 直接 400（Recursive JSON schemas are not currently supported）；
+#   4. 工具名带点号（multi_agent_v1.spawn_agent）时 Codex 路由不认，要拆成 name + namespace。
+# 另外「只 narrate 不调用工具」的空转（text->tool 停在第 1 步）用请求尾约束 + 响应侧重发兜底。
+#
+# 所有改写只对 muse-spark* 生效，其他模型必须字节不变；每条都能用 env 开关单独关掉。
+# ---------------------------------------------------------------------------
+
+MUSE_MODEL_PREFIX = "muse-spark"
+MUSE_SCHEMA_MAX_DEPTH = 8
+MUSE_MAX_STALL_RETRIES = 2
+
+_JSON_SCHEMA_TYPES = {"object", "array", "string", "number", "integer", "boolean", "null"}
+
+# 只描述计划、不落地成工具调用的措辞（短回复里出现即可判为疑似空转）
+_MUSE_STALL_MARKERS = ("正在", "马上", "这就", "已定位", "我来看看", "I'll", "I will", "let me", "Let me")
+
+MUSE_NO_PREAMBLE_INSTRUCTION = (
+    "严格约束（本条优先级最高）：本轮回复要么直接发起工具调用，要么给出最终答复，"
+    "不允许只写「正在修」「马上改」「我来看看」这类说明——只描述计划而不调用工具，视为任务失败。"
+)
+MUSE_TOOL_FIRST_INSTRUCTION = (
+    "工具优先约束：需要执行操作时立即调用工具，不要先用文字向用户描述你打算做什么。"
+)
+MUSE_STALL_RETRY_INSTRUCTION = (
+    "上一条回复没有调用任何工具，只写了说明文字，用户拿不到任何结果。本轮要么直接发起工具调用，"
+    "要么给出最终答复；需要执行操作就现在调用工具，不要再用文字描述计划。"
+)
+MUSE_STALL_RETRY_INSTRUCTION_HARD = MUSE_STALL_RETRY_INSTRUCTION + (
+    "【第二次提醒】再次强调：禁止只输出「正在处理」这类文字。若本轮仍不调用工具，该任务判定失败。"
+)
+
+
+def _muse_flag(name, default=True):
+    """env 开关（从 env 文件灌进 os.environ）：1/true/yes/on 开，0/false/no/off 关。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _is_muse_model(model):
+    return isinstance(model, str) and model.startswith(MUSE_MODEL_PREFIX)
+
+
+def _split_namespaced_tool_name(name):
+    """'multi_agent_v1.spawn_agent' -> ('multi_agent_v1', 'spawn_agent')；不是点号名则 None。"""
+    if not isinstance(name, str) or "." not in name or any(ch.isspace() for ch in name):
+        return None
+    namespace, _, bare = name.rpartition(".")
+    if not namespace or not bare:
+        return None
+    return namespace, bare
+
+
+def _fix_namespaced_tool_name(item):
+    """把点号工具名拆成 name + namespace（就地改名）。已拆分/不适用返回 False。"""
+    if not isinstance(item, dict):
+        return False
+    if item.get("type") != "function_call" or item.get("namespace"):
+        return False
+    split = _split_namespaced_tool_name(item.get("name"))
+    if not split:
+        return False
+    item["name"], item["namespace"] = split[1], split[0]
+    return True
+
+
+def _split_muse_namespaced_items(items):
+    changed = False
+    if isinstance(items, list):
+        for item in items:
+            if _fix_namespaced_tool_name(item):
+                changed = True
+    return changed
+
+
+def _sse_state_model(state):
+    compat = state.get("compat") if isinstance(state, dict) else None
+    return compat.get("model") if isinstance(compat, dict) else None
+
+
+def _repair_muse_schema_stubs(node):
+    """Codex 的延迟工具会发 {"type": {}, "description": {}}，Meta 直接判非法。
+
+    只走 schema 语义下的子键（properties 的值、items、anyOf/oneOf/allOf、not/if/then/else、
+    additionalProperties），绝不盲递归：properties 里本来就可能有名叫 description 的属性。
+    """
+    if not isinstance(node, dict):
+        return False
+    changed = False
+    if "type" in node:
+        value = node["type"]
+        valid = (isinstance(value, str) and value in _JSON_SCHEMA_TYPES) or (
+            isinstance(value, list)
+            and bool(value)
+            and all(isinstance(item, str) and item in _JSON_SCHEMA_TYPES for item in value)
+        )
+        if not valid:
+            node["type"] = "string"
+            changed = True
+    if "description" in node and not isinstance(node["description"], str):
+        node["description"] = ""
+        changed = True
+    for key in ("items", "additionalProperties", "not", "if", "then", "else", "contains", "propertyNames"):
+        sub = node.get(key)
+        if isinstance(sub, dict) and _repair_muse_schema_stubs(sub):
+            changed = True
+    props = node.get("properties")
+    if isinstance(props, dict):
+        for sub in props.values():
+            if isinstance(sub, dict) and _repair_muse_schema_stubs(sub):
+                changed = True
+    for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+        seq = node.get(key)
+        if isinstance(seq, list):
+            for sub in seq:
+                if isinstance(sub, dict) and _repair_muse_schema_stubs(sub):
+                    changed = True
+    return changed
+
+
+def _cap_schema_depth(node, depth=1, max_depth=None):
+    """砍掉第 8 层以外的 properties/required/items（第 9 层 Meta 必拒）。
+
+    返回 (node, changed)。
+    """
+    if max_depth is None:
+        max_depth = MUSE_SCHEMA_MAX_DEPTH
+    if not isinstance(node, dict):
+        return node, False
+    changed = False
+    if depth >= max_depth:
+        for key in ("properties", "required", "items"):
+            if key in node:
+                node.pop(key, None)
+                changed = True
+        return node, changed
+    props = node.get("properties")
+    if isinstance(props, dict):
+        for key, sub in list(props.items()):
+            new_sub, sub_changed = _cap_schema_depth(sub, depth + 1, max_depth)
+            if sub_changed:
+                props[key] = new_sub
+                changed = True
+    items = node.get("items")
+    if isinstance(items, dict):
+        new_items, sub_changed = _cap_schema_depth(items, depth + 1, max_depth)
+        if sub_changed:
+            node["items"] = new_items
+            changed = True
+    return node, changed
+
+
+def _resolve_json_pointer(root, ref):
+    """解析本地 '#/...' 指针；不是本地指针或解析不到返回 None。"""
+    if ref in ("#", "#/"):
+        return root
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        return None
+    node = root
+    for raw in ref[2:].split("/"):
+        token = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, dict) and token in node:
+            node = node[token]
+        elif isinstance(node, list) and token.isdigit() and int(token) < len(node):
+            node = node[int(token)]
+        else:
+            return None
+    return node
+
+
+def _inline_local_refs(node, root, _depth=0, _seen=frozenset()):
+    """就地展开本地 $ref（Meta 不支持递归 schema），循环引用用 {} 截断。
+
+    返回 (new_node, changed)：只有真的展开了才返回 changed=True。
+    """
+    if _depth > MUSE_SCHEMA_MAX_DEPTH:
+        return node, False
+    if isinstance(node, list):
+        out, changed = [], False
+        for sub in node:
+            new_sub, sub_changed = _inline_local_refs(sub, root, _depth + 1, _seen)
+            out.append(new_sub)
+            changed = changed or sub_changed
+        return (out if changed else node), changed
+    if not isinstance(node, dict):
+        return node, False
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#"):
+        if ref in _seen:
+            return {}, True
+        target = _resolve_json_pointer(root, ref)
+        if target is None:
+            return node, False
+        expanded, _ = _inline_local_refs(target, root, _depth + 1, _seen | {ref})
+        return expanded, True
+    out, changed = {}, False
+    for key, value in node.items():
+        if key in ("$defs", "definitions"):
+            changed = True
+            continue
+        new_value, value_changed = _inline_local_refs(value, root, _depth + 1, _seen)
+        out[key] = new_value
+        changed = changed or value_changed
+    return (out if changed else node), changed
+
+
+def _sanitize_muse_tool_schemas(parsed):
+    """Muse 请求侧净化：修空 stub + 展开 $ref + 砍超深层 + 松掉 strict。
+
+    只对 muse-spark 生效；其他模型连函数体都不进（返回 False，payload 字节不变）。
+    """
+    if not isinstance(parsed, dict) or not _is_muse_model(parsed.get("model")):
+        return False
+    if not _muse_flag("VISION_PROXY_MUSE_SCHEMA_FIX"):
+        return False
+    tools = parsed.get("tools")
+    if not isinstance(tools, list):
+        return False
+    changed = False
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        entries = [tool]
+        nested = tool.get("tools")
+        if isinstance(nested, list):
+            entries.extend([entry for entry in nested if isinstance(entry, dict)])
+        for entry in entries:
+            params = entry.get("parameters")
+            if isinstance(params, dict):
+                before = len(json.dumps(params, ensure_ascii=False))
+                if _repair_muse_schema_stubs(params):
+                    changed = True
+                if _muse_flag("VISION_PROXY_MUSE_SCHEMA_REF_FIX"):
+                    expanded, ref_changed = _inline_local_refs(params, params)
+                    if ref_changed:
+                        after = len(json.dumps(expanded, ensure_ascii=False))
+                        # 展开后爆量的宁可跳过（好过把请求撑爆）：>3 倍且 +200KB 以上就放弃
+                        if after > before * 3 and after - before > 200 * 1024:
+                            _log(f"[vision-proxy] muse $ref inline skipped tool={entry.get('name')} {before}->{after}")
+                        else:
+                            entry["parameters"] = expanded
+                            params = expanded
+                            changed = True
+                capped, cap_changed = _cap_schema_depth(params)
+                if cap_changed:
+                    entry["parameters"] = capped
+                    changed = True
+            if entry.get("strict") is True:
+                entry["strict"] = False
+                changed = True
+    if changed:
+        _log(f"[vision-proxy] muse tool schema sanitized tools={len(tools)}")
+    return changed
+
+
+def _inject_muse_no_preamble(parsed):
+    """Muse 专属：instructions 里补一条「要么工具调用要么最终答复」的硬约束（幂等）。"""
+    if not isinstance(parsed, dict) or not _is_muse_model(parsed.get("model")):
+        return False
+    if not _muse_flag("VISION_PROXY_MUSE_NO_PREAMBLE"):
+        return False
+    instructions = parsed.get("instructions")
+    if not isinstance(instructions, str) or MUSE_NO_PREAMBLE_INSTRUCTION in instructions:
+        return False
+    parsed["instructions"] = instructions.rstrip() + "\n\n" + MUSE_NO_PREAMBLE_INSTRUCTION
+    _log("[vision-proxy] muse no-preamble constraint appended to instructions")
+    return True
+
+
+def _inject_muse_tool_first(parsed):
+    """Muse 专属：input 末尾（模型最后读到的地方）再压一条工具优先约束（幂等）。"""
+    if not isinstance(parsed, dict) or not _is_muse_model(parsed.get("model")):
+        return False
+    if not _muse_flag("VISION_PROXY_MUSE_NO_PREAMBLE"):
+        return False
+    items = parsed.get("input")
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, dict) or item.get("role") != "developer":
+            continue
+        for part in item.get("content") or []:
+            if isinstance(part, dict) and part.get("text") in (
+                    MUSE_TOOL_FIRST_INSTRUCTION, MUSE_NO_PREAMBLE_INSTRUCTION):
+                return False
+    items.append({
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": MUSE_TOOL_FIRST_INSTRUCTION}],
+    })
+    _log("[vision-proxy] muse tool-first constraint appended to input")
+    return True
+
+
+def _iter_sse_data_frames(body):
+    """Yield 一个已缓冲 SSE body 里的每个 JSON data 帧（解不出来就跳过）。"""
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return
+    for block in text.split("\n\n"):
+        for line in block.splitlines():
+            if line.startswith("data:"):
+                try:
+                    payload = json.loads(line[5:].strip())
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    yield payload
+                break
+
+
+def _sse_output_signals(body):
+    """返回 (has_tool_call, output_text)，只看模型真正产出的事件。
+
+    绝不能扫原始 body 判断措辞：response.created 会把 instructions 原样回显回来，
+    而我们注入的约束里就写着「正在修」这类词，扫原始文本会把每个响应都判成空转。
+    """
+    has_tool_call = False
+    texts = []
+    for frame in _iter_sse_data_frames(body):
+        etype = frame.get("type")
+        if etype in ("response.output_item.added", "response.output_item.done"):
+            item = frame.get("item")
+            if isinstance(item, dict) and item.get("type") in ("function_call", "custom_tool_call"):
+                has_tool_call = True
+        elif etype == "response.output_text.delta":
+            delta = frame.get("delta")
+            if isinstance(delta, str):
+                texts.append(delta)
+        elif etype in ("response.completed", "response.failed", "response.incomplete"):
+            response_obj = frame.get("response")
+            if not isinstance(response_obj, dict):
+                continue
+            for item in response_obj.get("output") or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") in ("function_call", "custom_tool_call"):
+                    has_tool_call = True
+                elif item.get("type") == "message":
+                    for part in item.get("content") or []:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            texts.append(part["text"])
+    return has_tool_call, "".join(texts)
+
+
+def _sse_has_terminal_event(body):
+    return any(frame.get("type") in ("response.completed", "response.failed", "response.incomplete")
+               for frame in _iter_sse_data_frames(body))
+
+
+def _sse_looks_like_stall(body):
+    """判断一次 Muse 响应是不是「只叙述、不调用工具」的空转。
+
+    没有终态事件（真截断）不算——那种情况下面有 response.failed 兜底，重发只会白花钱。
+    """
+    if b"data:" not in body or not _sse_has_terminal_event(body):
+        return False
+    has_tool_call, text = _sse_output_signals(body)
+    if has_tool_call:
+        return False
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if len(stripped) > 300:
+        return False
+    return any(marker in stripped for marker in _MUSE_STALL_MARKERS)
+
+
+_MUSE_RETRY_WINDOW = 120.0
+_MUSE_RETRY_LIMIT = 6
+_MUSE_RETRY_HISTORY = {}
+
+
+def _muse_retry_allowed(body):
+    """熔断：同一份「空转响应」2 分钟内最多重发 6 次，防止客户端重试循环放大上游调用。"""
+    key = hashlib.sha1(body[:8192]).hexdigest()
+    now = time.monotonic()
+    entry = _MUSE_RETRY_HISTORY.get(key)
+    if not entry or now - entry[1] > _MUSE_RETRY_WINDOW:
+        if len(_MUSE_RETRY_HISTORY) > 256:
+            for stale, (_, ts) in list(_MUSE_RETRY_HISTORY.items()):
+                if now - ts > _MUSE_RETRY_WINDOW:
+                    _MUSE_RETRY_HISTORY.pop(stale, None)
+        _MUSE_RETRY_HISTORY[key] = [1, now]
+        return True
+    entry[0] += 1
+    return entry[0] <= _MUSE_RETRY_LIMIT
+
+
+def _build_muse_retry_body(body, attempt):
+    """重发用的请求体：在原 input 末尾追加一条更硬的 developer 约束。"""
+    try:
+        parsed = json.loads(body.decode("utf-8", errors="replace"))
+    except Exception:
+        return body
+    if not isinstance(parsed, dict):
+        return body
+    text = MUSE_STALL_RETRY_INSTRUCTION if attempt <= 1 else MUSE_STALL_RETRY_INSTRUCTION_HARD
+    item = {"type": "message", "role": "developer",
+            "content": [{"type": "input_text", "text": text}]}
+    if isinstance(parsed.get("input"), list):
+        parsed["input"].append(item)
+    else:
+        parsed["input"] = [item]
+    return json.dumps(parsed, ensure_ascii=False).encode()
+
+
+class _BufferedResponse:
+    """把已经读完的响应体伪装成上游响应，让流式管线照常消费（重发后要走同一条路）。"""
+
+    def __init__(self, status, headers, body):
+        self.status = status
+        self.headers = headers
+        self._body = body
+        self._pos = 0
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            chunk = self._body[self._pos:]
+            self._pos = len(self._body)
+            return chunk
+        chunk = self._body[self._pos:self._pos + n]
+        self._pos += len(chunk)
+        return chunk
+
+    def close(self):
+        pass
+
+
 def _header_value(headers, name):
     return next((value for key, value in headers if key.lower() == name.lower()), None)
 
@@ -1782,8 +2220,13 @@ def _extract_apply_patch_input(args_acc):
         return args_acc
 
 
-def _rewrite_apply_patch_response_json(body):
-    """Non-streaming JSON response rewrite. Fail-safe: returns original bytes on any problem."""
+def _rewrite_apply_patch_response_json(body, model=None):
+    """Non-streaming JSON response rewrite. Fail-safe: returns original bytes on any problem.
+
+    2026-09-20：model 是 muse-spark 时额外拆点号命名空间工具
+    （multi_agent_v1.spawn_agent -> name=spawn_agent + namespace=multi_agent_v1），
+    Codex 的路由器不认带点号的名字（unsupported call）。
+    """
     try:
         parsed = json.loads(body.decode("utf-8", errors="replace"))
         if not isinstance(parsed, dict):
@@ -1793,7 +2236,13 @@ def _rewrite_apply_patch_response_json(body):
             return body
         changed = False
         for item in output:
-            if not (isinstance(item, dict) and item.get("type") == "function_call"):
+            if not isinstance(item, dict):
+                continue
+            if (_is_muse_model(model) and _muse_flag("VISION_PROXY_MUSE_TOOLNAME_FIX")
+                    and _fix_namespaced_tool_name(item)):
+                _log("[vision-proxy] muse namespaced tool call split (non-stream)")
+                changed = True
+            if item.get("type") != "function_call":
                 continue
             if _is_apply_patch_name(item.get("name")):
                 item["type"] = "custom_tool_call"
@@ -1928,17 +2377,25 @@ def _rewrite_sse_frame(frame, state):
 
         if etype == "response.completed" or etype == "response.failed" or etype == "response.incomplete":
             state["completed"] = True
+            terminal_renamed = False
+            if _is_muse_model(_sse_state_model(state)):
+                response_obj = payload.get("response")
+                if isinstance(response_obj, dict):
+                    terminal_renamed = _split_muse_namespaced_items(response_obj.get("output"))
             out = []
             for item_id, entry in list(pending.items()):
                 pending.pop(item_id, None)
                 state.setdefault("flushed", set()).add(item_id)
                 _log(f"[vision-proxy] apply_patch call interrupted by terminal event item_id={item_id}")
                 out.extend(_flush_apply_patch(entry, interrupted=True))
-            out.append(frame)
+            out.extend(_rebuild_sse_frame(frame, payload, etype) if terminal_renamed else [frame])
             return out
 
         if etype == "response.output_item.added":
             item = payload.get("item") or {}
+            if _is_muse_model(_sse_state_model(state)) and _fix_namespaced_tool_name(item):
+                _log("[vision-proxy] muse namespaced tool call split (stream added)")
+                return _rebuild_sse_frame(frame, payload, etype)
             name = item.get("name") or ""
             if item.get("type") == "function_call" and _is_apply_patch_name(name):
                 item_id = item.get("id")
@@ -1994,6 +2451,9 @@ def _rewrite_sse_frame(frame, state):
 
         if etype == "response.output_item.done":
             item = payload.get("item") or {}
+            item_renamed = _is_muse_model(_sse_state_model(state)) and _fix_namespaced_tool_name(item)
+            if item_renamed:
+                _log("[vision-proxy] muse namespaced tool call split (stream done)")
             name = item.get("name") or ""
             if item.get("type") == "function_call" and _is_apply_patch_name(name):
                 item_id = item.get("id")
@@ -2026,7 +2486,7 @@ def _rewrite_sse_frame(frame, state):
                     if fixed != arguments:
                         item["arguments"] = fixed
                         return _rebuild_sse_frame(frame, payload, etype)
-            return [frame]
+            return _rebuild_sse_frame(frame, payload, etype) if item_renamed else [frame]
 
         return [frame]
     except Exception as exc:
@@ -2437,6 +2897,11 @@ class Proxy:
                 fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
                 id_changed = (zen_changed or go_changed) and _sanitize_input_ids(parsed)
                 req_changed = (zen_changed or go_changed) and _fix_tool_required(parsed)
+                # 2026-09-20：Muse(Meta 后端) 专属兼容（muse-codex-compat skill）。
+                # 三条都自带 model 网关，其他模型的 payload 保持字节不变。
+                muse_schema_changed = (zen_changed or go_changed) and _sanitize_muse_tool_schemas(parsed)
+                muse_preamble_changed = (zen_changed or go_changed) and _inject_muse_no_preamble(parsed)
+                muse_first_changed = (zen_changed or go_changed) and _inject_muse_tool_first(parsed)
                 # reasoning clamp: generic high fallback, hand-written registry, zero probe
                 reasoning_changed = False
                 if isinstance(parsed, dict) and isinstance(parsed.get("reasoning"), dict):
@@ -2446,7 +2911,7 @@ class Proxy:
                         if clamped != eff:
                             parsed["reasoning"]["effort"] = clamped
                             reasoning_changed = True
-                if model_changed or zen_changed or go_changed or tools_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or reasoning_changed:
+                if model_changed or zen_changed or go_changed or tools_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or reasoning_changed or muse_schema_changed or muse_preamble_changed or muse_first_changed:
                     body = bytearray(json.dumps(parsed).encode())
             model = parsed.get("model") if isinstance(parsed, dict) else None
             zen_route = isinstance(parsed, dict) and zen_changed
@@ -2773,7 +3238,20 @@ class Proxy:
 
             response_started = True
             txn["status"] = getattr(response, "status", None) or getattr(response, "code", None)
-            await self._send_response(writer, response)
+            # 2026-09-20：Muse 空转兜底（narration-only turn）。是不是空转要读完整段响应才知道，
+            # 所以重发只能在 _send_response 里做；这里把「拿同一份请求体重发一次」的能力传进去。
+            stall_retry = None
+            if (not fallback_now) and _is_muse_model(model) and _muse_flag("VISION_PROXY_MUSE_STALL_RETRY"):
+                retry_base = bytes(body)
+
+                async def stall_retry(attempt, _base=retry_base, _path=path, _headers=list(headers),
+                                      _upstream=upstream, _method=method):
+                    retry_body = _build_muse_retry_body(_base, attempt)
+                    _log(f"[vision-proxy] muse stall retry #{attempt} model={model} bytes={len(retry_body)}")
+                    return await self._open_upstream(_method, _path, retry_body, _headers, _upstream)
+            # model 显式传进去：_last_model 是服务实例上的共享字段，并发请求会互相覆盖，
+            # 用它的后果是"另一个模型的响应被按 Muse 规则改名/漏改名"。
+            await self._send_response(writer, response, model=model, retry=stall_retry)
         except (ConnectionResetError, BrokenPipeError):
             txn["status"] = txn["status"] or 499
         except Exception as exc:
@@ -3099,7 +3577,7 @@ class Proxy:
         writer.write(tr.on_finish())
         await writer.drain()
 
-    async def _send_response(self, writer, response):
+    async def _send_response(self, writer, response, model=None, retry=None):
         status = getattr(response, "status", None) or getattr(response, "code", 502)
         headers = list(response.headers.items())
         content_type = response.headers.get("Content-Type", "")
@@ -3113,11 +3591,11 @@ class Proxy:
                 writer.write(body)
                 await writer.drain()
                 return
-            await self._send_response_sse(writer, response, status, headers)
+            await self._send_response_sse(writer, response, status, headers, retry=retry, model=model)
             return
         if "application/json" in content_type and not compressed:
             body = await asyncio.to_thread(response.read)
-            body = _rewrite_apply_patch_response_json(body)
+            body = _rewrite_apply_patch_response_json(body, model if model is not None else getattr(self, "_last_model", None))
             await self._write_head(writer, status, headers, len(body))
             writer.write(body)
             await writer.drain()
@@ -3129,16 +3607,58 @@ class Proxy:
             writer.write(chunk)
             await writer.drain()
 
-    async def _send_response_sse(self, writer, response, status, headers):
+    async def _guard_muse_stall(self, response, status, headers, retry):
+        """把 Muse 的流式响应先读完，确认不是「只叙述不调用工具」的空转再交给客户端。
+
+        空转（没有 function_call + 短计划文字）时用同一份请求体重发，最多两次；两次都空转就把
+        最后一次的内容照样发给客户端，绝不让调用方悬着。熔断由 _muse_retry_allowed 兜。
+        """
+        try:
+            body = await asyncio.to_thread(response.read)
+        except Exception as exc:
+            _log(f"[vision-proxy] muse stall probe read failed: {exc!r}")
+            return response, status, headers
+        attempts = 0
+        while attempts < MUSE_MAX_STALL_RETRIES and _sse_looks_like_stall(body):
+            attempts += 1
+            if not _muse_retry_allowed(bytes(body)):
+                _log(f"[vision-proxy] muse stall detected but circuit breaker open (#{attempts}); forwarding as-is")
+                break
+            _log(f"[vision-proxy] muse narration-only stall detected (retry #{attempts})")
+            try:
+                response.close()
+            except Exception:
+                pass
+            try:
+                nxt = await retry(attempts)
+            except Exception as exc:
+                _log(f"[vision-proxy] muse stall retry failed: {exc!r}")
+                break
+            if nxt is None:
+                break
+            nxt_status = getattr(nxt, "status", None) or getattr(nxt, "code", 0) or status
+            nxt_headers = list(nxt.headers.items()) if hasattr(nxt, "headers") else headers
+            try:
+                nxt_body = await asyncio.to_thread(nxt.read)
+            except Exception as exc:
+                _log(f"[vision-proxy] muse stall retry read failed: {exc!r}")
+                break
+            response, status, headers, body = nxt, nxt_status, nxt_headers, nxt_body
+        final_status = getattr(response, "status", None) or status
+        return _BufferedResponse(final_status, {k: v for k, v in headers}, bytes(body)), status, headers
+
+    async def _send_response_sse(self, writer, response, status, headers, retry=None, model=None):
         """Stream the upstream SSE response. Fail-safe apply_patch bridge:
         only whitelisted apply_patch frames are transformed; every other
         frame is forwarded byte-identical (including its delimiter). Any
         parse/transform error forwards the raw frame."""
+        if retry is not None:
+            response, status, headers = await self._guard_muse_stall(response, status, headers, retry)
         await self._write_head(writer, status, headers, None)
         read_chunk = getattr(response, "read1", response.read)
         buffer = bytearray()
         state = {"pending": {}, "completed": False,
-                 "compat": {"model": getattr(self, "_last_model", None)}}
+                 "compat": {"model": model if model is not None else getattr(self, "_last_model", None)}}
 
         async def emit(frame_bytes):
             writer.write(frame_bytes)
