@@ -54,7 +54,8 @@ enum HealthCheck {
 
         // ---- 3. Go Key：存在性 + 有效性 ----
         let envKey = readEnvKey()
-        let keychainKey = KeychainStore.load()
+        // 2026-09-20：不要直接读钥匙串（重签后会弹授权框、自检会卡住）——走 resolvedKey()
+        let keychainKey = envKey?.isEmpty == false ? nil : KeychainStore.resolvedKey()
         let goKey = (envKey?.isEmpty == false ? envKey : nil) ?? keychainKey
         if let k = goKey, !k.isEmpty {
             items.append(HealthItem(level: .ok, title: "Go Key 存在",

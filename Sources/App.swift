@@ -117,7 +117,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct ContentView: View {
-    @State private var apiKey: String = KeychainStore.load() ?? ""
+    // 2026-09-20：这里以前直接 KeychainStore.load() —— 那是**读钥匙串**，重签后 macOS 会弹授权框，
+    // 而且这行是视图属性初始化，弹框会把整个界面构造卡住（窗口画不出来、刷新也不跑）。
+    // 改用 resolvedKey()（App Group → env 文件 → 钥匙串），并且真正读盘放到 .task 里。
+    @State private var apiKey: String = ""
     @State private var snapshot: WidgetSnapshot? = WidgetDataStore.load()
     @State private var loading = false
     @State private var error: String?
@@ -370,6 +373,8 @@ struct ContentView: View {
             Task { await refresh() }
         }
         .task {
+            // 真正读 Key 放在这里（而不是属性初始化）：读钥匙串可能弹授权框，绝不能挡住界面构造
+            if apiKey.isEmpty { apiKey = KeychainStore.resolvedKey() ?? "" }
             // 启动即自检共享通道：App Group 拿不到就先提醒（不依赖这次有没有刷新）
             if WidgetDataStore.groupContainerURL == nil {
                 widgetStoreWarning = "App Group 容器不可用：小组件会读不到数据，已改走备用通道（齿轮 → 小组件自检）"
@@ -385,7 +390,10 @@ struct ContentView: View {
                     quotaUpdatedAt = GoQuotaRegistry.cachedDate()
                 }
             }
-            if snapshot == nil { await refresh() }
+            // 2026-09-20：以前只有"快照为空"才在启动时刷新 —— 结果打开 App 看到的是上一次的旧数据，
+            // 要等 5 分钟自动那轮或手点「刷新」。现在快照超过 3 分钟就直接刷一次。
+            let stale = snapshot.map { Date().timeIntervalSince($0.updatedAt) > 180 } ?? true
+            if snapshot == nil || stale { await refresh() }
         }
         .onReceive(autoTimer) { _ in
             guard !loading else { return }
@@ -409,7 +417,20 @@ struct ContentView: View {
         loading = true; error = nil
         // 先把 WKWebView 里最新的 opencode.ai 登录态同步过来（改版后 SPA 路由不触发旧的检测回调），
         // 否则用的是过期 cookie，新控制台 API 会一直 401、费用不更新
-        if await CookieSync.syncAuthCookie() {
+        // 2026-09-20：CookieSync 里可能走 WKWebView（磁盘 cookie 缺失时），而 WebKit 没有超时 ——
+        // 一旦 web 进程起不来/页面卡住，await 永不返回：界面停在 loading，5 分钟定时器被 `guard !loading`
+        // 挡住，用户看到的就是"点了刷新没反应、数据再也不更新"。给这一步加 8 秒硬超时。
+        let cookieSynced = await withTaskGroup(of: Bool?.self) { group -> Bool in
+            group.addTask { await CookieSync.syncAuthCookie() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? false
+        }
+        if cookieSynced {
             widgetStoreWarning = nil
         }
         // 刷新额度/费用前强制同步模型列表与配额表（用户主动刷新应立即体现官方新增，失败静默）

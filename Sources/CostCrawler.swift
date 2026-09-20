@@ -199,6 +199,9 @@ final class CostCrawler: @unchecked Sendable {
             logger.warning("CostCrawler: cost-by-day 解析出 0 天：\(String(data: days, encoding: .utf8)?.prefix(200) ?? "")")
             return nil
         }
+        // 官方每天总额（对账用）：日后发现某天存的明细比官方总额少很多，说明那天只有"半天明细"
+        var officialTotals: [String: Double] = [:]
+        for d in daily { officialTotals[d.date] = d.total }
         // 明细：`usage/rows` 每条带 costMicroCents + model + serviceApiKeyId（pageSize 上限 100）。
         // 24h 约 500 条 → 6 次请求，拿到「按模型」+「按 Key」的当日拆分。
         // 30 天全量要 169 次请求，太重 → 采用增量累积：每天刷新把当日明细并进快照，
@@ -222,7 +225,34 @@ final class CostCrawler: @unchecked Sendable {
             // （2026-09-19 实测：写成"覆盖"会把回填好的历史明细每轮冲掉，于是"所有密钥"永远纯色，
             //   而按 Key 视图走 dailyByKey 的合并逻辑、反而有颜色 —— 就是用户看到的怪现象）
             for d in daily where merged[d.date] == nil { merged[d.date] = d }
-            for (date, entries) in rowDaily { merged[date] = DailyCost(date: date, entries: entries) }
+            for (date, entries) in rowDaily {
+                let newTotal = entries.values.reduce(0, +)
+                // 2026-09-20：24h 窗口只覆盖"边界那天"的一部分 —— 直接覆盖会把昨天整天冲成
+                // 晚上那一小段（用户实拍：9/19 实际 $2.19，被写成 $0.45）。
+                // 用量只会累加，所以新的明显更少时保留旧的。
+                if let old = merged[date], old.total > newTotal * 1.001 { continue }
+                merged[date] = DailyCost(date: date, entries: entries)
+            }
+            // 和官方总额对账：明细明显偏小 = 那天只有部分明细 → 先按官方总额显示（钱先对），
+            // 这天随即变成"只有总额、缺明细"，下一次回填会用整天窗口重抓。
+            // 2026-09-20：官方总额只覆盖"已结算的整天"（今天的官方总额还是 0，所以只对 >0 的天对账）。
+            for (date, official) in officialTotals where official > 0 {
+                guard let cur = merged[date], cur.total > 0, cur.total < official * 0.999 else { continue }
+                let ratio = official / cur.total
+                let hasDetail = cur.entries.contains { $0.key != "(total)" && $0.value > 0 }
+                if hasDetail, ratio < 1.10 {
+                    // 只差一点点（日界/舍入级别）：把各模型按同一比例归一到官方总额，
+                    // 这样柱子上的钱和官网完全一致，颜色拆分比例仍然来自真实明细。
+                    var scaled: [String: Double] = [:]
+                    for (k, v) in cur.entries { scaled[k] = v * ratio }
+                    merged[date] = DailyCost(date: date, entries: scaled)
+                    logger.info("CostCrawler: \(date) 明细 $\(cur.total) 归一到官方 $\(official)（×\(ratio)）")
+                } else {
+                    // 差得多：说明这天只有"半天明细" → 先按官方总额显示（钱先对），排队重抓明细
+                    logger.info("CostCrawler: \(date) 明细 $\(cur.total) 远少于官方 $\(official) → 先按官方总额显示并排队重抓")
+                    merged[date] = DailyCost(date: date, entries: ["(total)": official])
+                }
+            }
             daily = merged.values.sorted { $0.date < $1.date }
 
             var mergedByKey: [String: [String: DailyCost]] = [:]
@@ -231,6 +261,8 @@ final class CostCrawler: @unchecked Sendable {
             }
             for (key, byDate) in rowByKey {
                 for (date, entries) in byDate {
+                    let newTotal = entries.values.reduce(0, +)
+                    if let old = mergedByKey[key]?[date], old.total > newTotal * 1.001 { continue }
                     mergedByKey[key, default: [:]][date] = DailyCost(date: date, entries: entries)
                 }
             }
@@ -257,7 +289,20 @@ final class CostCrawler: @unchecked Sendable {
         for d in daily { map[d.date] = d }
         for (date, entries) in union {
             let current = map[date]?.entries ?? [:]
-            if entries.count > current.count { map[date] = DailyCost(date: date, entries: entries) }
+            let curTotal = current.values.reduce(0, +)
+            let unionTotal = entries.values.reduce(0, +)
+            guard entries.count > current.count, unionTotal > 0 else { continue }
+            if curTotal > 0, unionTotal < curTotal * 0.98 {
+                // 2026-09-20：并集金额明显比现在少 = 这份并集是"半天明细"。以前无条件用它替换，
+                // 结果把刚对上的官方总额又顶回成 $0.40（用户实拍：9/19 官方 $2.19 显示 $0.40）。
+                // 只有"这天现在只是官方总额、并集只差一点点（日界/舍入）"时，才按官方总额等比归一并集，既保钱又拿颜色。
+                if unionTotal >= curTotal * 0.90, current.count == 1, current["(total)"] != nil {
+                    let ratio = curTotal / unionTotal
+                    map[date] = DailyCost(date: date, entries: entries.mapValues { $0 * ratio })
+                }
+                continue
+            }
+            map[date] = DailyCost(date: date, entries: entries)
         }
         return map.values.sorted { $0.date < $1.date }
     }
@@ -432,7 +477,13 @@ final class CostCrawler: @unchecked Sendable {
         var failedWindows = 0
         await consoleRowsInWindows(windows, cookie: cookie, ws: ws, concurrency: 4) { rows, ok in
             total += rows.count
-            if !ok { failedWindows += 1 }
+            if !ok {
+                failedWindows += 1
+                // 2026-09-20：**半截数据一律不落盘**。以前把"某页失败的窗口"里的残留行也合并了，
+                // 于是整天被写成"只覆盖了几个小时"的小数（用户实拍：9/19 显示 $0.41，实际 $2.19）。
+                // 宁可不补，也不要拿半天数据冒充整天 —— 这天保持"缺明细"，下次刷新重抓。
+                return
+            }
             self.mergeRowsIntoSnapshot(rows)   // 每批落盘：进度条往前走、中途被杀也不白跑
         }
         suite?.set(failedWindows, forKey: "historyBackfillFailedWindows")
@@ -460,7 +511,12 @@ final class CostCrawler: @unchecked Sendable {
         for d in snap.dailyCosts { dayMap[d.date] = d }
         for (date, entries) in daily {
             let current = dayMap[date]?.entries ?? [:]
-            if current.contains(where: { $0.key != "(total)" && $0.value > 0 }) { continue }
+            let curTotal = current.values.reduce(0, +)
+            let newTotal = entries.values.reduce(0, +)
+            let hasDetail = current.contains { $0.key != "(total)" && $0.value > 0 }
+            // 有明细、而且这次（整天窗口）不比旧的多 → 不动；否则用整天数据。
+            // 2026-09-20：这里以前是"有明细就跳过"，于是"半天明细"永远修不回来。
+            if hasDetail && newTotal <= curTotal { continue }
             dayMap[date] = DailyCost(date: date, entries: entries)
         }
         snap.dailyCosts = dayMap.values.sorted { $0.date < $1.date }
@@ -468,7 +524,12 @@ final class CostCrawler: @unchecked Sendable {
         var byKeyMap: [String: [String: DailyCost]] = [:]
         for (k, arr) in snap.dailyByKey { for d in arr { byKeyMap[k, default: [:]][d.date] = d } }
         for (k, byDate) in byKey {
-            for (date, entries) in byDate { byKeyMap[k, default: [:]][date] = DailyCost(date: date, entries: entries) }
+            for (date, entries) in byDate {
+                let cur = byKeyMap[k]?[date]?.entries ?? [:]
+                let hasDetail = cur.contains { $0.key != "(total)" && $0.value > 0 }
+                if hasDetail, cur.values.reduce(0, +) > entries.values.reduce(0, +) { continue }
+                byKeyMap[k, default: [:]][date] = DailyCost(date: date, entries: entries)
+            }
         }
         snap.dailyByKey = byKeyMap.mapValues { $0.values.sorted { $0.date < $1.date } }
         snap.updatedAt = Date()

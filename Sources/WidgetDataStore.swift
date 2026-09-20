@@ -368,7 +368,10 @@ enum WidgetSnapshotRefresher {
             let onlyTotal = !d.entries.contains { $0.key != "(total)" && $0.value > 0 }
             if onlyTotal, let o = oldMap[d.date],
                o.entries.contains(where: { $0.key != "(total)" && $0.value > 0 }) {
-                out[d.date] = o
+                // 2026-09-20：粗数据（每天一个总额）只有在"明显更大"时才压过明细 ——
+                // 说明旧明细则漏了用量（例如被 24h 窗口截成半天），先让钱对，明细随后由回填重抓；
+                // 否则保留更细的旧数据（原护栏）。
+                out[d.date] = d.total > o.total * 1.05 ? d : o
             } else {
                 out[d.date] = d
             }

@@ -82,6 +82,11 @@ enum KeychainStore {
 
     static func resolvedKey() -> String? {
         if let k = sharedDefaults?.string(forKey: sharedKeyKey), !k.isEmpty { return k }
-        return load() ?? loadFromEnvFile()
+        // 2026-09-20：env 文件排在钥匙串**前面**。每次本地重新打包（ad-hoc 重签）都会让钥匙串
+        // 里那条 apikey 的 ACL 失效 → macOS 弹授权框；用户没注意时读取会一直阻塞，
+        // 表现就是"App 卡死/点了刷新没反应/窗口都画不出来"（实测两个实例都卡在 SecItemCopyMatching）。
+        // 一键配置一定会写 env 文件，所以正常路径根本不需要碰钥匙串。
+        if let k = loadFromEnvFile(), !k.isEmpty { return k }
+        return load()
     }
 }

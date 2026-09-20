@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.11.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.14.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.11.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.14.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,42 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.11.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.11.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.14.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.14.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.14 — 补齐用量修复：半截窗口不落盘 + 官方总额归一
+
+打 1.1.11.12 时只做了"别用更小的数据覆盖"，但**回填补明细那条路**还是会拿半截数据盖上去（实测：9/19 被回填写成 $0.41，官方 $2.1858）。这一版补上：
+
+- **回填严格"整窗才算数"**：某一页失败时，这个时间窗的残留行**一律不落盘**（宁可不补，也不要用半天数据冒充整天）；这天保持"缺明细"，下次刷新重抓。
+- **官方总额归一到官网口径**：`cost-by-day` 只对**已结算的整天**给总额（今天那份还是 0，所以只对 >0 的天对账）。对账时：
+  - 明细比官方少一点点（<10%，属于日界/舍入级别）→ **把各模型等比归一到官方总额**，柱子上的钱与官网完全一致，颜色比例仍来自真实明细；
+  - 明细比官方少很多（≥10%，说明只有半天）→ 先按官方总额显示（钱先对），并排队重抓明细。
+- **并集自愈不再"用半天顶账"**：`applyUnionDetail`（上次给"纯色自愈"加的那段）以前无条件用"各 Key 明细的并集"替换当天数据 —— 并集只有半天时会把刚对上的官方总额又顶回成 $0.40。现在并集金额明显偏小就拒绝替换；只差一点点（日界/舍入）时按官方总额等比归一，既保钱又拿到颜色。
+- **修「套餐生效日期显示成今天」**：官方 `go/status` 的时间戳带毫秒（`2026-10-19T02:02:53.000Z`），默认 `ISO8601DateFormatter` 解析不了小数秒 → 静默退化成"现在 ± N 小时"的兜底值。现在两种格式都试。
+- **实测结果**：9/19 从 $0.40 恢复为 **$2.1858（= 官网口径）**、6 个模型有颜色；月额度 **6%**（与官网一致）；到期时间 **10/19 10:02**、周重置 9/21 08:00、5 小时重置 9/21 00:06，全部与官网一致。
+- 版本 **1.1.11.14 (55)**。
+
+### v1.1.11.13 — 修「App 卡死/窗口都画不出来」：重签后钥匙串授权框把界面构造卡住
+
+- **症状**：本地重新打包（ad-hoc 重签）后打开小组件，窗口迟迟不出来、"刷新"没反应，桌面上挂着一个钥匙串授权框；实测两个实例的主线程都卡在 `SecItemCopyMatching`。
+- **根因**：`Sources/App.swift` 里 `@State private var apiKey = KeychainStore.load()` —— 这行在**视图属性初始化**时就**同步读钥匙串**。每次重签都会让钥匙串里那条 `com.steve233.opencodego.apikey` 的 ACL 失效，macOS 弹授权框等用户点，界面构造于是被阻塞（连 window 都来不及画）。
+- **修复**：① 属性初始化不再读盘，改到 `.task` 里；② 读 Key 一律走 `resolvedKey()`，并把顺序改成 **App Group → env 文件 → 钥匙串**（一键配置必写 env，正常路径根本不碰钥匙串）；③ 环境自检里那处直接读钥匙串也一并改掉。
+- 版本 **1.1.11.13 (54)**。
+
+### v1.1.11.12 — 修「历史用量偏小」+ 月用量百分比和官网对不上
+
+- **修「明明昨天用了 $2，图上只有 $0.5」**：明细是每次刷新拉最近 24 小时，而 **24 小时窗口只覆盖"边界那天"的一部分** —— 它把这天整天已经存好的明细**覆盖成了晚上那一小段**。实测：9/19 整天（rows 口径）$2.1858，而「19:40 之后」那一段正好 $0.5218，界面就显示成 $0.45。现在三道保险：
+  1. 24h 窗口的行数据只在"不少于已存"时才覆盖那天（用量只会累加，明显更少就是半天数据）；
+  2. 每次刷新拿官方 `cost-by-day` 的**每日总额对账**：某天明细比官方总额少 5% 以上，立刻改用官方总额显示（**钱先对**），并把这天重新排进"缺明细"队列；
+  3. 回填补明细时，允许"新的整天数据更全就替换旧数据"（以前是"有明细就跳过"，所以半天明细永远修不回来）。
+- **修「月用量百分比和官网差 1%」**：官网那三个百分比来自控制台 `GET /console/api/go/status`（`usedMicroCents / limitMicroCents` **四舍五入**），而我们在用的是网关 `/zen/go/v1/usage`，它是**向下取整** —— 实测 5.72%：官网显示 6%、网关给 5%。现在优先用控制台官方口径，网关只做兜底；月度的重置时间改用订阅周期 `access.endsAt`（网关那个接口压根不给月度 resetsAt）。
+- 版本 **1.1.11.12 (53)**。
 
 ### v1.1.11.11 — Muse Spark 兼容层（依据 muse-codex-compat）
 
