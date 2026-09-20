@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.9.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.10.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.9.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.10.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,21 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.9.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.9.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.10.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.10.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.10 — 修「别的电脑点配置失败、日志停在半路」（zsh glob 静默杀脚本）
+
+- **症状**：新机器上点「配置」，日志停在「无需同步：…（内容一致）」那一行就没下文了，只显示「上次配置失败」，**一句错误都没有**。
+- **根因**：安装器是 zsh 脚本，而 zsh 默认 `nomatch` —— 只要有一个 **glob 匹配不到任何文件，整个脚本立刻退出（status 1）**，且只往 stderr 吐一句 `no matches found`。脚本里有一行是「如果装了 python.org 的 Python，就跑一次 Install Certificates 修证书」：机器上**没装 python.org Python 时这条 glob 不匹配 → 脚本当场死掉**，后面的本地代理、模型发现、副本重建全都没执行。用同样的路径复现：老脚本 `:694: no matches found …` 退出码 1，日志正好停在那一行。
+- **修复**：脚本开头 `setopt null_glob`（匹配不到就当空列表，跳过而不是死掉）；另外把「失败 rollout 归档」那处的 `*.archived-*.jsonl` 一起保护（空目录同样会触发这个坑）。
+- **顺手加保险**：退出码非 0 时脚本自己补一句 `ERROR: 配置脚本异常中断（退出码 N）`，以后不会再有"日志戛然而止、查不出原因"的情况。
+- 版本 **1.1.11.10 (51)**。
 
 ### v1.1.11.9 — 历史明细「被冲掉能自愈」+ 自然月「刷新」真的会抓数据
 

@@ -13,6 +13,11 @@
 #   --install              直接进入安装模式（弹窗填 Key）
 # =============================================================================
 set -uo pipefail
+# 2026-09-20：zsh 默认 nomatch —— 任何**不匹配的 glob** 会让整个脚本静默退出（status 1），
+# 日志里连一句错误都没有，用户只看到"上次配置失败"。实测那台机器没有 python.org 的
+# /Applications/Python 3.x/，就死在下面第 ~694 行的证书循环上（正好停在 vision 同步之后、
+# "阶段：重启本地代理"之前 —— 和用户截图完全对上）。显式允许空匹配。
+setopt null_glob 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG="$HOME/Library/Logs/codex-oneclick-setup.log"
@@ -64,7 +69,15 @@ if ! mkdir "$ONECLICK_LOCK_DIR" 2>/dev/null; then
   mkdir "$ONECLICK_LOCK_DIR" 2>/dev/null || die "无法创建锁目录 $ONECLICK_LOCK_DIR"
 fi
 printf 'PID=%s START=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S')" > "$ONECLICK_LOCK_DIR/info" 2>/dev/null || true
-_cleanup_oneclick_lock() { rm -rf "$ONECLICK_LOCK_DIR"; }
+_cleanup_oneclick_lock() {
+  local _oc_status=$?
+  rm -rf "$ONECLICK_LOCK_DIR"
+  # 2026-09-20：异常中断也要留痕（以前 zsh 的 glob 报错会让脚本无声退出，
+  # 日志最后一行停在半路，完全查不出原因）
+  if [[ "$_oc_status" -ne 0 ]]; then
+    log "ERROR: 配置脚本异常中断（退出码 $_oc_status）。请把这一行以上 30 行日志发给开发者。"
+  fi
+}
 trap _cleanup_oneclick_lock EXIT INT TERM
 
 # ---------------------------------------------------------------------------
