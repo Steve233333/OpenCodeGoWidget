@@ -369,7 +369,9 @@ struct ContentView: View {
             apiKey = ""
         }
         .onReceive(NotificationCenter.default.publisher(for: .openCodeGoCredentialsChanged)) { _ in
-            // 登录态变化后立即拉一次数据，费用图马上有内容
+            // 登录态变化（含换账号 → 刚清过缓存）后立即拉一次数据；先清空内存里的旧快照，
+            // 免得抹掉缓存后界面还挂着上一个账号的数字
+            snapshot = nil
             Task { await refresh() }
         }
         .task {
@@ -740,6 +742,7 @@ struct HealthCheckRow: View {
 struct WidgetSelfCheckRow: View {
     @State private var report: String?
     @State private var actionNote: String?
+    @State private var confirmWipe = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -762,6 +765,21 @@ struct WidgetSelfCheckRow: View {
                     report = report == nil ? WidgetDataStore.diagnose() : nil
                 }
                 .controlSize(.mini)
+                // 2026-09-20：换账号后本机这份用量数据必须先清掉，否则旧账号的历史会被"保留旧天"
+                // 的增量逻辑留在图上（两个账号的数据串在一起）。这里给个手动入口。
+                Button("清除用量缓存") { confirmWipe = true }
+                    .controlSize(.mini)
+                    .alert("清除本机用量缓存？", isPresented: $confirmWipe) {
+                        Button("清除", role: .destructive) {
+                            let removed = WidgetDataStore.wipeUsageCache()
+                            actionNote = removed ? "已清空，回主界面点「刷新」重建 ✅" : "本来就没有缓存"
+                            NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
+                            if report != nil { report = WidgetDataStore.diagnose() }
+                        }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("会删掉本机存的历史用量/费用/密钥列表（cookies 和 Key 保留）。换账号后建议清一次，避免显示上一个账号的数字。")
+                    }
             }
             if let report {
                 ScrollView {

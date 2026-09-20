@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.14.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.15.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.14.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.15.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,21 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.14.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.14.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.15.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.15.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.15 — 换账号不再串号：设置里新增「清除用量缓存」
+
+- **问题**：刷新是"保留旧天 + 合并新数据"的增量逻辑，所以**退出登录换到别的账号后，上一个账号的历史天会被原样保留在图上**，新账号的数据又并进来 —— 两个账号的用量串在一起（用户问到过这一点）。
+- **自动处理**：每次刷新都会用官方 `go/status` 的 `subscriberUserId`（`acc_…`）核对账号；**账号一变，本机用量缓存整个作废**（快照三条通道 + 回填标记），随后按新账号从零重建。cookies 与 Key 不动。
+- **手动入口**：设置 →「小组件自检」一排新增 **「清除用量缓存」** 按钮（带二次确认），换账号后不放心就点一下，再回主界面点「刷新」重建。
+- 清缓存只删本机这份"历史用量/费用/密钥列表"快照，**不会**动账号、Key 或服务器上的任何数据。
+- 版本 **1.1.11.15 (56)**。
 
 ### v1.1.11.14 — 补齐用量修复：半截窗口不落盘 + 官方总额归一
 

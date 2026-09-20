@@ -76,6 +76,18 @@ final class NetworkManager: @unchecked Sendable {
               let access = obj["access"] as? [String: Any],
               let meters = access["meters"] as? [String: Any] else { return nil }
 
+        // 2026-09-20：账号识别（subscriberUserId = acc_…）。换了账号必须把上一个账号的
+        // 本地缓存抹掉 —— 刷新是"保留旧天 + 合并"的增量逻辑，否则旧账号的历史会留在图上，
+        // 变成两个账号的数据串在一起（用户明确担心过这一点）。
+        if let sub = obj["subscriberUserId"] as? String, !sub.isEmpty {
+            let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+            if let old = suite?.string(forKey: "cachedAccountID"), !old.isEmpty, old != sub {
+                WidgetDataStore.wipeUsageCache()
+                logger.notice("账号已切换（\(old.prefix(12)) → \(sub.prefix(12))），本机用量缓存已清空，将按新账号重建")
+            }
+            suite?.set(sub, forKey: "cachedAccountID")
+        }
+
         func num(_ v: Any?) -> Double {
             if let s = v as? String { return Double(s) ?? 0 }
             if let n = v as? NSNumber { return n.doubleValue }

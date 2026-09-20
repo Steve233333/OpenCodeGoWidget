@@ -153,6 +153,30 @@ enum WidgetDataStore {
 
     static func load() -> WidgetSnapshot? { loadDetailed().snapshot }
 
+    /// 2026-09-20：换账号（或手动清缓存）时把本机这份用量数据**整个抹掉** ——
+    /// 快照三条通道 + 回填标记；cookies / Key 不动。
+    /// 背景：刷新是"保留旧天 + 合并新数据"的增量逻辑，换账号后不抹掉的话，
+    /// 上一个账号的历史天会被原样保留，图上就是两个账号的数据串在一起。
+    @discardableResult
+    static func wipeUsageCache() -> Bool {
+        var removed = false
+        for url in [fileURL, widgetHostFileURL, widgetOwnFileURL].compactMap({ $0 }) {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+                removed = true
+            }
+        }
+        if let d = defaults {
+            for key in [snapshotKey, "historyBackfillDone", "historyBackfillCursor",
+                        "historyBackfillLastCount", "historyBackfillFailedWindows",
+                        "historyRepairLast", "historyBackfillRunning", "historyBackfillRunningAt"] {
+                d.removeObject(forKey: key)
+            }
+            d.synchronize()
+        }
+        return removed
+    }
+
     static func loadDetailed() -> WidgetSnapshotLoad {
         let groupPath = groupContainerURL?.path
         let groupFile = fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
