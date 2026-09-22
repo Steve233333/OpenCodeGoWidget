@@ -137,6 +137,8 @@
   "max"
  ],
  "mimo-v2.5-pro": [
+  "low",
+  "medium",
   "high"
  ],
  "minimax-m3": [

@@ -117,6 +117,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 | 联网 | chat 端点无原生 search | 由代理 sidecar 代搜（日志确认 `injected synthetic web_search`）✓ |
 | 图片 | 带图请求实测 **200** | models.json 声明 `text+image+audio` ✓（models.dev 还列了 video/pdf，Codex 白名单不接受，故意不收） |
 
+- **顺带修 `mimo-v2.5-pro` 的档位**：实测 `low`/`medium`/`high` 可用（`minimal`/`xhigh`/`max` 400），但配置里只写了 `high` → 已补成 low/medium/high。`mimo-v2.5` 则**什么档位都收**（minimal→max 全 200，等于忽略这个参数），保持 low/high/max 不动；`mimo-v2.5-pro` **不支持图片**（发图 404，models.json 声明 text-only ✓ 本来就是对的）。
+
 顺带一条观察：探测时 **整个 MiMo 家族**的 `/responses` 都是 503（v2.5 / v2.5-pro 同样），而 DeepSeek 200 —— 说明这是 MiMo 只挂在 chat 端点上，不是我们的配置错。
 
 版本 **1.1.11.20 (61)**。
