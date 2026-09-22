@@ -7,3 +7,7 @@ xcuserdata/
 DerivedData/
 ignore pyc
 __pycache__/
+
+# 成品/备份残骸（2026-09-23 Phase 0）
+*.bak-*
+*.bak.*

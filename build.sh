@@ -2,6 +2,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# 2026-09-23（Phase 0）：**版本号只有一个真源** = ./VERSION。
+# 以前每次发版要手改 build.sh 里的 4 处（两个 plist × 2 个键），25 个提交里改了 19 次。
+# CFBundleVersion 由版本号推导（1.1.11.25 → 111125），保证单调递增、也不用第二个文件。
+APP_VERSION="$(tr -d ' \n' < VERSION)"
+BUILD_NUMBER="$(printf '%s' "$APP_VERSION" | tr -d '.')"
+
+# --test：只跑测试门槛，不打包（CI/本地自检用）。不加参数时也会先过同一套门槛。
+TEST_ONLY=0
+if [ "${1:-}" = "--test" ]; then TEST_ONLY=1; fi
+
 APP_BUNDLE_ID="com.steve233.opencodego"
 WIDGET_BUNDLE_ID="com.steve233.opencodego.widget"
 APP_NAME="OpenCodeGoWidget"
@@ -69,6 +79,40 @@ if [ "${SKIP_KEY_TEST:-0}" != "1" ]; then
   fi
 fi
 
+# 2026-09-23（Phase 0）：把"测试门槛"补齐 —— 以前只有上面两个解析自检，最容易翻车的
+# 用量管线（日界/合并/按 Key 口径）和 Python 代理全量测试都没有进门槛。
+echo "==> 用量管线自检（离线；日界 / 增量幂等 / 半窗不冲整天 / 按 Key 覆盖）"
+if [ "${SKIP_PIPELINE_TEST:-0}" != "1" ] && [ -x "scripts/test-usage-pipeline.sh" ]; then
+  if ! "scripts/test-usage-pipeline.sh"; then
+    echo "!! 用量管线自检没过，先修好再打包（或 SKIP_PIPELINE_TEST=1 ./build.sh 跳过）"
+    exit 1
+  fi
+fi
+
+echo "==> 本地代理自检（Python 全量测试 + Muse 兼容层）"
+if [ "${SKIP_PROXY_TEST:-0}" != "1" ]; then
+  if [ -f "Resources/codex/vision/tests/run_all_robust.py" ]; then
+    if ! python3 "Resources/codex/vision/tests/run_all_robust.py" >/tmp/opencodego-proxy-tests.log 2>&1; then
+      echo "!! 代理测试没过，日志：/tmp/opencodego-proxy-tests.log"
+      tail -20 /tmp/opencodego-proxy-tests.log
+      exit 1
+    fi
+  fi
+  if [ -f "Resources/codex/skills/muse-codex-compat/scripts/test_muse_compat.py" ]; then
+    if ! python3 "Resources/codex/skills/muse-codex-compat/scripts/test_muse_compat.py" \
+          "Resources/codex/vision/vision_proxy.py" >/tmp/opencodego-muse-tests.log 2>&1; then
+      echo "!! Muse 兼容自检没过，日志：/tmp/opencodego-muse-tests.log"
+      tail -20 /tmp/opencodego-muse-tests.log
+      exit 1
+    fi
+  fi
+fi
+
+if [ "$TEST_ONLY" -eq 1 ]; then
+  echo "==> --test 模式：测试门槛全绿，未打包 ✅"
+  exit 0
+fi
+
 echo "==> 编写 Info.plist"
 cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -84,8 +128,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.1.11.24</string>
-	<key>CFBundleVersion</key><string>65</string>
+	<key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+	<key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>DTSDKName</key><string>macosx${SDKVER}</string>
 	<key>DTPlatformVersion</key><string>${SDKVER}</string>
@@ -109,8 +153,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.1.11.24</string>
-	<key>CFBundleVersion</key><string>65</string>
+	<key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+	<key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
 	<key>DTSDKName</key><string>macosx${SDKVER}</string>
