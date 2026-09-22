@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.20.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.21.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.20.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.21.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,20 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.20.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.20.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.21.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.21.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.21 — 图例/今日模型改用官方显示名（"GPT 5.6 Luna" 而不是 slug）
+
+- 用户问「GPT 5.6 Luna 前面的 GPT 去哪了」：**Codex 模型选择器里是 `GPT-5.6-Luna (Go)`、Go 配额面板也写 `GPT 5.6 Luna`**，只有费用图的图例和今日模型条显示的是**原始 slug**（小写 `gpt-5.6-luna`），看着就像"GPT 没了"。
+- **顺带查清 Codex 模型选择器里那条 `5.6 Luna (Go)`**：`models.json` 里写的是 `GPT-5.6-Luna (Go)`，是**Codex 自己把开头的 `GPT-` 吃掉了**（同批的 DeepSeek/Grok/Hy3 显示名都没被动）。绕开办法：显示名改成**空格写法** `GPT 5.6 Luna (Go)`（与官方文档 "GPT 5.6 Luna" 一致），已写进 `DISPLAY_NAME_OVERRIDES`，下次「配置」即生效。
+- 现在图例与今日模型条统一走 `ModelPalette.displayName()`：**优先用 Go 配额表里的官方名字**（GPT 5.6 Luna、Kimi K3、GLM-5.3、MiMo-V2.6-Flash…），拿不到才退回 slug；灰度「其他」保持原样。
+- 版本 **1.1.11.21 (62)**。
 
 ### v1.1.11.20 — MiMo 2.6 两个新模型：五项能力直连实测校准
 

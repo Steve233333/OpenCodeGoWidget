@@ -89,6 +89,10 @@ DISPLAY_NAME_OVERRIDES = {
     "muse-spark-1.2-contributor": "Muse Spark 1.2 Contributor",
     "muse-spark-1.3-contributor-free": "Muse Spark 1.3 Contributor Free",
     "hy4-preview": "Hy4-Preview",
+    # 2026-09-22：Codex 桌面端的模型选择器会把**开头的 "GPT-" 吃掉**（models.json 里明明是
+    # "GPT-5.6-Luna (Go)"，列表里显示成 "5.6 Luna (Go)"，用户来问"前面的 GPT 去哪了"）。
+    # 换成空格写法（和官方文档 "GPT 5.6 Luna" 一致）绕开它的前缀规则。
+    "gpt-5.6-luna": "GPT 5.6 Luna",
 }
 
 # 手工实测档位覆盖层（唯一权威手工来源；首次运行自动从 reasoning_registry.json 迁移）

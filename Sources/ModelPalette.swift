@@ -17,6 +17,17 @@ enum ModelPalette {
     static let otherName = "其他"
     static let otherGray = Color(red: 0.74, green: 0.74, blue: 0.76)
 
+    /// 显示名：优先用 Go 配额表里的官方名字（「GPT 5.6 Luna」「Kimi K3」这种），
+    /// 拿不到再退回 slug。2026-09-22 用户问"GPT 去哪了"——就是图例一直显示的是
+    /// 原始 slug（小写 gpt-5.6-luna），而下面配额面板显示的是官方名。
+    static func displayName(_ model: String) -> String {
+        let key = model.lowercased()
+        if key == otherName.lowercased() { return otherName }
+        let table = GoQuotaRegistry.cachedSync().isEmpty ? GoQuotaRegistry.fallbackQuotas : GoQuotaRegistry.cachedSync()
+        if let hit = table.first(where: { $0.slug.lowercased() == key }) { return hit.displayName }
+        return shortName(model)
+    }
+
     /// 把一天的 entries 折成「配额表模型（各自颜色）+ 其他（灰色一类）」。
     /// 图表和「今日模型」条都用它，保证图例与柱子一一对应。
     static func foldedEntries(_ entries: [String: Double]) -> [String: Double] {
@@ -214,7 +225,7 @@ struct WrappingLegendView: View {
                                     .frame(width: 12, height: 8)
                                     .clipShape(RoundedRectangle(cornerRadius: 2))
                                     .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
-                                Text(ModelPalette.shortName(m) + ModelPalette.channelSuffix(m))
+                                Text(ModelPalette.displayName(m) + ModelPalette.channelSuffix(m))
                                     .font(.system(size: 9))
                                     .lineLimit(1)
                                     // 长名字（muse-spark-1.2-contributor-free (zen) 这种）自动缩字号，

@@ -578,7 +578,8 @@ struct CostBar: View {
         if k == "其他" { return Color.gray.opacity(0.6) }
         return ModelPalette.color(for: k)
     }
-    func short(_ s: String) -> String { ModelPalette.shortName(s) }
+    // 2026-09-22：今日模型条也改用官方显示名（「GPT 5.6 Luna」而不是 slug）
+    func short(_ s: String) -> String { ModelPalette.displayName(s) }
 }
 
 struct MonthChartView: View {
