@@ -15,7 +15,8 @@ if [ "${1:-}" = "--test" ]; then TEST_ONLY=1; fi
 # 发布直链跟着 VERSION 走（2026-09-23）：README 里 4 条 releases/latest/download/OpenCodeGoWidget-<版本>*
 # 以前每版要手改，漏改就 404。打包时（--test 不动文件）自动改到当前版本。
 if [ "$TEST_ONLY" != "1" ] && [ -f README.md ]; then
-  /usr/bin/sed -i '' -E "s#(releases/latest/download/OpenCodeGoWidget-)[0-9.]+#\1${APP_VERSION}#g" README.md
+  # 用 (.dmg|.zip) 结尾来锚定，别写 `[0-9.]+`：那个会把版本号后面那个点也吃进去 → 链接变成 1.1.11.26dmg
+  /usr/bin/sed -i '' -E "s#(releases/latest/download/OpenCodeGoWidget-)[0-9]+(\.[0-9]+)+\.(dmg|zip)#\1${APP_VERSION}.\3#g" README.md
 fi
 
 APP_BUNDLE_ID="com.steve233.opencodego"
