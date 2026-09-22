@@ -2,6 +2,30 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.27 — 重构第二阶段：界面代码拆开（纯重构，界面一模一样）
+
+`App.swift` 1265 行一个文件装着整个界面（应用壳 + 仪表盘 + 图表 + 设置 + 自检行），改任何一处都要在这一个文件里翻半天。这一版把它按职责拆开：
+
+| 文件 | 内容 |
+|---|---|
+| `Sources/App.swift` | 应用壳：`@main`、菜单栏图标、`AppDelegate`（117 行） |
+| `Sources/Views/DashboardView.swift` | 主面板（原来是 `ContentView`，改叫 `DashboardView`） |
+| `Sources/Views/ChartViews.swift` | `MonthChartView` / `CostBar` |
+| `Sources/Views/QuotaViews.swift` | `QuotaRow` |
+| `Sources/Views/SettingsViews.swift` | `SettingsView` / `GoSettingsContent` |
+| `Sources/Views/SelfCheckViews.swift` | `HealthCheckRow` / `WidgetSelfCheckRow` |
+
+**怎么确保"界面一模一样"**：拆完把新旧源码逐行比对（去掉空行/注释/import 后 **1122 行 vs 1122 行完全一致**），只有 `ContentView` → `DashboardView` 这一次改名 —— 属于纯搬移，不是重写。
+
+顺带清掉两条编译告警（构建现在 **零告警**）：
+
+- `onChange(of:perform:)` 在 macOS 14 起已废弃 → 改成两参数版本；
+- `WidgetDataStore` 里一个"永远没被改过的 var"。
+
+`build.sh` 的源码清单改成**递归扫描 `Sources/`**（支持 `Views/` 子目录），拆文件不会再出现"打包时才编译失败"。
+
+版本 **1.1.11.27 (67)**。
+
 ### v1.1.11.26 — 重构第一阶段：用量管线的规则收敛成一份（纯重构，行为不变）
 
 起因：四周内为修数据问题发了 18 个版本，补丁层层叠加 —— 同一条"不许丢明细"的规则在 4~5 个地方各写了一遍（`preferDetail`、两套路径各自的守卫、`applyUnionDetail`、`daysMissingDetail`），改一处漏一处，于是"纯色 / 差一天 / 按 Key 对不上"换着形态复发（9/19–9/23 复发 4 次）。

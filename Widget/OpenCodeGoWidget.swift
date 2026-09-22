@@ -28,7 +28,7 @@ struct RefreshIntent: AppIntent {
             try? await Task.sleep(nanoseconds: 200_000_000)
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         } else {
-            var snap = WidgetSnapshot(rolling: 0, weekly: 0, monthly: 0, rollingReset: Date(), weeklyReset: Date(), monthlyReset: Date(), costTotal: 0, costEntries: [:], dailyCosts: [], updatedAt: Date(), error: "暂无数据，请在主 App 配置 workspace 后刷新")
+            let snap = WidgetSnapshot(rolling: 0, weekly: 0, monthly: 0, rollingReset: Date(), weeklyReset: Date(), monthlyReset: Date(), costTotal: 0, costEntries: [:], dailyCosts: [], updatedAt: Date(), error: "暂无数据，请在主 App 配置 workspace 后刷新")
             WidgetDataStore.save(snap)
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
         }

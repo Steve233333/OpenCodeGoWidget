@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.26.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.27.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.26.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.27.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.26.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.26.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.27.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.27.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,14 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.27 — 重构第二阶段：界面代码拆开（纯重构，界面一模一样）
+
+`App.swift` 1265 行 → 拆成应用壳 + `Views/` 下的仪表盘/图表/配额/设置/自检五个文件；改名一处（`ContentView` → `DashboardView`）。
+
+**怎么证明界面没变**：拆完把新旧源码逐行比对，去掉空行/注释/import 后 **1122 行 vs 1122 行完全一致** —— 纯搬移。顺带清掉两条编译告警（现在构建零告警），`build.sh` 改成递归扫描 `Sources/`（含 `Views/` 子目录）。
+
+版本 **1.1.11.27 (67)**。
 
 ### v1.1.11.26 — 重构第一阶段：用量管线的规则收敛成一份（纯重构，行为不变）
 
@@ -127,18 +135,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 - README 拆分（650 → 200 行），历史条目移到 `CHANGELOG.md`，下载直链改由构建自动对齐版本号。
 
 版本 **1.1.11.25 (111125)**。
-
-### v1.1.11.24 — 日界统一成「北京时间 0 点」+ 修「今日总额和今日模型不同口径」
-
-**你拍板的：要 0 点刷新。** 这一版把全 App 的"天"统一回 **Asia/Shanghai 0 点翻页**（柱子、今日卡片、图例、回填窗口、小组件近 7 天全部一致）。
-
-- 「今日模型」原来走 UTC 日、「今日总额」走本地日 → 刚过 0 点就出现"总额 $0.00、模型还有 $2.93"；现在三处取数统一调 `ChartFormatters.day`，**日界只由一处定义**；
-- **停用 `cost-by-day` 的逐日对账**（官网那份是 UTC 日口径），它只保留"哪些天有数据"的兜底作用，金额以逐条 `rows` 为准；
-- 一次性迁移：`usageDayConvention` 由 `utc` 改 `local`，首次运行自动作废旧快照并重拉 30 天明细。
-
-**已知代价**（你已确认接受）：逐天金额不再与官网 UTC 日逐天 0 差（实测每天差 $0.02–0.16）；账期/自然月总额不受影响。
-
-版本 **1.1.11.24 (65)**。
 
 ## 本地构建
 

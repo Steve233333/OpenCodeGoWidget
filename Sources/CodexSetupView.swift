@@ -106,7 +106,8 @@ struct CodexSetupView: View {
                             Color.clear.frame(height: 1).id("logEnd")
                         }
                         .frame(maxHeight: 170)
-                        .onChange(of: installer.logText) { _ in
+                        // macOS 14 起 onReceive 式的单参数 onChange(of:perform:) 已废弃，改成两参数版本
+                        .onChange(of: installer.logText) { _, _ in
                             proxy.scrollTo("logEnd", anchor: .bottom)
                         }
                     }

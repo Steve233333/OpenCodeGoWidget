@@ -344,7 +344,7 @@ enum WidgetSnapshotRefresher {
         // 实测同一天同一个 Key：daily（新接口 rows）$1.12 vs 老接口 $0.60，界面上就打架。
         // 现在统一从**同一份当日数据**派生：今日模型取 daily 里今天那格，按 Key 取 dailyByKey 今天那格。
         let todayStr = ChartFormatters.day.string(from: Date())
-        var entries: [String: Double] = (dailyFinal.first { $0.date == todayStr }?.entries ?? [:])
+        let entries: [String: Double] = (dailyFinal.first { $0.date == todayStr }?.entries ?? [:])
             .filter { $0.value > 0 }
         var byKeyEntries: [String: [String: Double]] = [:]
         var byKeyTotal: [String: Double] = [:]

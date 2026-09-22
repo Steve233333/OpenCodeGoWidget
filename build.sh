@@ -174,21 +174,27 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 PLIST
 
 echo "==> 编译 App"
-# 源码清单（2026-09-23 Phase 1）：主 App = Sources/ 全量；Widget = 共享部分（界面/安装器/自检不进 Widget）。
+# 源码清单（2026-09-23 Phase 1/2）：主 App = Sources/ 全量（含 Views/ 子目录）；Widget = 共享部分。
 # 以前两个目标各手写一长串文件名，拆文件时漏加一个就"打包时才编译失败"，现在只维护一份排除名单。
-APP_ONLY_SOURCES=("App" "CodexInstaller" "CodexSetupView" "UpdateChecker" "HealthCheck" "CookieSync" "OpenCodeKeyFetcher" "OpenCodeLoginView")
+APP_ONLY_SOURCES=(
+  "App" "DashboardView" "QuotaViews" "ChartViews" "SelfCheckViews" "SettingsViews"
+  "CodexInstaller" "CodexSetupView" "UpdateChecker" "HealthCheck" "CookieSync"
+  "OpenCodeKeyFetcher" "OpenCodeLoginView"
+)
+ALL_SOURCES=()
 SHARED_SOURCES=()
-for src in Sources/*.swift; do
+while IFS= read -r src; do
+  ALL_SOURCES+=("$src")
   src_name="$(basename "$src" .swift)"
   is_app_only=0
   for only in "${APP_ONLY_SOURCES[@]}"; do
     [ "$src_name" = "$only" ] && is_app_only=1
   done
   [ "$is_app_only" = "0" ] && SHARED_SOURCES+=("$src")
-done
+done < <(find Sources -name '*.swift' | LC_ALL=C sort)
 
 swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
-  Sources/*.swift \
+  "${ALL_SOURCES[@]}" \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"
