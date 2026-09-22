@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.22.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.23.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.22.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.23.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,35 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.22.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.22.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.23.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.23.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.23 — 修「按 Key 的用量对不上总额」
+
+现象：账期里「所有密钥」$6.10，而两个 Key 相加只有 $4.43。控制台核对（同一时间窗）：
+
+| 口径 | 控制台 | 我们（修前） |
+|---|---|---|
+| 合计 | $6.50 | $6.12 |
+| 方泽恩 | **$6.43** | $4.48 |
+| 丁雁 | **$0.06** | $0.04 |
+| 没有 keyId 的行 | $0（0 条） | — |
+
+按天定位：缺口**全在今天**——当天总额 $2.24，按 Key 只有 $0.66。
+
+根因（11.17 引入的副作用）：改成 `since=` 增量后，每次只拿"最近一段"的行，而**按 Key / 按模型的当日拆分必须用整天的数据**；片段金额比累计值小，被"只增不减"护栏挡掉 → 按 Key 卡在某个小数不再增长（当天总额因为走官方 `cost-by-day` 对账会继续涨，于是两边对不上）。
+
+修复：
+
+1. **今天（UTC 日）每次刷新整段拉一次**，与增量行按 `id` 去重后合并 —— 当日拆分重新变成"整天口径"；
+2. **回填的"缺明细"判定加上按 Key 覆盖**：某天"按 Key 合计"不足当天总额 90% 也算缺明细，重抓那天（控制台每一行都带 keyId，正常应≈100%）。
+
+版本 **1.1.11.23 (64)**。
 
 ### v1.1.11.22 — 修「小组件和主 App 差一天」+ 自然月多算了一天
 

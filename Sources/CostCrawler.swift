@@ -218,6 +218,22 @@ final class CostCrawler: @unchecked Sendable {
             let since = Date(timeIntervalSince1970: lastSyncAt - 2 * 3600)
             rows = await consoleRowsSince(cookie: cookie, ws: workspaceID, since: since)
             logger.info("CostCrawler: 增量同步 since=\(ISO8601DateFormatter().string(from: since)) 拿到 \(rows.count) 行")
+            // 2026-09-22 修「按 Key 用量对不上」：增量拿到的是**片段**，而按 Key / 按模型的当日拆分
+            // 必须用整天的数据。片段金额比累计值小，会被"只增不减"护栏挡掉 → 按 Key 卡在某个小数不动。
+            // 所以今天（UTC 日）再整段拉一次，按行 id 去重后一起合并。
+            let dayStart = BillingCycle.calendar.startOfDay(for: Date())
+            let todayWindow = await consoleRowsInWindow(cookie: cookie, ws: workspaceID, start: dayStart, end: Date())
+            if !todayWindow.rows.isEmpty {
+                var seen = Set<String>()
+                var deduped: [[String: Any]] = []
+                for r in todayWindow.rows + rows {
+                    let raw = r["id"]
+                    let key = (raw as? String) ?? (raw.map { String(describing: $0) } ?? UUID().uuidString)
+                    if seen.insert(key).inserted { deduped.append(r) }
+                }
+                rows = deduped
+                logger.info("CostCrawler: 今天整天窗口 \(todayWindow.rows.count) 行，去重后合计 \(rows.count) 行")
+            }
         }
         if rows.isEmpty {
             // 2026-09-19：24h 也切片并行（4 × 6 小时）—— 串行翻 10 页 ×6s ≈ 1 分钟，并行后约 20 秒
@@ -453,10 +469,17 @@ final class CostCrawler: @unchecked Sendable {
     static func daysMissingDetail(_ snap: WidgetSnapshot?) -> Set<String> {
         guard let snap else { return [] }
         var out: Set<String> = []
+        // 按 Key 的覆盖（2026-09-22）：控制台的每一行都带 serviceApiKeyId，所以"按 Key 合计"
+        // 正常应该≈当天总额；明显偏小说明这天的按 Key 明细没拉全 → 也要排队重抓。
+        var perKeySum: [String: Double] = [:]
+        for (_, arr) in snap.dailyByKey {
+            for d in arr { perKeySum[d.date, default: 0] += d.total }
+        }
         for d in snap.dailyCosts {
             guard d.total > 0 else { continue }
             let hasModel = d.entries.contains { $0.key != "(total)" && $0.value > 0 }
-            if !hasModel { out.insert(d.date) }
+            let keySum = perKeySum[d.date] ?? 0
+            if !hasModel || keySum < d.total * 0.9 { out.insert(d.date) }
         }
         return out
     }
