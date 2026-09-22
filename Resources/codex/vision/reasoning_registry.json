@@ -40,6 +40,9 @@
   "high",
   "max"
  ],
+ "union-alpha": [
+  "high"
+ ],
  "glm-5.3-flash": [
   "low",
   "high",
@@ -150,9 +153,6 @@
  "hy3": [
   "high"
  ],
- "union-alpha": [
-  "high"
- ],
  "grok-4.6": [
   "low",
   "high",
@@ -166,6 +166,9 @@
   "max"
  ],
  "big-pickle": [
+  "high"
+ ],
+ "jev-1.13-free": [
   "high"
  ],
  "deepseek-v4-flash-free": [
@@ -199,7 +202,19 @@
  "nemotron-3.5-lightning-free": [
   "high"
  ],
- "jev-1.13-free": [
+ "mimo-v2.6-flash": [
+  "high"
+ ],
+ "mimo-v2.6-pro": [
+  "high"
+ ],
+ "grok-4.7": [
+  "low",
+  "medium",
+  "high",
+  "xhigh"
+ ],
+ "mimo-v2.6-flash-free": [
   "high"
  ]
 }

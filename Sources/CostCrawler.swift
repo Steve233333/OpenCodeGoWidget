@@ -462,7 +462,7 @@ final class CostCrawler: @unchecked Sendable {
         var windows: [(start: Date, end: Date)] = []
         for dayStr in missing.sorted() {
             guard let start = fmt.date(from: dayStr),
-                  let end = Calendar.current.date(byAdding: .day, value: 1, to: start) else { continue }
+                  let end = BillingCycle.calendar.date(byAdding: .day, value: 1, to: start) else { continue }
             guard end > deadline else { continue }   // 超出 30 天窗口的天接口根本给不了，别浪费请求
             windows.append((start, end))
         }

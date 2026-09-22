@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.15.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.16.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.15.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.16.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,32 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.15.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.15.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.16.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.16.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.16 — 用量明细「又快又准」：日界改成和官网一样的 UTC
+
+- **修「数字和官网对不上」**：官网 `cost-by-day` 的「天」是 **UTC 日** —— 实测 9/18：UTC 日 = **$0.1242**（= 官网显示值），而我们原来按北京时间切 = **$0.2184**。跨日那 8 小时被算进相邻两天，逐天差 3–8%。现在**统一按 UTC 日**：图表、明细、回填窗口、自然月/账期窗口边界全部同一套日历。实测最近 7 天**逐天 0 差**：
+
+  | 日期 | 我们 | 官网 |
+  |---|---|---|
+  | 9/16 | 1.5844 | 1.5844 |
+  | 9/17 | 2.0916 | 2.0916 |
+  | 9/18 | 0.1242 | 0.1242 |
+  | 9/19 | 2.1858 | 2.1858 |
+  | 9/20 | 1.6165 | 1.6165 |
+  | 9/21 | 0.0790 | 0.0790 |
+  | 9/22 | 0.4078 | 0.4078 |
+
+- **代价（说清楚）**：凌晨 0–8 点看到的「今日」是 UTC 的今天（= 北京时间昨天 8 点到现在），这样才和官网完全一致。
+- **一次性迁移**：首次运行会把本机"旧口径"存下来的数据整体作废重建一次（写 `usageDayConvention=utc` 标记），避免新旧口径混着显示。
+- **速度（实测）**：官方接口这几天自己变快了（`rows` 每页 **4–6s → 1–2s**），加上我们已经上了的「合成游标 + 按天并行 + 只抓缺口」：**30 天全量重建 16,922 行 ≈ 1 分钟**（以前 10–17 分钟），日常刷新十几秒。
+- 版本 **1.1.11.16 (57)**。
 
 ### v1.1.11.15 — 换账号不再串号：设置里新增「清除用量缓存」
 

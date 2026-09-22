@@ -177,6 +177,21 @@ enum WidgetDataStore {
         return removed
     }
 
+    /// 2026-09-22：日界口径从"北京时间"改成 **UTC**（对齐官网 `cost-by-day`）时，
+    /// 把旧口径存下来的数据整体作废一次 —— 增量合并是"保留旧天"的，不抹掉的话
+    /// 新口径永远追不上旧数字（同一格会一直显示旧口径的值）。
+    static let dayConventionKey = "usageDayConvention"
+    static let dayConventionValue = "utc"
+    @discardableResult
+    static func migrateDayConventionIfNeeded() -> Bool {
+        guard let d = defaults else { return false }
+        if d.string(forKey: dayConventionKey) == dayConventionValue { return false }
+        wipeUsageCache()
+        d.set(dayConventionValue, forKey: dayConventionKey)
+        d.synchronize()
+        return true
+    }
+
     static func loadDetailed() -> WidgetSnapshotLoad {
         let groupPath = groupContainerURL?.path
         let groupFile = fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
@@ -250,6 +265,8 @@ enum WidgetConstants {
 
 enum WidgetSnapshotRefresher {
     static func fetch() async throws -> WidgetSnapshot {
+        // 日界口径换过一次（北京→UTC），旧口径的数据整体作废，避免新旧混着显示
+        WidgetDataStore.migrateDayConventionIfNeeded()
         let manager = NetworkManager()
         let usage = try await manager.fetchUsage()
         // 账期模式：按月重置日对齐并跨月合并，避免月中开套餐被自然月切断

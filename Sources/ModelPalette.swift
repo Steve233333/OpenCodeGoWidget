@@ -94,11 +94,15 @@ struct DayModelCost: Identifiable {
 }
 
 enum ChartFormatters {
+    /// 2026-09-22：**改用 UTC 日界** —— 官网 `cost-by-day` 的天是按 UTC 切的（实测：
+    /// 9/18 UTC 日 = $0.1242 = 官网显示值；北京日 = $0.2184 = 我们之前显示的值）。
+    /// 之前用北京时间分天，跨日那 8 小时被算进相邻两天，导致逐天数字和官网差 3–8%。
+    /// 代价：凌晨 0–8 点看到的"今日"其实是 UTC 的今天（= 北京时间昨天 8 点到现在）。
     static let day: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        f.timeZone = TimeZone(identifier: "UTC")
         return f
     }()
     static let monthLabel: DateFormatter = {
