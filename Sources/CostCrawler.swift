@@ -36,15 +36,9 @@ struct MonthlyCost {
 
     /// 可注入日期，便于测试；当日无数据返回 [:]，避免回退到昨日导致“今日用量”不刷新
     func todayEntries(for date: Date) -> [String: Double] {
-        let tz = TimeZone(identifier: "Asia/Shanghai")!
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = tz
-        // 复用 ChartFormatters.day 的 Asia/Shanghai 语义，保证与 daily 解析一致
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = tz
-        let todayStr = fmt.string(from: date)
+        // 2026-09-23：日界只认 ChartFormatters.day（北京时间 0 点）。这里以前自带一份格式化器，
+        // 结果和别处的口径漂移 → 出现"今日总额已经 0 点重置、今日模型还没重置"的双口径 bug。
+        let todayStr = ChartFormatters.day.string(from: date)
         if let d = daily.first(where: { $0.date == todayStr }) { return d.entries }
         return [:]
     }
@@ -52,12 +46,7 @@ struct MonthlyCost {
     func todayEntries(for date: Date, keyId: String?) -> [String: Double] {
         guard let k = keyId, !k.isEmpty else { return todayEntries(for: date) }
         guard let arr = dailyByKey[k] else { return [:] }
-        let tz = TimeZone(identifier: "Asia/Shanghai")!
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = tz
-        let todayStr = fmt.string(from: date)
+        let todayStr = ChartFormatters.day.string(from: date)
         if let d = arr.first(where: { $0.date == todayStr }) { return d.entries }
         return [:]
     }
@@ -199,9 +188,9 @@ final class CostCrawler: @unchecked Sendable {
             logger.warning("CostCrawler: cost-by-day 解析出 0 天：\(String(data: days, encoding: .utf8)?.prefix(200) ?? "")")
             return nil
         }
-        // 官方每天总额（对账用）：日后发现某天存的明细比官方总额少很多，说明那天只有"半天明细"
-        var officialTotals: [String: Double] = [:]
-        for d in daily { officialTotals[d.date] = d.total }
+        // 2026-09-23 起**不再拿 cost-by-day 做逐日对账**：官网那份是 UTC 日口径，而我们的日界
+        // 已改成北京时间 0 点，拿它去"缩放/降级"会把本地日的金额改回 UTC 日（用户要求 0 点刷新）。
+        // cost-by-day 现在只当"哪些天有数据"的兜底（见下面的 merged 填充），金额以逐条 rows 为准。
         // 明细：`usage/rows` 每条带 costMicroCents + model + serviceApiKeyId（pageSize 上限 100）。
         // 24h 约 500 条 → 6 次请求，拿到「按模型」+「按 Key」的当日拆分。
         // 30 天全量要 169 次请求，太重 → 采用增量累积：每天刷新把当日明细并进快照，
@@ -263,26 +252,6 @@ final class CostCrawler: @unchecked Sendable {
                 // 用量只会累加，所以新的明显更少时保留旧的。
                 if let old = merged[date], old.total > newTotal * 1.001 { continue }
                 merged[date] = DailyCost(date: date, entries: entries)
-            }
-            // 和官方总额对账：明细明显偏小 = 那天只有部分明细 → 先按官方总额显示（钱先对），
-            // 这天随即变成"只有总额、缺明细"，下一次回填会用整天窗口重抓。
-            // 2026-09-20：官方总额只覆盖"已结算的整天"（今天的官方总额还是 0，所以只对 >0 的天对账）。
-            for (date, official) in officialTotals where official > 0 {
-                guard let cur = merged[date], cur.total > 0, cur.total < official * 0.999 else { continue }
-                let ratio = official / cur.total
-                let hasDetail = cur.entries.contains { $0.key != "(total)" && $0.value > 0 }
-                if hasDetail, ratio < 1.10 {
-                    // 只差一点点（日界/舍入级别）：把各模型按同一比例归一到官方总额，
-                    // 这样柱子上的钱和官网完全一致，颜色拆分比例仍然来自真实明细。
-                    var scaled: [String: Double] = [:]
-                    for (k, v) in cur.entries { scaled[k] = v * ratio }
-                    merged[date] = DailyCost(date: date, entries: scaled)
-                    logger.info("CostCrawler: \(date) 明细 $\(cur.total) 归一到官方 $\(official)（×\(ratio)）")
-                } else {
-                    // 差得多：说明这天只有"半天明细" → 先按官方总额显示（钱先对），排队重抓明细
-                    logger.info("CostCrawler: \(date) 明细 $\(cur.total) 远少于官方 $\(official) → 先按官方总额显示并排队重抓")
-                    merged[date] = DailyCost(date: date, entries: ["(total)": official])
-                }
             }
             daily = merged.values.sorted { $0.date < $1.date }
 

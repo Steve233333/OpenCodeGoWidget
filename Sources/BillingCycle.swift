@@ -8,10 +8,10 @@ enum ChartAlignment: String, Codable {
 enum BillingCycle {
     static let suiteName = "2DC432GLL2.com.steve233.opencodego"
     static let alignmentKey = "chartAlignment"
-    /// 2026-09-22：日界跟着用量数据一起改成 UTC（官网 `cost-by-day` 就是 UTC 日）。
-    /// 账期/自然月的窗口边界、以及和快照里那些 `yyyy-MM-dd` 字符串的比较，必须同一套日历，
-    /// 否则窗口会整体偏一天（比如把 8/31 也算进 9 月）。
-    static let tz = TimeZone(identifier: "UTC")!
+    /// 日界跟着 `ChartFormatters.day` 走：**北京时间 0 点**（2026-09-23 用户拍板）。
+    /// 账期/自然月的窗口边界、以及和快照里那些 `yyyy-MM-dd` 字符串的比较必须同一套日历，
+    /// 否则窗口会整体偏一天（比如把上月最后一天也算进本月）。
+    static let tz = TimeZone(identifier: "Asia/Shanghai")!
 
     static var calendar: Calendar {
         var c = Calendar(identifier: .gregorian)

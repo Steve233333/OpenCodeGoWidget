@@ -137,13 +137,8 @@ final class NetworkManager: @unchecked Sendable {
     func fetchCostTodayPerKey() async -> [String: [CostEntry]] {
         guard let mc = await CostCrawler.shared.fetchMonthlyCosts() else { return [:] }
         var result: [String: [CostEntry]] = [:]
-        // 今日按 Asia/Shanghai 判定
-        let tz = TimeZone(identifier: "Asia/Shanghai")!
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd"
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = tz
-        let todayStr = fmt.string(from: Date())
+        // 2026-09-23：日界只认 ChartFormatters.day（北京时间 0 点），别在这里再养一份格式化器
+        let todayStr = ChartFormatters.day.string(from: Date())
         for (keyId, arr) in mc.dailyByKey {
             guard let dc = arr.first(where: { $0.date == todayStr }) else { result[keyId] = []; continue }
             let tot = dc.entries.values.reduce(0,+)

@@ -136,15 +136,16 @@ struct DayModelCost: Identifiable {
 }
 
 enum ChartFormatters {
-    /// 2026-09-22：**改用 UTC 日界** —— 官网 `cost-by-day` 的天是按 UTC 切的（实测：
-    /// 9/18 UTC 日 = $0.1242 = 官网显示值；北京日 = $0.2184 = 我们之前显示的值）。
-    /// 之前用北京时间分天，跨日那 8 小时被算进相邻两天，导致逐天数字和官网差 3–8%。
-    /// 代价：凌晨 0–8 点看到的"今日"其实是 UTC 的今天（= 北京时间昨天 8 点到现在）。
+    /// 日界真源（2026-09-23 用户拍板）：**北京时间 0 点翻页**。
+    /// 曾经短暂改成 UTC（为了和官网 `cost-by-day` 的 UTC 日逐天 0 差），但代价是日界落在早上 8 点，
+    /// 用户明确要求"过了 0 点就重置"，所以回到 Asia/Shanghai。
+    /// 全 App 只有这一处定义日界，其他所有地方（todayEntries / 回填窗口 / 小组件）都必须复用它，
+    /// 否则就会出现"总额 0、模型拆分还有数"这种双口径 bug（2026-09-23 实拍）。
     static let day: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
         return f
     }()
     static let monthLabel: DateFormatter = {

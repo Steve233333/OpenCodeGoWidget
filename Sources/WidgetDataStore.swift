@@ -177,11 +177,10 @@ enum WidgetDataStore {
         return removed
     }
 
-    /// 2026-09-22：日界口径从"北京时间"改成 **UTC**（对齐官网 `cost-by-day`）时，
-    /// 把旧口径存下来的数据整体作废一次 —— 增量合并是"保留旧天"的，不抹掉的话
-    /// 新口径永远追不上旧数字（同一格会一直显示旧口径的值）。
+    /// 日界口径换过一次就整体作废一次（增量合并是"保留旧天"的，不抹掉的话新口径永远追不上旧数字）。
+    /// 历史：`utc`（2026-09-22 为对齐官网短暂用过）→ `local`（2026-09-23 用户拍板：北京时间 0 点刷新）。
     static let dayConventionKey = "usageDayConvention"
-    static let dayConventionValue = "utc"
+    static let dayConventionValue = "local"
     @discardableResult
     static func migrateDayConventionIfNeeded() -> Bool {
         guard let d = defaults else { return false }

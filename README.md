@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.23.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.24.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.23.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.24.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,35 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.23.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.23.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.24.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.24.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.24 — 日界统一成「北京时间 0 点」+ 修「今日总额和今日模型不同口径」
+
+**你拍板的：要 0 点刷新。** 这一版把全 App 的"天"统一回 **Asia/Shanghai 0 点翻页**（柱子、今日卡片、图例、回填窗口、小组件近 7 天全部一致）。
+
+顺带修掉你截图那个 bug —— 同一个"今日"里两套口径：
+
+- 「今日模型」的取数走 UTC 日（= 9/22，还有 $2.93）
+- 「今日」那个总额走本地日（= 9/23，刚过 0 点 → $0.00）
+
+根因是 `MonthlyCost.todayEntries()` / `todayEntries(for:keyId:)` / `fetchCostTodayPerKey()` 各自**自带一份 Asia/Shanghai 格式化器**，而 `ChartFormatters.day` 当时是 UTC —— 两套口径同时生效。现在这三处全部改成调用 `ChartFormatters.day`，**日界只由一处定义**。
+
+配套改动：
+
+- `ChartFormatters.day` 与 `BillingCycle.tz` 回到 `Asia/Shanghai`（月/账期窗口、小组件、图表自动跟随）；
+- **停用 `cost-by-day` 的逐日对账**：官网那份是 UTC 日口径，拿它缩放/降级会把本地日金额改回 UTC 日（`cost-by-day` 只保留"哪些天有数据"的兜底作用，金额以逐条 `rows` 为准）；
+- 一次性迁移：`usageDayConvention` 由 `utc` 改 `local`，首次运行自动作废旧快照 + 回填标记并重拉 30 天明细（约 1 分钟）；
+- 额度（5h/周/月）仍走官方 `go/status`，不受影响。
+
+**已知代价**（你已确认接受）：逐天金额不再与官网 UTC 日逐天 0 差，实测每天差 $0.02–0.16；账期/自然月总额本身不受影响（同一批行求和）。
+
+版本 **1.1.11.24 (65)**。
 
 ### v1.1.11.23 — 修「按 Key 的用量对不上总额」
 
