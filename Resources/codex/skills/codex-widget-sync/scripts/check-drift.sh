@@ -36,20 +36,29 @@ fi
 
 # 2. 看看安装器里还有没有自动安装归档的
 INSTALLER="$WIDGET_DIR/Resources/codex/codex-oneclick-setup.command"
-if grep -q "com.steve233.codex-archive-rollouts" "$INSTALLER" && grep -q "START.*3600" "$INSTALLER" 2>/dev/null; then
+# 2026-09-23 Phase 4：安装器拆成主脚本 + setup/steps/*.sh，所以这些检查要看"整份安装器"
+# （主脚本 + 所有步骤文件拼起来），否则会误报"找不到"。
+INSTALLER_ALL="$(mktemp)"
+cat "$INSTALLER" > "$INSTALLER_ALL" 2>/dev/null || true
+STEPS_DIR="$WIDGET_DIR/Resources/codex/setup/steps"
+if [ -d "$STEPS_DIR" ]; then
+  cat "$STEPS_DIR"/*.sh >> "$INSTALLER_ALL" 2>/dev/null || true
+fi
+if grep -q "com.steve233.codex-archive-rollouts" "$INSTALLER_ALL" && grep -q "START.*3600" "$INSTALLER_ALL" 2>/dev/null; then
   # 老的安装器会写定时任务
-  if grep -q "已停用" "$INSTALLER"; then
+  if grep -q "已停用" "$INSTALLER_ALL"; then
     say_ok "安装器里已改成停用并会清理旧任务"
   else
     say_bad "安装器里还在安装定时任务（会重新打开开关）"
   fi
 else
-  if grep -q "已清理旧的自动归档" "$INSTALLER"; then
+  if grep -q "已清理旧的自动归档" "$INSTALLER_ALL"; then
     say_ok "安装器已改成清理旧任务"
   else
     say_bad "安装器里找不到清理旧任务的代码"
   fi
 fi
+rm -f "$INSTALLER_ALL"
 
 # 3. 比一下几个重要文件是不是跟电脑上一样（只比有没有大不同，不比 key）
 for pair in \
@@ -126,11 +135,18 @@ done
 # 3c. 安装器里不该再有 GLM / VISION_API_KEY 询问
 INSTALLER_CHK="$WIDGET_DIR/Resources/codex/codex-oneclick-setup.command"
 if [ -f "$INSTALLER_CHK" ]; then
-  if grep -q "VISION_API_KEY=%s\|智谱 GLM 视觉 Key" "$INSTALLER_CHK"; then
+  # 同上：现在要看主脚本 + setup/steps/*.sh 合起来
+  INSTALLER_CHK_ALL="$(mktemp)"
+  cat "$INSTALLER_CHK" > "$INSTALLER_CHK_ALL" 2>/dev/null || true
+  if [ -d "$STEPS_DIR" ]; then
+    cat "$STEPS_DIR"/*.sh >> "$INSTALLER_CHK_ALL" 2>/dev/null || true
+  fi
+  if grep -q "VISION_API_KEY=%s\|智谱 GLM 视觉 Key" "$INSTALLER_CHK_ALL"; then
     say_bad "安装器里还有 GLM 视觉 Key 询问（视觉链路已下线）"
   else
     say_ok "安装器已无 GLM 视觉 Key 询问"
   fi
+  rm -f "$INSTALLER_CHK_ALL"
 fi
 
 # 4. 看看搜索那块是不是双路的

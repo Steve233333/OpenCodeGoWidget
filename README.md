@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.28.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.29.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.28.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.29.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.28.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.28.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.29.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.29.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,16 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.29 — 重构第四阶段：安装器拆步骤 + 配置后自检（必跑）
+
+`codex-oneclick-setup.command` 968 行 → 主脚本 200 行 + `setup/steps/*.sh` 13 个步骤（模式选择→Key→签名→依赖→备份→模型表→默认模型→AGENTS/MCP→代理→补丁→汇总→**自检**）。
+
+**新增「配置后自检」（必跑）**：日志里固定记录 ① 运行环境（macOS/架构/python3/HOME）② 三个关键服务（launchd 代理、`config.toml`、ChatGPT-Patched.app）③ 每条失败的下一步。只报告不中止。
+
+**验证**：步骤文件全部 `zsh -n` 通过；主脚本 + 13 步重组后与拆分前**逐行一致**；再从打包好的 App 包里拷出 `codex/`、用假 `HOME` 完整跑了一遍更新模式（`--skip-patch --skip-proxy-start`）。
+
+版本 **1.1.11.29 (69)**。
 
 ### v1.1.11.28 — 重构第三阶段：本地代理拆包（纯搬移，行为不变）
 
@@ -124,19 +134,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 **怎么证明界面没变**：拆完把新旧源码逐行比对，去掉空行/注释/import 后 **1122 行 vs 1122 行完全一致** —— 纯搬移。顺带清掉两条编译告警（现在构建零告警），`build.sh` 改成递归扫描 `Sources/`（含 `Views/` 子目录）。
 
 版本 **1.1.11.27 (67)**。
-
-### v1.1.11.26 — 重构第一阶段：用量管线的规则收敛成一份（纯重构，行为不变）
-
-起因：四周内为修数据问题发了 18 个版本，补丁层层叠加 —— 同一条"不许丢明细"的规则**在 4~5 个地方各写了一遍**，改一处漏一处，于是"纯色 / 差一天 / 按 Key 对不上"换着形态复发。这一版不加功能，只把结构理顺、把规则钉死：
-
-- **合并规则单点化**：新增 `UsageMerge`（只增不减 / 明细优先 / 按 Key 覆盖 / 半窗不冲整天 / 并集自愈），日常刷新与历史回填**共用同一份实现**；
-- **认日单点化**：新增 `UsageRows`（一条行算哪天、算哪个模型、算哪个 Key），日界只认 `ChartFormatters.day`（北京时间 0 点）；
-- **删掉整条死接口回落链**（`/_server`、HAR 缓存、`lastServerText`）：那个接口早已 404，回落只会拿 9/19 的陈旧数字冒充当天数据，比"报错"更难查；现在拉不到就保留旧快照 + 报错；
-- **新增密钥列表接口** `console/api/service-accounts`（替代随改版失效的 `/workspace/<ws>/keys` HTML 抓取），顺带过滤已吊销的 Key；
-- **补上数据管线回归测试**：`Tests/UsagePipelineTests.swift` 把 8 组不变量（0 点切天 / 增量幂等 / 半窗不冲整天 / 缺明细判定 / 口径作废 / 按 Key 与总额相加相等 / 并集自愈 / 三视图相加相等）钉死，`build.sh --test` 里是门禁；
-- **拆文件**：`CostCrawler.swift` 960 → 260 行（网络层 `ConsoleUsageAPI` / 管线层 `UsagePipeline` / 模型层 `UsageCostModels`）。
-
-行为、数字口径、配额来源一律没变。版本 **1.1.11.26 (66)**。
 
 ## 本地构建
 

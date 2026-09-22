@@ -2,6 +2,42 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.29 — 重构第四阶段：安装器拆步骤 + 配置后自检（必跑）+ 残骸清单
+
+`codex-oneclick-setup.command` 968 行一个文件、从互斥锁一路写到汇总。这一版拆成**主脚本 + 步骤文件**：
+
+| 文件 | 内容 |
+|---|---|
+| `codex-oneclick-setup.command` | 200 行：头部/参数、`log`/`die`/`ask_*` 助手、互斥锁、`sync_newer_file`，然后按顺序 `source` 下面 13 个步骤 |
+| `setup/steps/10-mode.sh` | 0. 模式选择（安装 / 更新） |
+| `setup/steps/20-keys.sh` | 1. 收集 Key |
+| `setup/steps/30-signing.sh` | 2. 签名密码 + 自签证书 |
+| `setup/steps/40-deps.sh` | 3. 依赖检查 |
+| `setup/steps/50-backup.sh` | 4. 备份旧配置 |
+| `setup/steps/60-models.sh` | 5. 生成 models.json |
+| `setup/steps/70-defaults.sh` | 6. 默认模型 / base_url / bearer |
+| `setup/steps/80-agents-mcp.sh` | 7. AGENTS.md + MCP 搜索 |
+| `setup/steps/90-proxy.sh` | 8. 本地代理 |
+| `setup/steps/100-patched-app.sh` | 9. ChatGPT-Patched.app |
+| `setup/steps/110-archive-off.sh` | 9b. 已停用项（留着提醒别回退） |
+| `setup/steps/120-summary.sh` | 10. 汇总 |
+| `setup/steps/130-selfcheck.sh` | 11. **配置后自检（新增，必跑）** |
+
+**踩过的坑写在文件头**：这个脚本是 zsh 且 `SCRIPT_DIR="$(dirname "$0")"`；zsh 默认 `FUNCTION_ARGZERO`，被 `source` 的文件里 `$0` 会变成那个步骤文件 —— 所以**路径推导一律留在主脚本**，步骤文件只用已经算好的 `SCRIPT_DIR`。
+
+**验证**（没法拿新机器测，就用这三条）：
+
+1. 步骤文件与主脚本 `zsh -n` 全部通过；
+2. 把主脚本 + 13 个步骤按 source 顺序重组，与拆分前的 968 行逐行比对：**除"新增自检"和下面那条 `RES_DIR` 兜底外，一行不差**；
+3. 从**打包好的 App 包**里拷出 `codex/` 目录，用假 `HOME` 跑了一次完整的更新模式（`--noninteractive --skip-patch --skip-proxy-start --update`）—— 走完模式选择/Key/依赖/备份/模型表/默认模型/AGENTS/MCP/代理文件/汇总/自检，退出码 0；
+4. 顺手修掉一个开发期踩坑：直接从**仓库**跑安装器时没有 App 包里那个 `resources -> .` 软链，会在"生成 models.json"报"模板文件缺失"。现在用 `RES_DIR` 兜底（App 包里 `RES_DIR=resources`，仓库里 `RES_DIR=.`），两种布局都跑通了。
+
+**配置后自检**（新增）：固定写进日志的是 ① 运行环境（macOS 版本、架构、python3 版本、HOME）② 三个关键服务（launchd 本地代理 / `~/.codex-deepseek/config.toml` / `ChatGPT-Patched.app`）③ 每条失败的**下一步**（看哪个日志、跑哪条命令）。只报告不中止，失败项在日志里一眼可见。
+
+**残骸清单（没删，等你点头）**：`/Applications` 里 5 个 `.bak-*` 旧副本、`dist/` 504 MB（47 个历史版本的 DMG/ZIP）。清单和体积见本次交付说明，确认后我再删。
+
+版本 **1.1.11.29 (69)**。
+
 ### v1.1.11.28 — 重构第三阶段：本地代理拆包（纯搬移，行为不变）
 
 `vision_proxy.py` 原来是 **3793 行 / 107 个顶层符号**的单体脚本（协议桥、搜索边车、工具修补、Muse 兼容、SSE 重写、HTTP 服务全在一个文件里）。这一版拆成薄入口 + `proxy/` 包：
