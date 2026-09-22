@@ -51,6 +51,7 @@ enum GoQuotaRegistry {
     static let fallbackQuotas: [GoQuota] = [
         GoQuota(slug: "kimi-k3", displayName: "Kimi K3", h5: 110, weekly: 250, monthly: 490),
         GoQuota(slug: "qwen3.8-max", displayName: "Qwen3.8 Max", h5: 160, weekly: 400, monthly: 810),
+        GoQuota(slug: "grok-4.7", displayName: "Grok 4.7", h5: 169, weekly: 423, monthly: 845),
         GoQuota(slug: "grok-4.6", displayName: "Grok 4.6", h5: 169, weekly: 423, monthly: 845),
         GoQuota(slug: "qwen3.7-max", displayName: "Qwen3.7 Max", h5: 170, weekly: 420, monthly: 840),
         GoQuota(slug: "glm-5.3", displayName: "GLM-5.3", h5: 220, weekly: 540, monthly: 1080),
@@ -62,21 +63,22 @@ enum GoQuotaRegistry {
         GoQuota(slug: "hy4-preview", displayName: "Hy4 preview", h5: 1350, weekly: 3380, monthly: 6770),
         GoQuota(slug: "gpt-5.6-luna", displayName: "GPT 5.6 Luna", h5: 2050, weekly: 5100, monthly: 10250),
         GoQuota(slug: "minimax-m3", displayName: "MiniMax M3", h5: 3200, weekly: 8000, monthly: 16000),
+        GoQuota(slug: "mimo-v2.6-pro", displayName: "MiMo-V2.6-Pro", h5: 3250, weekly: 8150, monthly: 16300),
         GoQuota(slug: "mimo-v2.5-pro", displayName: "MiMo-V2.5-Pro", h5: 3250, weekly: 8150, monthly: 16300),
         GoQuota(slug: "qwen3.6-plus", displayName: "Qwen3.6 Plus", h5: 3300, weekly: 8200, monthly: 16300),
         GoQuota(slug: "minimax-m2.7", displayName: "MiniMax M2.7", h5: 3400, weekly: 8500, monthly: 17000),
-        GoQuota(slug: "hy3", displayName: "Hy3", h5: 4300, weekly: 10750, monthly: 21500),
         GoQuota(slug: "qwen3.7-plus", displayName: "Qwen3.7 Plus", h5: 4300, weekly: 10800, monthly: 21600),
+        GoQuota(slug: "hy3", displayName: "Hy3", h5: 4300, weekly: 10750, monthly: 21500),
         GoQuota(slug: "qwen3.8-flash", displayName: "Qwen3.8 Flash", h5: 5400, weekly: 13500, monthly: 27000),
         GoQuota(slug: "glm-5.3-flash", displayName: "GLM-5.3-Flash", h5: 6320, weekly: 15790, monthly: 31580),
         GoQuota(slug: "deepseek-v4-flash-vision-exp", displayName: "DeepSeek V4 Flash Vision Exp", h5: 6500, weekly: 16250, monthly: 32500),
         GoQuota(slug: "longcat-2.0", displayName: "LongCat-2.0", h5: 11400, weekly: 28600, monthly: 57200),
         GoQuota(slug: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", h5: 13000, weekly: 32500, monthly: 65000),
         GoQuota(slug: "deepseek-v4.1-flash", displayName: "DeepSeek V4.1 Flash", h5: 26000, weekly: 65000, monthly: 130000, note: "4x · 9 月 20 日结束"),
+        GoQuota(slug: "mimo-v2.6-flash", displayName: "MiMo-V2.6-Flash", h5: 30100, weekly: 75200, monthly: 150400),
         GoQuota(slug: "mimo-v2.5", displayName: "MiMo-V2.5", h5: 30100, weekly: 75200, monthly: 150400),
         GoQuota(slug: "muse-spark-1.3-contributor", displayName: "Muse Spark 1.3 Contributor", h5: 45300, weekly: 113300, monthly: 226600),
         GoQuota(slug: "muse-spark-1.2-contributor", displayName: "Muse Spark 1.2 Contributor", h5: 45300, weekly: 113300, monthly: 226600),
-        GoQuota(slug: "union-alpha", displayName: "Union Alpha Free", h5: nil, weekly: nil, monthly: nil, note: "限时"),
     ]
 
     private static let logger = Logger(subsystem: "com.steve233.opencodego", category: "GoQuota")

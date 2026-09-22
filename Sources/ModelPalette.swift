@@ -6,6 +6,32 @@ enum ModelPalette {
     static var ordered: [String] {
         ModelRegistry.cachedOrderedSync()
     }
+
+    /// 2026-09-22（用户要求）：**只有 Go 配额表里有的模型才给区分色**，表外的一律归到灰色「其他」。
+    /// 名单来自 GoQuotaRegistry（opencode.ai/docs/zh-cn/go/ 那张配额表），拿不到时用内置兜底表。
+    static var quotaSlugs: [String] {
+        let live = GoQuotaRegistry.cachedSync().map { $0.slug }
+        return live.isEmpty ? GoQuotaRegistry.fallbackQuotas.map { $0.slug } : live
+    }
+    static var quotaLower: Set<String> { Set(quotaSlugs.map { $0.lowercased() }) }
+    static let otherName = "其他"
+    static let otherGray = Color(red: 0.74, green: 0.74, blue: 0.76)
+
+    /// 把一天的 entries 折成「配额表模型（各自颜色）+ 其他（灰色一类）」。
+    /// 图表和「今日模型」条都用它，保证图例与柱子一一对应。
+    static func foldedEntries(_ entries: [String: Double]) -> [String: Double] {
+        let allowed = quotaLower
+        var out: [String: Double] = [:]
+        for (model, cost) in entries where cost > 0 {
+            if model.hasPrefix("(") { continue }        // (total) 之类的内部占位不进图
+            if allowed.contains(model.lowercased()) {
+                out[model, default: 0] += cost
+            } else {
+                out[otherName, default: 0] += cost
+            }
+        }
+        return out
+    }
     // 硬编码回退（与 ModelRegistry.fallbackOrdered 同源，保留兼容）
     static let fallbackOrdered: [String] = ModelRegistry.fallbackOrdered
 
@@ -57,6 +83,11 @@ enum ModelPalette {
 
     static func color(for model: String) -> Color {
         let key = model.lowercased()
+        // 2026-09-22（用户要求）：**只有 Go 配额表里的模型才给区分色**，
+        // 表外的（omen-alpha / union-alpha / ox-alpha-free / Zen 免费模型…）一律归到灰色「其他」。
+        if key == otherName.lowercased() { return otherGray }
+        let allowed = quotaLower
+        if !allowed.isEmpty, !allowed.contains(key) { return otherGray }
         // 精确匹配优先
         if let c = mapping[key] { return c }
         // 子串匹配（处理带 -go 后缀或版本差异）

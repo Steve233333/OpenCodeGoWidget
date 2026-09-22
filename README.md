@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.18.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.19.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.18.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.19.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,21 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.18.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.18.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.19.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.19.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.19 — 配色改成「只有 Go 配额表里的模型有颜色」+ 不再配置 Zen 模型
+
+- **配色（按你的要求）**：图例、柱子、今日模型条统一按「Go 配额表」分色 —— 表里的模型各自有颜色，**表外的全部合并成灰色「其他」**（`omen-alpha`、`union-alpha`、各种免费 Zen…）。以前它们各占一格，还常被标成"已下架"（比如 `mimo-v2.6-flash` 明明在线却进了那行提示）。
+- **内置兜底配额表 28 → 30 行**：补上 `mimo-v2.6-pro`、`mimo-v2.6-flash`、`grok-4.7`，首装/离线时也能正确分色。
+- **以后不再配置 Zen 模型（含免费 Zen）**：`model_discovery.py` 默认不再往 `models.json` 写 `*-zen`，并会剪掉已有条目（要临时装回：`OPENCODE_INCLUDE_ZEN=1`）。本机实测 42 → **32 个模型**（30 Go + 2 官方 DeepSeek），旧文件备份在 `~/.codex-deepseek/models.json.bak.*`。
+- 记忆管线（记忆提取/合并）跟着从 `mimo-v2.5-free-zen` 换成 `mimo-v2.5-go`（Zen 移除后必须换，否则会指向不存在的模型）。
+- 版本 **1.1.11.19 (60)**。
 
 ### v1.1.11.18 — 「环境自检」新增运行环境一行（macOS 版本 / 构建 SDK / 最低要求）
 

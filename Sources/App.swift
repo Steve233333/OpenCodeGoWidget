@@ -254,25 +254,23 @@ struct ContentView: View {
                                 } else {
                                     MonthChartView(dailyCosts: filteredDaily, monthlyReset: snap.monthlyReset, alignment: chartAlignment)
                                         .frame(height: 160)
-                                    // 图例：只列「当前在架」的模型（Go 实时 + Zen 免费实时），
-                                    // 已下架但历史里有用量的不再占格子（只留一行统计），避免"下架还列着"
+                                    // 图例（2026-09-22 改）：**只有 Go 配额表里的模型有独立颜色**，
+                                    // 表外的一律合并成灰色「其他」——用户要的就是这个口径，
+                                    // 免得一堆"配额表里没有"的模型（omen-alpha / union-alpha / 免费 Zen…）
+                                    // 各自占一个色块，还动不动被判成"已下架"。
                                     let _ = modelTick
                                     let allModels = Set(filteredDaily.flatMap { $0.entries.keys }.map { $0.lowercased() })
-                                    let liveGo = ModelPalette.ordered
-                                    let liveGoLower = Set(liveGo.map { $0.lowercased() })
-                                    let liveZen = ModelRegistry.cachedZenOrderedSync()
-                                        .filter { !liveGoLower.contains($0.lowercased()) }
-                                    let liveLower = liveGoLower.union(Set(liveZen.map { $0.lowercased() }))
-                                    let legend = liveGo + liveZen.filter { allModels.contains($0.lowercased()) }
-                                    // 别把内部用的合成 key 当成"下架模型"（(total) 是新接口只给当天总额时的占位）
-                                    let delisted = allModels.subtracting(liveLower)
-                                        .filter { !$0.hasPrefix("(") }
+                                    let quotaOrdered = ModelPalette.quotaSlugs
+                                    let quotaLower = Set(quotaOrdered.map { $0.lowercased() })
+                                    let otherModels = allModels.subtracting(quotaLower)
+                                        .filter { !$0.hasPrefix("(") }   // (total) 是内部占位，不算模型
                                         .sorted()
+                                    let legend = quotaOrdered + (otherModels.isEmpty ? [] : [ModelPalette.otherName])
                                     if !legend.isEmpty {
                                         WrappingLegendView(models: legend)
                                     }
-                                    if !delisted.isEmpty {
-                                        Text("另有 \(delisted.count) 个已下架模型仍出现在历史柱里（\(delisted.prefix(4).joined(separator: "、"))\(delisted.count > 4 ? " 等" : "")），不再列入图例")
+                                    if !otherModels.isEmpty {
+                                        Text("灰色「其他」= 不在 Go 配额表里的模型（\(otherModels.count) 个：\(otherModels.prefix(4).joined(separator: "、"))\(otherModels.count > 4 ? " 等" : "")）")
                                             .font(.system(size: 8))
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
@@ -316,7 +314,9 @@ struct ContentView: View {
                                             .frame(height: 8)
                                             .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
                                     } else {
-                                        CostBar(entries: filteredCostEntries, total: filteredCostTotal)
+                                        // 同样折叠成「配额表模型 + 其他」，和图例/柱子口径一致
+                                        CostBar(entries: ModelPalette.foldedEntries(filteredCostEntries),
+                                                total: filteredCostTotal)
                                     }
                                 }
                                 .padding(.top, 4)
@@ -602,9 +602,9 @@ struct MonthChartView: View {
         for date in effectiveDates {
             let key = ChartFormatters.day.string(from: date)
             if let dc = map[key] {
-                for (model, cost) in dc.entries where cost > 0 {
-                    result.append(DayModelCost(date: date, model: model, cost: cost))
-                }
+                        for (model, cost) in ModelPalette.foldedEntries(dc.entries) where cost > 0 {
+                            result.append(DayModelCost(date: date, model: model, cost: cost))
+                        }
             }
         }
         return result

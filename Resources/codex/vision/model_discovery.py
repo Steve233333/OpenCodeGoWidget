@@ -46,6 +46,11 @@ TTL_SECONDS = 24 * 3600
 TIMEOUT = 10
 QUOTA_TTL = 12 * 3600
 
+# 2026-09-22（用户要求）：**不再往 Codex 里配置 Zen 模型**（含免费 Zen）。
+# 默认关闭；需要临时装回来的话 `OPENCODE_INCLUDE_ZEN=1`。关闭时既不新增，
+# 也会把 models.json 里已有的 *-zen 条目剪掉（下次点「配置」即生效）。
+INCLUDE_ZEN = os.environ.get("OPENCODE_INCLUDE_ZEN", "").strip().lower() in ("1", "true", "yes", "on")
+
 CODEX_HOME = Path.home() / ".codex-deepseek"
 MODELS_JSON = CODEX_HOME / "models.json"
 CACHE_DIR = Path.home() / ".local/share/agent-vision-toolkit"
@@ -803,7 +808,9 @@ def sync(force=False, dry_run=False):
         prev_zen = json.loads(ZEN_CACHE_FILE.read_text()).get("ids") or []
     except Exception:
         prev_zen = []
-    zen_ids = fetch_zen_free_ids()
+    zen_ids = fetch_zen_free_ids() if INCLUDE_ZEN else []
+    if not INCLUDE_ZEN:
+        _log("Zen 模型：按设置跳过（含免费 Zen），并从 models.json 里剪掉已有条目")
     gone_zen = [i for i in prev_zen if i not in set(zen_ids)]
     if gone_zen:
         _log(f"zen ids {len(prev_zen)} -> {len(zen_ids)}，减少 {gone_zen}（若上游只是抽风，下轮会自动回来）")
@@ -856,7 +863,7 @@ def sync(force=False, dry_run=False):
         slug = m.get("slug","")
         if slug.endswith("-zen"):
             bare = slug[:-4]
-            if bare in zen_bare:
+            if INCLUDE_ZEN and bare in zen_bare:
                 to_keep.append(m)
             else:
                 pruned.append(slug)

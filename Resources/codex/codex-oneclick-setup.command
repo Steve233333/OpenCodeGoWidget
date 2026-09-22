@@ -556,6 +556,8 @@ else
 fi
 
 EXTRACT_MODEL=""
+# 2026-09-22：不再装 Zen 模型（含免费），下面两个 Zen 分支现在正常情况匹配不到，
+# 会自动落到 mimo-v2.5-go（Go 模型）—— 记忆管线的模型必须在 models.json 里真实存在。
 if [[ "$AVAIL_SLUGS" == *"mimo-v2.5-free-zen"* ]]; then
   EXTRACT_MODEL="mimo-v2.5-free-zen"
 elif [[ "$AVAIL_SLUGS" == *"mimo-v2.5-free"* ]]; then
