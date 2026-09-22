@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.27.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.28.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.27.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.28.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.27.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.27.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.28.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.28.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,16 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.28 — 重构第三阶段：本地代理拆包（纯搬移，行为不变）
+
+`vision_proxy.py` **3793 行 / 107 个顶层符号**的单体脚本 → 薄入口（55 行）+ `proxy/` 包（config / bridges_chat / bridges_messages / toolfix / search_sidecar / muse / apply_patch / sse / server）。
+
+**怎么证明是纯搬移**：107 个顶层符号逐个按源码片段比对，**全部逐字节一致**；入口保留兼容层，所以老的 66 个 Python 用例 + 13 项 Muse 自检照旧通过。`check-drift.sh` 改成整目录递归比对（含 `proxy/` 子目录），`docs/gen-model-matrix.py` 改成从包里抠常量。
+
+顺带修掉一个原有的静默 bug：`_perform_web_search` 的 env 兜底用到 `pathlib` 却从没 import（外面是裸 `except: pass`）→ 补上。真机冒烟：DeepSeek / GLM（走 chat 桥回落）/ Muse 各一条 200，日志零 Traceback。
+
+版本 **1.1.11.28 (68)**。
 
 ### v1.1.11.27 — 重构第二阶段：界面代码拆开（纯重构，界面一模一样）
 
@@ -127,14 +137,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 - **拆文件**：`CostCrawler.swift` 960 → 260 行（网络层 `ConsoleUsageAPI` / 管线层 `UsagePipeline` / 模型层 `UsageCostModels`）。
 
 行为、数字口径、配额来源一律没变。版本 **1.1.11.26 (66)**。
-
-### v1.1.11.25 — 重构第零阶段：版本号单一真源 + 测试门槛（纯流程，行为不变）
-
-- **版本号只有一个真源**：新增 `./VERSION`，`CFBundleVersion` 由它推导；以前发版要手改 `build.sh` 里 4 处（25 个提交里改了 19 次）；
-- **`./build.sh --test`**：一次跑齐 drift 检查 + 配额解析 + 密钥解析 + 用量管线 + 代理全量测试，打包走同一套门槛；
-- README 拆分（650 → 200 行），历史条目移到 `CHANGELOG.md`，下载直链改由构建自动对齐版本号。
-
-版本 **1.1.11.25 (111125)**。
 
 ## 本地构建
 

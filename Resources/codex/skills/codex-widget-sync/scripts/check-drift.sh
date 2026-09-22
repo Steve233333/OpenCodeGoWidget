@@ -53,10 +53,6 @@ fi
 
 # 3. 比一下几个重要文件是不是跟电脑上一样（只比有没有大不同，不比 key）
 for pair in \
-  "vision/vision_proxy.py:$HOME/.local/share/agent-vision-toolkit/vision_proxy.py" \
-  "vision/model_discovery.py:$HOME/.local/share/agent-vision-toolkit/model_discovery.py" \
-  "vision/reasoning_registry.json:$HOME/.local/share/agent-vision-toolkit/reasoning_registry.json" \
-  "vision/reasoning_overrides.json:$HOME/.local/share/agent-vision-toolkit/reasoning_overrides.json" \
   "patch/patch.sh:$HOME/.codex/picker-patch/patch.sh" \
   "mcp/websearch-server.py:$HOME/.config/opencode/mcp/websearch-server.py"
 do
@@ -85,6 +81,38 @@ do
     fi
   fi
 done
+
+# 3a. 代理目录（2026-09-23 Phase 3 拆成 vision_proxy.py + proxy/ 包）：整目录递归比
+VISION_REPO="$WIDGET_DIR/Resources/codex/vision"
+VISION_HOME="$HOME/.local/share/agent-vision-toolkit"
+if [ -d "$VISION_REPO" ]; then
+  vision_missing=0
+  vision_drift=0
+  while IFS= read -r rel; do
+    repo_file="$VISION_REPO/$rel"
+    home_file="$VISION_HOME/$rel"
+    case "$rel" in __pycache__/*|*/__pycache__/*|*.pyc) continue ;; esac
+    if [ ! -f "$home_file" ]; then
+      echo "   电脑上缺：$rel"
+      vision_missing=$((vision_missing + 1))
+      continue
+    fi
+    if ! diff -q "$repo_file" "$home_file" >/dev/null 2>&1; then
+      echo "   不一样：$rel"
+      vision_drift=$((vision_drift + 1))
+    fi
+  done < <(cd "$VISION_REPO" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)
+  if [ "$vision_missing" = "0" ] && [ "$vision_drift" = "0" ]; then
+    say_ok "vision 目录（含 proxy/ 子目录）跟电脑上一样"
+  elif [ "$vision_drift" -le 2 ] && [ "$vision_missing" = "0" ]; then
+    say_ok "vision 目录只有 $vision_drift 个文件不同（像本地小改），算过"
+  else
+    say_bad "vision 目录与电脑不一致（缺 $vision_missing 个 / 不同 $vision_drift 个）"
+    echo "   跑 sync-from-home.sh 同步一下，或让安装器重新同步"
+  fi
+else
+  say_bad "找不到 Resources/codex/vision"
+fi
 
 # 3b. 视觉链路已下线（2026-09-10）：这两个东西不该再出现，出现说明回退了
 for gone in "vision/vision_client.py" "vision/bin"; do

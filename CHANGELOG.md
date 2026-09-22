@@ -2,6 +2,36 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.28 — 重构第三阶段：本地代理拆包（纯搬移，行为不变）
+
+`vision_proxy.py` 原来是 **3793 行 / 107 个顶层符号**的单体脚本（协议桥、搜索边车、工具修补、Muse 兼容、SSE 重写、HTTP 服务全在一个文件里）。这一版拆成薄入口 + `proxy/` 包：
+
+| 文件 | 内容 | 行数 |
+|---|---|---|
+| `vision_proxy.py` | 入口 + 兼容层（launchd 路径没变） | 55 |
+| `proxy/config.py` | 配置/常量/日志/推理档位注册表 | 284 |
+| `proxy/bridges_chat.py` | Responses ⇄ Chat Completions 桥 | 550 |
+| `proxy/bridges_messages.py` | Responses ⇄ Anthropic Messages 桥 | 309 |
+| `proxy/toolfix.py` | 工具调用 / JSON 参数 / 历史修正 | 261 |
+| `proxy/search_sidecar.py` | 联网旁路 | 302 |
+| `proxy/muse.py` | Muse 兼容层 | 319 |
+| `proxy/apply_patch.py` | apply_patch 工具改写 | 147 |
+| `proxy/sse.py` | SSE 流改写引擎 | 609 |
+| `proxy/server.py` | Proxy 类（路由/上游转发）+ main() | 1218 |
+
+**怎么证明是纯搬移**：把 107 个顶层符号逐个按源码片段比对，**全部逐字节一致**（只多了模块 docstring / import / 空行），另有静态检查确认每个模块引用的全局名字都能解析（没有漏 import），且模块依赖图无环。
+
+配套改动：
+
+- **入口保留兼容层**：老测试是用 `spec_from_file_location` 直接加载 `vision_proxy.py` 再取 `vp.<符号>` 的，所以入口把各模块的顶层符号重新导出一遍，这些测试（66 个用例）与 Muse 兼容自检（13 项）全部照旧通过；
+- `check-drift.sh` 改成**整目录递归比对**（含 `proxy/` 子目录），不再只比几个固定文件；
+- `docs/gen-model-matrix.py` 改成从 `proxy/` 包里抠常量（以前只读单文件文本）；
+- **顺带修掉一个原有的静默 bug**：`_perform_web_search` 的 env 兜底用到了 `pathlib` 但整个文件**从没 import 过它**，而那一圈是裸 `except: pass` —— 结果是"环境变量里没有 ZEN_API_KEY 时，去 env 文件里找 key"这条兜底永远静默失败。补上 `import pathlib`。
+
+真机冒烟（就是这台，代理已换成拆包版本）：DeepSeek `bridge=None status=200`、GLM `bridge=chat-fallback status=200`（命中 503→chat 桥回落）、Muse `status=200`，日志零 Traceback；跑着的 Codex 长请求（2.7 MB body）同样 200。
+
+版本 **1.1.11.28 (68)**。
+
 ### v1.1.11.27 — 重构第二阶段：界面代码拆开（纯重构，界面一模一样）
 
 `App.swift` 1265 行一个文件装着整个界面（应用壳 + 仪表盘 + 图表 + 设置 + 自检行），改任何一处都要在这一个文件里翻半天。这一版把它按职责拆开：

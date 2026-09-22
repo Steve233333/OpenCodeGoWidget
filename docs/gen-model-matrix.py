@@ -17,8 +17,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS = ROOT / "Resources/codex/templates/models.json"
-PROXY = ROOT / "Resources/codex/vision/vision_proxy.py"
+# 2026-09-23 Phase 3：代理拆成 vision_proxy.py + proxy/ 包，所以常量要按目录找
+PROXY_DIR = ROOT / "Resources/codex/vision"
+PROXY = PROXY_DIR / "vision_proxy.py"
 OUT = ROOT / "docs/MODEL-MATRIX.md"
+
+
+def read_proxy_sources() -> str:
+    """把入口 + proxy/ 包里的所有 .py 拼成一份文本，供下面的 frozenset 抠取。"""
+    parts = [PROXY.read_text()]
+    for path in sorted((PROXY_DIR / "proxy").glob("*.py")):
+        parts.append(path.read_text())
+    return "\n".join(parts)
 
 
 def slug_set(source: str, name: str) -> set[str]:
@@ -32,7 +42,7 @@ def slug_set(source: str, name: str) -> set[str]:
 def main() -> int:
     catalog = json.loads(MODELS.read_text())
     models = catalog.get("models", [])
-    proxy_src = PROXY.read_text()
+    proxy_src = read_proxy_sources()
     fallback = slug_set(proxy_src, "RESPONSES_FALLBACK_MODELS")
     always = slug_set(proxy_src, "RESPONSES_ALWAYS_BRIDGE")
 
