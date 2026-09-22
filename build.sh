@@ -9,6 +9,7 @@ APP_BUNDLE_NAME="OpenCode 小组件"
 WIDGET_NAME="OpenCodeGoWidget"
 
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
+SDKVER="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || echo unknown)"
 ARCH="$(uname -m)"
 TARGET="${ARCH}-apple-macos14.0"
 
@@ -83,9 +84,11 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.1.11.17</string>
-	<key>CFBundleVersion</key><string>58</string>
+	<key>CFBundleShortVersionString</key><string>1.1.11.18</string>
+	<key>CFBundleVersion</key><string>59</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
+	<key>DTSDKName</key><string>macosx${SDKVER}</string>
+	<key>DTPlatformVersion</key><string>${SDKVER}</string>
 	<key>LSUIElement</key><true/>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
@@ -106,10 +109,12 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.1.11.17</string>
-	<key>CFBundleVersion</key><string>58</string>
+	<key>CFBundleShortVersionString</key><string>1.1.11.18</string>
+	<key>CFBundleVersion</key><string>59</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
+	<key>DTSDKName</key><string>macosx${SDKVER}</string>
+	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>NSExtension</key><dict>
 		<key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string>
 	</dict>

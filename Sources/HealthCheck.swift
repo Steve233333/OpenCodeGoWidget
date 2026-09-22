@@ -30,6 +30,23 @@ enum HealthCheck {
     static func run() async -> [HealthItem] {
         var items: [HealthItem] = []
 
+        // ---- 0. 运行环境：macOS 版本 / 构建 SDK / 最低要求 ----
+        // 2026-09-22：用户换了 macOS 27 的机器，报告里能一眼看出"系统版本 vs 我们声明的构建与最低要求"。
+        let osv = ProcessInfo.processInfo.operatingSystemVersion
+        let osStr = "\(osv.majorVersion).\(osv.minorVersion).\(osv.patchVersion)"
+        let buildStr: String = {
+            let url = URL(fileURLWithPath: "/System/Library/CoreServices/SystemVersion.plist")
+            guard let data = try? Data(contentsOf: url),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let build = plist["ProductBuildVersion"] as? String else { return "-" }
+            return build
+        }()
+        let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let sdkName = Bundle.main.infoDictionary?["DTSDKName"] as? String ?? "未知"
+        let minOS = Bundle.main.infoDictionary?["LSMinimumSystemVersion"] as? String ?? "未知"
+        items.append(HealthItem(level: .ok, title: "运行环境",
+            detail: "macOS \(osStr) (\(buildStr)) · 小组件 \(appVer) · 构建 SDK \(sdkName) · 最低要求 macOS \(minOS)"))
+
         // ---- 1. 本地代理：进程 + 端口 ----
         let proxyLoaded = launchctlHas("com.agent-vision-toolkit.proxy")
         let proxyAlive = await proxyResponds()
