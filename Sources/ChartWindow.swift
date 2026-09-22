@@ -14,7 +14,11 @@ enum ChartWindow {
             let d = BillingCycle.billingDates(monthlyReset: reset)
             if !d.isEmpty { return d }
         }
-        let cal = Calendar(identifier: .gregorian)
+        // 2026-09-22：月界必须用 **UTC 日历** —— 下面用 ChartFormatters.day 把日期转成 key，
+        // 而它现在是 UTC 日界。以前这里用默认本地日历取月首（9/1 00:00+08 = 8/31 16:00Z），
+        // 转成 key 就变成 8/31 → 整个自然月窗口偏一天：多算上月最后一天、少算本月最后一天。
+        // 实测本月花费 $30.95（含 8/31 的 $1.29），正确口径应为 $29.66。
+        let cal = BillingCycle.calendar
         let refDate: Date = {
             if let last = dailyCosts.last?.date,
                let d = ChartFormatters.day.date(from: last) { return d }

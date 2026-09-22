@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.21.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.22.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.21.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.22.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,22 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.21.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.21.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.22.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.22.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.22 — 修「小组件和主 App 差一天」+ 自然月多算了一天
+
+改成 UTC 日界（11.16）后，**有两处还在用本地日历取日期、却按 UTC 格式化成 key**，整段窗口就偏了一天：
+
+- **小组件「近 7 天」**：`Calendar(identifier: .gregorian)` 没设时区 → 取的是本地 0 点（= UTC 前一天 16:00），转成 key 后整体前移一天 → 和主 App 对不上（你截图就是这个）。
+- **主 App「自然月」窗口** (`ChartWindow`)：同样问题 → 月界取本地 9/1 00:00（= 8/31 16:00Z）→ key 变成 `2026-08-31`，于是**多算了上月最后一天、少算了本月最后一天**。实测「本月花费」显示 **$30.95**，正确口径（UTC 自然月 9/1–9/30）是 **$29.69**（差的就是 8/31 那天的 $1.29）。
+- 两处都改成 `BillingCycle.calendar`（UTC），和 `ChartFormatters.day` 口径一致。
+- 版本 **1.1.11.22 (63)**。
 
 ### v1.1.11.21 — 图例/今日模型改用官方显示名（"GPT 5.6 Luna" 而不是 slug）
 

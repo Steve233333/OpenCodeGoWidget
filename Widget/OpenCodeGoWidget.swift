@@ -115,7 +115,10 @@ struct GoWidgetView: View {
                             // 近7天按日历回溯统计，避免 suffix 7 在空窗期错位
                             let weekTotal: Double = {
                                 let fmt = ChartFormatters.day
-                                let cal = Calendar(identifier: .gregorian)
+                                // 2026-09-22：这里的日历必须和 fmt 的时区一致（ChartFormatters.day 现在
+                                // 是 UTC 日界）。以前用默认本地日历取"今天 0 点"再按 UTC 格式化 → key 整体
+                                // 偏一天，小组件"近7天"会比主 App 早一天（用户实拍）。
+                                let cal = BillingCycle.calendar
                                 let today = cal.startOfDay(for: Date())
                                 var sum: Double = 0
                                 for off in 0..<7 {
@@ -208,7 +211,8 @@ struct WeekChartView: View {
     let dailyCosts: [DailyCost]
 
     private var last7Dates: [Date] {
-        let cal = Calendar(identifier: .gregorian)
+        // 同 weekTotal：日历必须跟着 ChartFormatters.day 的 UTC 口径走，否则整段窗口偏一天
+        let cal = BillingCycle.calendar
         let today = cal.startOfDay(for: Date())
         return (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: today) }
     }
