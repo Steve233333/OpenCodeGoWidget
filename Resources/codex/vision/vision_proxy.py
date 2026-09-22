@@ -215,6 +215,8 @@ def _rewrite_go_model(parsed):
 # 2026-08-29: add Zen Free chat models
 RESPONSES_FALLBACK_MODELS = frozenset({
     "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni",
+    # 2026-09-22：MiMo 2.6 两个新模型同属 chat 适配家族（/responses 需要走 chat 桥）
+    "mimo-v2.6-flash", "mimo-v2.6-pro",
     "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
     "ox-alpha-free", "x-preview-f-free",
     "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash",

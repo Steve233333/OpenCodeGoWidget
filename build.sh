@@ -84,8 +84,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/Info.plist" <<PLIST
 	<key>CFBundleName</key><string>OpenCode 小组件</string>
 	<key>CFBundleDisplayName</key><string>OpenCode 小组件</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.1.11.19</string>
-	<key>CFBundleVersion</key><string>60</string>
+	<key>CFBundleShortVersionString</key><string>1.1.11.20</string>
+	<key>CFBundleVersion</key><string>61</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>DTSDKName</key><string>macosx${SDKVER}</string>
 	<key>DTPlatformVersion</key><string>${SDKVER}</string>
@@ -109,8 +109,8 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>${WIDGET_NAME}</string>
 	<key>CFBundlePackageType</key><string>XPC!</string>
-	<key>CFBundleShortVersionString</key><string>1.1.11.19</string>
-	<key>CFBundleVersion</key><string>60</string>
+	<key>CFBundleShortVersionString</key><string>1.1.11.20</string>
+	<key>CFBundleVersion</key><string>61</string>
 	<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 	<key>DTPlatformName</key><string>macosx</string>
 	<key>DTSDKName</key><string>macosx${SDKVER}</string>

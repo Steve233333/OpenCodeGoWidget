@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.19.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.20.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.19.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.20.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,29 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.19.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.19.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.20.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.20.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.20 — MiMo 2.6 两个新模型：五项能力直连实测校准
+
+绕开本地代理、**直连网关**对 `mimo-v2.6-flash` / `mimo-v2.6-pro` 逐项实测（避免被代理兜底掩盖真实行为）：
+
+| 项目 | 实测结果 | 处理 |
+|---|---|---|
+| 上下文 | models.dev：**1,048,576（1M）**，输出 131072 | 保持 1M ✓ |
+| 推理档位 | `low` ✓ `medium` ✓ `high` ✓；`minimal` / `xhigh` / `max` 一律 **400 Invalid request parameters** | 之前只写 `high`（把低/中档藏掉了）→ 写进 overrides 为 low/medium/high（默认 low）；代理 clamp 会把 xhigh/max 夹到 high |
+| API 格式 | `/responses` **503 Endpoint is unavailable**，`/chat/completions` **200** → 只支持 chat | 加进代理 chat 桥名单（`RESPONSES_FALLBACK_MODELS`），经代理实测 **200**（日志：`responses->chat fallback engaged`） |
+| 联网 | chat 端点无原生 search | 由代理 sidecar 代搜（日志确认 `injected synthetic web_search`）✓ |
+| 图片 | 带图请求实测 **200** | models.json 声明 `text+image+audio` ✓（models.dev 还列了 video/pdf，Codex 白名单不接受，故意不收） |
+
+顺带一条观察：探测时 **整个 MiMo 家族**的 `/responses` 都是 503（v2.5 / v2.5-pro 同样），而 DeepSeek 200 —— 说明这是 MiMo 只挂在 chat 端点上，不是我们的配置错。
+
+版本 **1.1.11.20 (61)**。
 
 ### v1.1.11.19 — 配色改成「只有 Go 配额表里的模型有颜色」+ 不再配置 Zen 模型
 
