@@ -206,16 +206,31 @@ final class CostCrawler: @unchecked Sendable {
         // 24h 约 500 条 → 6 次请求，拿到「按模型」+「按 Key」的当日拆分。
         // 30 天全量要 169 次请求，太重 → 采用增量累积：每天刷新把当日明细并进快照，
         // 历史逐日堆起来（老快照里的旧天原样保留）。
-        // 2026-09-19：24h 也切片并行（4 × 6 小时）—— 串行翻 10 页 ×6s ≈ 1 分钟，并行后约 20 秒
-        let now24 = Date()
-        let windows24: [(start: Date, end: Date)] = (0..<4).map { i in
-            let end = now24.addingTimeInterval(-Double(i) * 6 * 3600)
-            return (start: end.addingTimeInterval(-6 * 3600), end: end)
-        }
+        // 2026-09-22：优先用官方 `since=<ISO>` 做**增量**（实测到边界即停：since=05:00 只回 108 条，
+        // 不加 since 时同一游标会一路退回前一天）。没有同步记录/间隔太久才退回「24h 切片并行」。
+        let syncSuite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        let lastSyncAt = syncSuite?.double(forKey: "lastRowSyncAt") ?? 0
+        let syncNow = Date()
+        let usableIncremental = lastSyncAt > 0 && syncNow.timeIntervalSince1970 - lastSyncAt < 24 * 3600
         var rows: [[String: Any]] = []
-        await consoleRowsInWindows(windows24, cookie: cookie, ws: workspaceID, concurrency: 4) { batch, _ in
-            rows += batch
+        if usableIncremental {
+            // 往前多要 2 小时重叠：上游是批量入库的，偶尔会有"迟到"的行
+            let since = Date(timeIntervalSince1970: lastSyncAt - 2 * 3600)
+            rows = await consoleRowsSince(cookie: cookie, ws: workspaceID, since: since)
+            logger.info("CostCrawler: 增量同步 since=\(ISO8601DateFormatter().string(from: since)) 拿到 \(rows.count) 行")
         }
+        if rows.isEmpty {
+            // 2026-09-19：24h 也切片并行（4 × 6 小时）—— 串行翻 10 页 ×6s ≈ 1 分钟，并行后约 20 秒
+            let now24 = Date()
+            let windows24: [(start: Date, end: Date)] = (0..<4).map { i in
+                let end = now24.addingTimeInterval(-Double(i) * 6 * 3600)
+                return (start: end.addingTimeInterval(-6 * 3600), end: end)
+            }
+            await consoleRowsInWindows(windows24, cookie: cookie, ws: workspaceID, concurrency: 4) { batch, _ in
+                rows += batch
+            }
+        }
+        if !rows.isEmpty { syncSuite?.set(syncNow.timeIntervalSince1970, forKey: "lastRowSyncAt") }
         let (rowDaily, rowByKey) = Self.aggregateRows(rows)
         if !rowDaily.isEmpty {
             let previous = WidgetDataStore.load()
@@ -360,6 +375,31 @@ final class CostCrawler: @unchecked Sendable {
         return (out, ok)
     }
 
+    /// 官方支持的**增量**抓取：`rows?range=all&since=<ISO8601>`（实测到 since 边界就停）。
+    /// 比"最近 24h 窗口"便宜得多：正常情况下一次刷新只要 1~2 页。
+    private func consoleRowsSince(cookie: String, ws: String, since: Date) async -> [[String: Any]] {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let sinceStr = f.string(from: since)
+        var out: [[String: Any]] = []
+        var cursor: String?
+        for _ in 0..<200 {              // 200 页 = 2 万条，正常远小于此
+            var page: (items: [[String: Any]], next: String?, status: Int)?
+            for attempt in 0..<3 {
+                page = await consoleRowsPage(cookie: cookie, ws: ws, range: "all", cursor: cursor, since: sinceStr)
+                if page?.status == 200 { break }
+                page = nil
+                if attempt < 2 { try? await Task.sleep(nanoseconds: UInt64(1_200_000_000) * UInt64(attempt + 1)) }
+            }
+            guard let p = page else { break }
+            out += p.items
+            guard let n = p.next, !n.isEmpty else { break }
+            cursor = n
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+        return out
+    }
+
     /// 多个时间窗并行抓（窗口内部顺序翻页，窗口之间并发 4 个）。
     /// 每个窗口抓完就把结果交给 onBatch，方便边抓边落盘（进度条能看到）。
     private func consoleRowsInWindows(_ windows: [(start: Date, end: Date)], cookie: String, ws: String,
@@ -386,10 +426,12 @@ final class CostCrawler: @unchecked Sendable {
 
     /// 单页 usage/rows（返回 items + nextCursor + HTTP 状态；status=0 表示传输层失败/超时）
     private func consoleRowsPage(cookie: String, ws: String, range: String,
-                                 cursor: String?) async -> (items: [[String: Any]], next: String?, status: Int) {
+                                 cursor: String?, since: String? = nil) async -> (items: [[String: Any]], next: String?, status: Int) {
         var comps = URLComponents(string: "https://opencode.ai/console/api/usage/rows")!
         var query = [URLQueryItem(name: "range", value: range), URLQueryItem(name: "pageSize", value: "100")]
         if let c = cursor, !c.isEmpty { query.append(URLQueryItem(name: "cursor", value: c)) }
+        // 2026-09-22：官方支持 since=<ISO8601>，到边界就停（实测 since=05:00 → 108 条即止）
+        if let s = since, !s.isEmpty { query.append(URLQueryItem(name: "since", value: s)) }
         comps.queryItems = query
         var req = URLRequest(url: comps.url!)
         req.timeoutInterval = 25

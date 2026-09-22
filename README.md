@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.16.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.17.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.16.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.17.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,13 +97,35 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.16.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.16.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.17.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.17.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
 
 ## 更新日志
+
+### v1.1.11.17 — 日常刷新改走官方增量接口（`since=`），一次约 2–3 秒
+
+**全网核对结论（2026-09-22）：「按天 × 按模型」的聚合接口并不存在。**
+
+- 线上控制台 bundle 只暴露 `cost-by-day` / `models` / `summary` / `export` / `go/status`，没有任何 groupBy 或 day-model 聚合；
+- 官方公开的 OpenAPI（`opencode.ai/openapi.json`，162 个路径）里**根本没有 usage 相关端点**；
+- 生态里最成熟的第三方实现 `xhang1108/opencode-usage`（Chrome 扩展）也是**逐条拉 `rows`（100 条/页）客户端自己聚合**，它的 changelog 明确写着「从已下线的 RSC `/_server` 爬虫迁移到 Console Usage API」——也就是说，老接口确实死透了，大家都只能这么拿。
+
+**但挖到两个官方参数（实测有效）：**
+
+| 参数 | 效果 | 实测 |
+|---|---|---|
+| `since=<ISO8601>` | **增量**，到边界即停 | `since=05:00` → 只回 108 条；不加 `since` 时同一游标会一路退回前一天 |
+| `range=all` | 全量历史（不受 30 天上限） | 第一页与 30d 相同，游标可继续往前 |
+
+日常刷新现在这样走：记下 `lastRowSyncAt`，下次用 `since=上次-2h`（2 小时重叠兜"迟到入库"的行）；没有同步记录、或间隔超过 24 小时，才退回 4×6h 切片。
+**实测：118 行 / 2 页 / 2.3 秒**（之前是 24 小时窗口十来页）。
+
+同时复核：UTC 日界之后 **30 天逐天对账 0 差**（没有一天超过 $0.005）。
+
+版本 **1.1.11.17 (58)**。
 
 ### v1.1.11.16 — 用量明细「又快又准」：日界改成和官网一样的 UTC
 
