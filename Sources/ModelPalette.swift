@@ -128,49 +128,6 @@ enum ModelPalette {
     }
 }
 
-struct DayModelCost: Identifiable {
-    let id = UUID()
-    let date: Date
-    let model: String
-    let cost: Double
-}
-
-enum ChartFormatters {
-    /// 日界真源（2026-09-23 用户拍板）：**北京时间 0 点翻页**。
-    /// 曾经短暂改成 UTC（为了和官网 `cost-by-day` 的 UTC 日逐天 0 差），但代价是日界落在早上 8 点，
-    /// 用户明确要求"过了 0 点就重置"，所以回到 Asia/Shanghai。
-    /// 全 App 只有这一处定义日界，其他所有地方（todayEntries / 回填窗口 / 小组件）都必须复用它，
-    /// 否则就会出现"总额 0、模型拆分还有数"这种双口径 bug（2026-09-23 实拍）。
-    static let day: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        return f
-    }()
-    static let monthLabel: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "M月 dd"
-        f.locale = Locale(identifier: "zh_CN")
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        return f
-    }()
-    static let billingLabel: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "M/d"
-        f.locale = Locale(identifier: "zh_CN")
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        return f
-    }()
-    static let weekLabel: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "M/dd"
-        f.locale = Locale(identifier: "zh_CN")
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        return f
-    }()
-}
-
 // 品牌方环图标（深浅色自适应，用户提供的两张 PNG）
 struct BrandIconView: View {
     @Environment(\.colorScheme) var colorScheme

@@ -124,90 +124,9 @@ final class NetworkManager: @unchecked Sendable {
             monthly: UsageItem(status: "ok", percent: mo, resetsAt: monthReset))
     }
 
-    func fetchCostToday() async -> (total: Double, entries: [CostEntry], daily: [DailyCost], dailyByKey: [String: [DailyCost]]) {
-        if let mc = await CostCrawler.shared.fetchMonthlyCosts() {
-            let today = mc.todayEntries
-            let total = today.values.reduce(0, +)
-            let entries = today.map { CostEntry(model: $0.key, cost: $0.value, percent: total > 0 ? $0.value / total * 100 : 0) }.sorted { $0.cost > $1.cost }
-            return (total, entries, mc.daily, mc.dailyByKey)
-        }
-        return (0, [], [], [:])
-    }
-
-    func fetchCostTodayPerKey() async -> [String: [CostEntry]] {
-        guard let mc = await CostCrawler.shared.fetchMonthlyCosts() else { return [:] }
-        var result: [String: [CostEntry]] = [:]
-        // 2026-09-23：日界只认 ChartFormatters.day（北京时间 0 点），别在这里再养一份格式化器
-        let todayStr = ChartFormatters.day.string(from: Date())
-        for (keyId, arr) in mc.dailyByKey {
-            guard let dc = arr.first(where: { $0.date == todayStr }) else { result[keyId] = []; continue }
-            let tot = dc.entries.values.reduce(0,+)
-            let ents = dc.entries.map { CostEntry(model: $0.key, cost: $0.value, percent: tot > 0 ? $0.value/tot*100 : 0) }.sorted{ $0.cost > $1.cost }
-            result[keyId] = ents
-        }
-        return result
-    }
-
-    // Legacy wrapper for callers not yet migrated
-    func fetchCostTodayLegacy() async -> (total: Double, entries: [CostEntry]) {
-        let r = await fetchCostToday()
-        return (r.total, r.entries)
-    }
-
-    private func tryCostJSON(url: URL, key: String) async -> (total: Double, entries: [CostEntry])? {
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 10
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        // Try to extract daily cost arrays; shapes vary, so we look for any array with model+cost
-        return extractCost(from: json)
-    }
-
-    private func fetchHTML(urlString: String, key: String) async -> String? {
-        guard let url = URL(string: urlString) else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 10
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
-              let html = String(data: data, encoding: .utf8) else { return nil }
-        return html
-    }
-
-    private func parseCostFromHTML(_ html: String) -> (total: Double, entries: [CostEntry])? {
-        // Look for Next.js data blobs: usagePercent or cost-related patterns
-        // The cost chart is hydrated from an API; we search for any JSON with "cost" and model names
-        // If not found, return nil to keep widget stable
-        // Placeholder: actual HTML parsing needs live sample; return nil to keep widget stable
-        _ = html
-        return nil
-    }
-
-    private func extractCost(from json: [String: Any]) -> (total: Double, entries: [CostEntry])? {
-        // Walk any nested dict/arrays to find model -> cost
-        var found: [(String, Double)] = []
-        func walk(_ obj: Any) {
-            if let dict = obj as? [String: Any] {
-                for (k, v) in dict {
-                    if k.contains("-go") || k.contains("deepseek") || k.contains("glm") {
-                        if let d = v as? Double { found.append((k, d)) }
-                        else if let i = v as? Int { found.append((k, Double(i))) }
-                    }
-                    walk(v)
-                }
-            } else if let arr = obj as? [Any] {
-                for e in arr { walk(e) }
-            }
-        }
-        walk(json)
-        guard !found.isEmpty else { return nil }
-        let total = found.reduce(0) { $0 + $1.1 }
-        let entries = found.map { CostEntry(model: $0.0, cost: $0.1, percent: total > 0 ? $0.1/total*100 : 0) }.sorted { $0.cost > $1.cost }
-        return (total, entries)
-    }
+    // 2026-09-23 Phase 1：老接口（fetchCostToday / fetchCostTodayPerKey / tryCostJSON /
+    // parseCostFromHTML / fetchHTML / extractCost）整段删除 —— 那些都是给已 404 的
+    // `/_server` 老路径写的兜底，拉取失败时反而会喂陈旧数据。现在拉不到就保留旧快照。
 
     static let decoder: JSONDecoder = {
         let d = JSONDecoder()

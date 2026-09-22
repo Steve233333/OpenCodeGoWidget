@@ -12,6 +12,12 @@ BUILD_NUMBER="$(printf '%s' "$APP_VERSION" | tr -d '.')"
 TEST_ONLY=0
 if [ "${1:-}" = "--test" ]; then TEST_ONLY=1; fi
 
+# 发布直链跟着 VERSION 走（2026-09-23）：README 里 4 条 releases/latest/download/OpenCodeGoWidget-<版本>*
+# 以前每版要手改，漏改就 404。打包时（--test 不动文件）自动改到当前版本。
+if [ "$TEST_ONLY" != "1" ] && [ -f README.md ]; then
+  /usr/bin/sed -i '' -E "s#(releases/latest/download/OpenCodeGoWidget-)[0-9.]+#\1${APP_VERSION}#g" README.md
+fi
+
 APP_BUNDLE_ID="com.steve233.opencodego"
 WIDGET_BUNDLE_ID="com.steve233.opencodego.widget"
 APP_NAME="OpenCodeGoWidget"
@@ -167,14 +173,27 @@ cat > "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Conten
 PLIST
 
 echo "==> 编译 App"
+# 源码清单（2026-09-23 Phase 1）：主 App = Sources/ 全量；Widget = 共享部分（界面/安装器/自检不进 Widget）。
+# 以前两个目标各手写一长串文件名，拆文件时漏加一个就"打包时才编译失败"，现在只维护一份排除名单。
+APP_ONLY_SOURCES=("App" "CodexInstaller" "CodexSetupView" "UpdateChecker" "HealthCheck" "CookieSync" "OpenCodeKeyFetcher" "OpenCodeLoginView")
+SHARED_SOURCES=()
+for src in Sources/*.swift; do
+  src_name="$(basename "$src" .swift)"
+  is_app_only=0
+  for only in "${APP_ONLY_SOURCES[@]}"; do
+    [ "$src_name" = "$only" ] && is_app_only=1
+  done
+  [ "$is_app_only" = "0" ] && SHARED_SOURCES+=("$src")
+done
+
 swiftc -parse-as-library -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
-  Sources/App.swift Sources/CodexInstaller.swift Sources/CodexSetupView.swift Sources/UpdateChecker.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift Sources/ChartWindow.swift Sources/HealthCheck.swift Sources/CookieSync.swift Sources/OpenCodeKeyFetcher.swift Sources/OpenCodeLoginView.swift \
+  Sources/*.swift \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
 
 echo "==> 编译 Widget"
 swiftc -parse-as-library -application-extension -target "$TARGET" -sdk "$SDK" -swift-version 5 -module-cache-path /tmp/mcp \
   -Xlinker -e -Xlinker _NSExtensionMain \
-  Widget/OpenCodeGoWidget.swift Sources/UsageModels.swift Sources/KeychainStore.swift Sources/NetworkManager.swift Sources/WidgetDataStore.swift Sources/CostCrawler.swift Sources/ModelPalette.swift Sources/ModelRegistry.swift Sources/GoQuotaRegistry.swift Sources/GoQuotaChart.swift Sources/BillingCycle.swift Sources/ChartWindow.swift \
+  Widget/OpenCodeGoWidget.swift "${SHARED_SOURCES[@]}" \
   -o "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS/${WIDGET_NAME}"
 
 SIGN_IDENTITY="-"

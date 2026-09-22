@@ -179,12 +179,12 @@ enum WidgetDataStore {
 
     /// 日界口径换过一次就整体作废一次（增量合并是"保留旧天"的，不抹掉的话新口径永远追不上旧数字）。
     /// 历史：`utc`（2026-09-22 为对齐官网短暂用过）→ `local`（2026-09-23 用户拍板：北京时间 0 点刷新）。
-    static let dayConventionKey = "usageDayConvention"
-    static let dayConventionValue = "local"
+    static let dayConventionKey = UsageMerge.CachePolicy.dayConventionKey
+    static let dayConventionValue = UsageMerge.CachePolicy.dayConventionValue
     @discardableResult
     static func migrateDayConventionIfNeeded() -> Bool {
         guard let d = defaults else { return false }
-        if d.string(forKey: dayConventionKey) == dayConventionValue { return false }
+        guard UsageMerge.CachePolicy.needsWipe(storedConvention: d.string(forKey: dayConventionKey)) else { return false }
         wipeUsageCache()
         d.set(dayConventionValue, forKey: dayConventionKey)
         d.synchronize()
@@ -296,7 +296,9 @@ enum WidgetSnapshotRefresher {
                 let ents = todayEntries.map { CostEntry(model: $0.key, cost: $0.value, percent: tot>0 ? $0.value/tot*100:0) }.sorted{ $0.cost>$1.cost }
                 cost = (tot, ents, cached.dailyCosts, cached.dailyByKey)
             } else {
-                cost = await manager.fetchCostToday()
+                // 2026-09-23 Phase 1：老接口已下线，拉不到就是"没有数据"，
+                // 上层会保留旧快照；不再回落去喂旧接口/HAR 的陈旧数字。
+                cost = (0, [], [], [:])
             }
         } else {
             // 自然月视图：同样先用这次真抓的结果（保留整段，不裁 —— 切回账期才不会缺天），
@@ -323,23 +325,19 @@ enum WidgetSnapshotRefresher {
                     let ents: [CostEntry] = todayEntries.map { kv in CostEntry(model: kv.key, cost: kv.value, percent: tot>0 ? kv.value/tot*100:0) }.sorted{ $0.cost>$1.cost }
                     cost = (tot, ents, filtered, byKey)
                 } else {
-                    cost = await manager.fetchCostToday()
+                    cost = (0, [], [], [:])
                 }
             } else {
-                cost = await manager.fetchCostToday()
+                cost = (0, [], [], [:])
             }
         }
-        // 2026-09-19 最后一道护栏：任何一条抓取路径（老 /_server 回落、HAR 缓存、cost-by-day 兜底）
-        // 都可能只给"每天一个总额"，把已经补好的逐模型明细整片冲掉（用户实拍：重启后 9/1–9/18
-        // 又变纯色）。同一天新旧都有时，新的只有 (total) 而旧的有明细 → 保留旧的。
+        // 最后一道护栏（2026-09-23 Phase 1 收敛进 UsageMerge）：任何一条抓取路径只给
+        // "每天一个总额"时，都不能把已经补好的逐模型明细 / 按 Key 明细整片冲掉。
         var dailyFinal = cost.daily
         var byKeyFinal = cost.dailyByKey
         if let cached = WidgetDataStore.load() {
-            dailyFinal = Self.preferDetail(new: dailyFinal, old: cached.dailyCosts)
-            var merged: [String: [DailyCost]] = [:]
-            for (k, arr) in byKeyFinal { merged[k] = Self.preferDetail(new: arr, old: cached.dailyByKey[k] ?? []) }
-            for (k, arr) in cached.dailyByKey where merged[k] == nil { merged[k] = arr }
-            byKeyFinal = merged
+            dailyFinal = UsageMerge.mergeDaily(new: dailyFinal, into: cached.dailyCosts)
+            byKeyFinal = UsageMerge.mergeByKey(new: byKeyFinal, into: cached.dailyByKey)
         }
         // 2026-09-19 修「今日模型和实际用量对不上」：
         // 以前这一块单独调老接口（fetchCostTodayPerKey），新控制台上线后两边数据源不一致 ——
@@ -356,20 +354,6 @@ enum WidgetSnapshotRefresher {
             guard !m.isEmpty else { continue }
             byKeyEntries[key] = m
             byKeyTotal[key] = m.values.reduce(0, +)
-        }
-        // 回退：daily/dailyByKey 都没有今天的数据时，沿用老路径（老接口/缓存）
-        if entries.isEmpty || byKeyEntries.isEmpty {
-            let costPerKey = await manager.fetchCostTodayPerKey()
-            if entries.isEmpty {
-                for entry in cost.entries where entry.cost > 0 { entries[entry.model] = entry.cost }
-            }
-            if byKeyEntries.isEmpty {
-                for (k, v) in costPerKey {
-                    var m: [String: Double] = [:]
-                    for e in v where e.cost > 0 { m[e.model] = e.cost }
-                    if !m.isEmpty { byKeyEntries[k] = m; byKeyTotal[k] = m.values.reduce(0, +) }
-                }
-            }
         }
         // availableKeys：只用控制台密钥列表里的 Key（2026-09-19 修：以前会把"明细里出现过的 Key"
         // 也并进来，导致**已删除的 Key**以裸 id 形式出现在下拉框里 —— 用户明明只有 2 把却看到 3 个。
@@ -395,28 +379,5 @@ enum WidgetSnapshotRefresher {
             updatedAt: Date(),
             error: nil
         )
-    }
-
-    /// 同一天新旧两份数据：新的只有「(total)」一个格子、旧的却有逐模型明细 → 用旧的。
-    /// 细数据永远优先，粗数据只在"这天本来就没细数据"时才写进去（防"重启后历史变纯色"复发）。
-    static func preferDetail(new: [DailyCost], old: [DailyCost]) -> [DailyCost] {
-        guard !old.isEmpty else { return new }
-        var oldMap: [String: DailyCost] = [:]
-        for d in old { oldMap[d.date] = d }
-        var out: [String: DailyCost] = [:]
-        for d in new {
-            let onlyTotal = !d.entries.contains { $0.key != "(total)" && $0.value > 0 }
-            if onlyTotal, let o = oldMap[d.date],
-               o.entries.contains(where: { $0.key != "(total)" && $0.value > 0 }) {
-                // 2026-09-20：粗数据（每天一个总额）只有在"明显更大"时才压过明细 ——
-                // 说明旧明细则漏了用量（例如被 24h 窗口截成半天），先让钱对，明细随后由回填重抓；
-                // 否则保留更细的旧数据（原护栏）。
-                out[d.date] = d.total > o.total * 1.05 ? d : o
-            } else {
-                out[d.date] = d
-            }
-        }
-        for (date, o) in oldMap where out[date] == nil { out[date] = o }
-        return out.values.sorted { $0.date < $1.date }
     }
 }

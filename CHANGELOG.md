@@ -2,6 +2,32 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.26 — 重构第一阶段：用量管线的规则收敛成一份（纯重构，行为不变）
+
+起因：四周内为修数据问题发了 18 个版本，补丁层层叠加 —— 同一条"不许丢明细"的规则在 4~5 个地方各写了一遍（`preferDetail`、两套路径各自的守卫、`applyUnionDetail`、`daysMissingDetail`），改一处漏一处，于是"纯色 / 差一天 / 按 Key 对不上"换着形态复发（9/19–9/23 复发 4 次）。
+
+这一版不加功能、不改口径，只做结构：
+
+- **`UsageMerge`（合并规则唯一真源）**：只增不减、明细优先（纯总额要明显更大 >5% 才盖掉明细）、半窗不冲整天（旧的更大 >0.1% 就保留）、按 Key 覆盖、并集自愈（<98% 拒绝替换，纯总额且 ≥90% 时等比归一）。日常刷新与按天回填**都只调它**。
+- **`UsageRows`（行解析唯一真源）**：微美分换算 + `createdAt` → 北京时间日的映射（走 `ChartFormatters.day`）+ 一行同时算进"按模型"和"按 Key"两份拆分。
+- **删掉老 `/_server` 整条回落链**（`fetchViaWorkspace` / `fetchWorkspaceCost*` / `fetchHARFallback` / `parseServerFnCost` / `cacheServerText` / `lastServerText`）：该接口随控制台改版已 404，回落只会把 9/19 的 HAR 旧数据当成本日数据；现在失败 = 保留旧快照 + 报错。
+- **新增密钥列表接口**：`GET console/api/service-accounts`（items[].keys[] 带 id/name/status/revokedAt），替代已失效的 `/workspace/<ws>/keys` HTML 抓取，顺带过滤吊销的 Key。
+- **补测试**：`Tests/UsagePipelineTests.swift` + `scripts/test-usage-pipeline.sh`，8 组 33 条断言，钉死上面每条规则（含"没带 keyId 的行算总额不算按 Key"这种边界）。离线、不联网、`build.sh --test` 里是门禁。
+- **拆文件**：`CostCrawler.swift` 960 → 260 行，拆出 `ConsoleUsageAPI`（网络/游标/解析）、`UsagePipeline`（回填/进度/落盘）、`UsageCostModels`（DailyCost/MonthlyCost）、`ChartFormatters`（日界）。
+
+行为、数字口径（北京时间 0 点）、配额来源（官方 `go/status`）一律没变。
+
+版本 **1.1.11.26 (66)**。
+
+### v1.1.11.25 — 重构第零阶段：版本号单一真源 + 测试门槛（纯流程，行为不变）
+
+- **单一版本源**：新增 `./VERSION`，`build.sh` 读取它推导 `CFBundleShortVersionString` + `CFBundleVersion`（以前手改 4 处，25 个提交里改了 19 次）；
+- **测试门槛聚合**：`./build.sh --test` 一次跑齐 drift 检查、配额解析自检、密钥解析自检、用量管线自检、Python 代理全量测试；正式打包走同一套门槛；
+- **README 拆分**：650 → 200 行，历史条目移到本文件，README 只留简介 + 最近三版；
+- 下载直链由构建时自动对齐当前版本号（以前漏改就 404）。
+
+版本 **1.1.11.25 (111125)**。
+
 ### v1.1.11.24 — 日界统一成「北京时间 0 点」+ 修「今日总额和今日模型不同口径」
 
 **你拍板的：要 0 点刷新。** 这一版把全 App 的"天"统一回 **Asia/Shanghai 0 点翻页**（柱子、今日卡片、图例、回填窗口、小组件近 7 天全部一致）。

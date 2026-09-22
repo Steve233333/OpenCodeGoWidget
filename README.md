@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.24.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.26dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.24.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.26zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.24.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.24.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.26dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.26zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -107,43 +107,38 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
 
-### v1.1.11.23 — 修「按 Key 的用量对不上总额」
+### v1.1.11.26 — 重构第一阶段：用量管线的规则收敛成一份（纯重构，行为不变）
 
-现象：账期里「所有密钥」$6.10，而两个 Key 相加只有 $4.43。控制台核对（同一时间窗）：
+起因：四周内为修数据问题发了 18 个版本，补丁层层叠加 —— 同一条"不许丢明细"的规则**在 4~5 个地方各写了一遍**，改一处漏一处，于是"纯色 / 差一天 / 按 Key 对不上"换着形态复发。这一版不加功能，只把结构理顺、把规则钉死：
 
-| 口径 | 控制台 | 我们（修前） |
-|---|---|---|
-| 合计 | $6.50 | $6.12 |
-| 方泽恩 | **$6.43** | $4.48 |
-| 丁雁 | **$0.06** | $0.04 |
-| 没有 keyId 的行 | $0（0 条） | — |
+- **合并规则单点化**：新增 `UsageMerge`（只增不减 / 明细优先 / 按 Key 覆盖 / 半窗不冲整天 / 并集自愈），日常刷新与历史回填**共用同一份实现**；
+- **认日单点化**：新增 `UsageRows`（一条行算哪天、算哪个模型、算哪个 Key），日界只认 `ChartFormatters.day`（北京时间 0 点）；
+- **删掉整条死接口回落链**（`/_server`、HAR 缓存、`lastServerText`）：那个接口早已 404，回落只会拿 9/19 的陈旧数字冒充当天数据，比"报错"更难查；现在拉不到就保留旧快照 + 报错；
+- **新增密钥列表接口** `console/api/service-accounts`（替代随改版失效的 `/workspace/<ws>/keys` HTML 抓取），顺带过滤已吊销的 Key；
+- **补上数据管线回归测试**：`Tests/UsagePipelineTests.swift` 把 8 组不变量（0 点切天 / 增量幂等 / 半窗不冲整天 / 缺明细判定 / 口径作废 / 按 Key 与总额相加相等 / 并集自愈 / 三视图相加相等）钉死，`build.sh --test` 里是门禁；
+- **拆文件**：`CostCrawler.swift` 960 → 260 行（网络层 `ConsoleUsageAPI` / 管线层 `UsagePipeline` / 模型层 `UsageCostModels`）。
 
-按天定位：缺口**全在今天**——当天总额 $2.24，按 Key 只有 $0.66。
+行为、数字口径、配额来源一律没变。版本 **1.1.11.26 (66)**。
 
-根因（11.17 引入的副作用）：改成 `since=` 增量后，每次只拿"最近一段"的行，而**按 Key / 按模型的当日拆分必须用整天的数据**；片段金额比累计值小，被"只增不减"护栏挡掉 → 按 Key 卡在某个小数不再增长（当天总额因为走官方 `cost-by-day` 对账会继续涨，于是两边对不上）。
+### v1.1.11.25 — 重构第零阶段：版本号单一真源 + 测试门槛（纯流程，行为不变）
 
-修复：
+- **版本号只有一个真源**：新增 `./VERSION`，`CFBundleVersion` 由它推导；以前发版要手改 `build.sh` 里 4 处（25 个提交里改了 19 次）；
+- **`./build.sh --test`**：一次跑齐 drift 检查 + 配额解析 + 密钥解析 + 用量管线 + 代理全量测试，打包走同一套门槛；
+- README 拆分（650 → 200 行），历史条目移到 `CHANGELOG.md`，下载直链改由构建自动对齐版本号。
 
-1. **今天（UTC 日）每次刷新整段拉一次**，与增量行按 `id` 去重后合并 —— 当日拆分重新变成"整天口径"；
-2. **回填的"缺明细"判定加上按 Key 覆盖**：某天"按 Key 合计"不足当天总额 90% 也算缺明细，重抓那天（控制台每一行都带 keyId，正常应≈100%）。
+版本 **1.1.11.25 (111125)**。
 
-版本 **1.1.11.23 (64)**。
+### v1.1.11.24 — 日界统一成「北京时间 0 点」+ 修「今日总额和今日模型不同口径」
 
-### v1.1.11.22 — 修「小组件和主 App 差一天」+ 自然月多算了一天
+**你拍板的：要 0 点刷新。** 这一版把全 App 的"天"统一回 **Asia/Shanghai 0 点翻页**（柱子、今日卡片、图例、回填窗口、小组件近 7 天全部一致）。
 
-改成 UTC 日界（11.16）后，**有两处还在用本地日历取日期、却按 UTC 格式化成 key**，整段窗口就偏了一天：
+- 「今日模型」原来走 UTC 日、「今日总额」走本地日 → 刚过 0 点就出现"总额 $0.00、模型还有 $2.93"；现在三处取数统一调 `ChartFormatters.day`，**日界只由一处定义**；
+- **停用 `cost-by-day` 的逐日对账**（官网那份是 UTC 日口径），它只保留"哪些天有数据"的兜底作用，金额以逐条 `rows` 为准；
+- 一次性迁移：`usageDayConvention` 由 `utc` 改 `local`，首次运行自动作废旧快照并重拉 30 天明细。
 
-- **小组件「近 7 天」**：`Calendar(identifier: .gregorian)` 没设时区 → 取的是本地 0 点（= UTC 前一天 16:00），转成 key 后整体前移一天 → 和主 App 对不上（你截图就是这个）。
-- **主 App「自然月」窗口** (`ChartWindow`)：同样问题 → 月界取本地 9/1 00:00（= 8/31 16:00Z）→ key 变成 `2026-08-31`，于是**多算了上月最后一天、少算了本月最后一天**。实测「本月花费」显示 **$30.95**，正确口径（UTC 自然月 9/1–9/30）是 **$29.69**（差的就是 8/31 那天的 $1.29）。
-- 两处都改成 `BillingCycle.calendar`（UTC），和 `ChartFormatters.day` 口径一致。
-- 版本 **1.1.11.22 (63)**。
+**已知代价**（你已确认接受）：逐天金额不再与官网 UTC 日逐天 0 差（实测每天差 $0.02–0.16）；账期/自然月总额不受影响。
 
-### v1.1.11.21 — 图例/今日模型改用官方显示名（"GPT 5.6 Luna" 而不是 slug）
-
-- 用户问「GPT 5.6 Luna 前面的 GPT 去哪了」：**Codex 模型选择器里是 `GPT-5.6-Luna (Go)`、Go 配额面板也写 `GPT 5.6 Luna`**，只有费用图的图例和今日模型条显示的是**原始 slug**（小写 `gpt-5.6-luna`），看着就像"GPT 没了"。
-- **顺带查清 Codex 模型选择器里那条 `5.6 Luna (Go)`**：`models.json` 里写的是 `GPT-5.6-Luna (Go)`，是**Codex 自己把开头的 `GPT-` 吃掉了**（同批的 DeepSeek/Grok/Hy3 显示名都没被动）。绕开办法：显示名改成**空格写法** `GPT 5.6 Luna (Go)`（与官方文档 "GPT 5.6 Luna" 一致），已写进 `DISPLAY_NAME_OVERRIDES`，下次「配置」即生效。
-- 现在图例与今日模型条统一走 `ModelPalette.displayName()`：**优先用 Go 配额表里的官方名字**（GPT 5.6 Luna、Kimi K3、GLM-5.3、MiMo-V2.6-Flash…），拿不到才退回 slug；灰度「其他」保持原样。
-- 版本 **1.1.11.21 (62)**。
+版本 **1.1.11.24 (65)**。
 
 ## 本地构建
 
