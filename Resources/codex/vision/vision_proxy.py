@@ -34,6 +34,7 @@ from proxy import (  # noqa: E402
     config as _config,
     muse as _muse,
     policy as _policy,
+    pipeline as _pipeline,
     search_sidecar as _search_sidecar,
     server as _server,
     sse as _sse,
@@ -46,7 +47,7 @@ from proxy.server import main  # noqa: E402
 # `vp.<符号>`（如 vp._sanitize_muse_tool_schemas、vp.ChatBridgeTranslator）。
 # 拆包后这些符号住在子模块里，这里把它们的顶层名字重新导出一遍 —— 纯转发，不改行为。
 for _module in (_config, _bridges_chat, _bridges_messages, _toolfix, _search_sidecar,
-                _muse, _apply_patch, _sse, _server, _policy):
+                _muse, _apply_patch, _sse, _server, _policy, _pipeline):
     for _name in dir(_module):
         if not _name.startswith("__") and _name not in globals():
             globals()[_name] = getattr(_module, _name)

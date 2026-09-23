@@ -205,162 +205,207 @@ def sse_turn_looks_complete(state):
     return bool(done) and not still_open
 
 
-def _rewrite_sse_frame(frame, state):
-    """One SSE frame. Fail-safe: any anomaly returns the raw frame bytes.
+def _parse_sse_frame(frame):
+    """帧字节 → (etype, payload)；解析不出来返回 None（调用方原样转发）。"""
+    text = frame.decode("utf-8", errors="replace")
+    event = None
+    data_lines = []
+    for line in text.splitlines():
+        line = line.rstrip("\r")
+        if line.startswith("event:"):
+            event = line[6:].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].strip())
+    if not data_lines:
+        return None
+    try:
+        payload = json.loads("\n".join(data_lines))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload.get("type") or event, payload
 
-    state: {"pending": {item_id: entry}, "completed": bool}
-    """
+
+def _track_item_state(state, etype, payload):
+    """追踪"开过几个输出项、关掉几个"：上游不发终止帧时靠它判断内容是否已完整
+    （2026-09-23，见 sse_turn_looks_complete 的说明）。"""
+    if etype == "response.output_item.added":
+        state.setdefault("items_open", set()).add(_item_identity(payload))
+    elif etype == "response.output_item.done":
+        identity = _item_identity(payload)
+        state.setdefault("items_open", set()).discard(identity)
+        state.setdefault("items_done", set()).add(identity)
+        item = payload.get("item")
+        if isinstance(item, dict):
+            # 留一份完成的项：上游不发终止帧时，补的 response.completed 里要带上 output
+            state.setdefault("completed_items", []).append(item)
+
+
+def _rf_terminal(frame, payload, etype, state):
+    """终止帧：标记 completed，收掉未完成的 apply_patch，必要时改回命名空间工具名。"""
+    pending = state["pending"]
+    state["completed"] = True
+    terminal_renamed = False
+    if _is_muse_model(_sse_state_model(state)):
+        response_obj = payload.get("response")
+        if isinstance(response_obj, dict):
+            terminal_renamed = _split_muse_namespaced_items(response_obj.get("output"))
+    out = []
+    for item_id, entry in list(pending.items()):
+        pending.pop(item_id, None)
+        state.setdefault("flushed", set()).add(item_id)
+        _log(f"[vision-proxy] apply_patch call interrupted by terminal event item_id={item_id}")
+        out.extend(_flush_apply_patch(entry, interrupted=True))
+    out.extend(_rebuild_sse_frame(frame, payload, etype) if terminal_renamed else [frame])
+    return out
+
+
+def _rf_output_item_added(frame, payload, etype, state):
+    """新增输出项：muse 命名空间工具改名；apply_patch 转成 custom_tool_call 并开始攒参数。"""
+    pending = state["pending"]
+    item = payload.get("item") or {}
+    if _is_muse_model(_sse_state_model(state)) and _fix_namespaced_tool_name(item):
+        _log("[vision-proxy] muse namespaced tool call split (stream added)")
+        return _rebuild_sse_frame(frame, payload, etype)
+    name = item.get("name") or ""
+    if item.get("type") == "function_call" and _is_apply_patch_name(name):
+        item_id = item.get("id")
+        entry = {
+            "item_id": item_id,
+            "call_id": item.get("call_id") or item_id,
+            "name": name,
+            "args_acc": "",
+            "output_index": payload.get("output_index", 0),
+        }
+        if item_id:
+            pending[item_id] = entry
+        else:
+            _log("[vision-proxy] apply_patch function_call without item id; cannot track stream")
+        new_item = dict(item)
+        new_item["type"] = "custom_tool_call"
+        new_item["input"] = ""
+        new_item.pop("arguments", None)
+        new_payload = dict(payload)
+        new_payload["item"] = new_item
+        return [_sse_event("response.output_item.added", new_payload)]
+    return [frame]
+
+
+def _rf_fc_args_delta(frame, payload, etype, state):
+    """apply_patch 的参数增量：只吃不发（等 done 再一次性落盘）。"""
+    pending = state["pending"]
+    entry = pending.get(payload.get("item_id"))
+    if entry is not None:
+        delta = payload.get("delta")
+        if not isinstance(delta, str):
+            _log(f"[vision-proxy] non-string function delta, forwarding raw: {type(delta).__name__}")
+            return [frame]
+        entry["args_acc"] += delta
+        return []
+    return [frame]
+
+
+def _rf_fc_args_done(frame, payload, etype, state):
+    """apply_patch 参数结束：落盘；未跟踪的通用调用只做 float→int 归一。"""
     pending = state["pending"]
     flushed = state.setdefault("flushed", set())
+    item_id = payload.get("item_id")
+    entry = pending.pop(item_id, None)
+    if entry is not None:
+        arguments = payload.get("arguments")
+        if isinstance(arguments, str):
+            entry["args_acc"] = arguments
+        flushed.add(item_id)
+        return _flush_apply_patch(entry, interrupted=False)
+    # Untracked generic call (e.g. Muse exec_command): coerce floats
+    # in place so the Codex executor accepts the arguments.
+    arguments = payload.get("arguments")
+    if isinstance(arguments, str):
+        fixed = _coerce_float_ints_in_args_str(arguments)
+        if fixed != arguments:
+            payload["arguments"] = fixed
+            return _rebuild_sse_frame(frame, payload, etype)
+    return [frame]
+
+
+def _rf_output_item_done(frame, payload, etype, state):
+    """输出项结束：muse 改名；apply_patch 落盘；通用 function_call 只做参数归一。"""
+    pending = state["pending"]
+    flushed = state.setdefault("flushed", set())
+    item = payload.get("item") or {}
+    item_renamed = _is_muse_model(_sse_state_model(state)) and _fix_namespaced_tool_name(item)
+    if item_renamed:
+        _log("[vision-proxy] muse namespaced tool call split (stream done)")
+    name = item.get("name") or ""
+    if item.get("type") == "function_call" and _is_apply_patch_name(name):
+        item_id = item.get("id")
+        if item_id in flushed:
+            return []  # already flushed at function_call_arguments.done
+        entry = pending.pop(item_id, None)
+        interrupted = item.get("status") == "incomplete" or payload.get("status") == "incomplete"
+        if entry is None:
+            # Untracked: convert directly from the final item (still fail-safe for parsing).
+            entry = {
+                "item_id": item_id,
+                "call_id": item.get("call_id") or item_id,
+                "name": name,
+                "args_acc": item.get("arguments") if isinstance(item.get("arguments"), str) else "",
+                "output_index": payload.get("output_index", 0),
+            }
+        else:
+            arguments = item.get("arguments")
+            if isinstance(arguments, str):
+                entry["args_acc"] = arguments
+        flushed.add(item_id)
+        return _flush_apply_patch(entry, interrupted=interrupted)
+    if item.get("type") == "function_call":
+        # Untracked generic call: same float->int normalization as the
+        # arguments.done branch (covers upstreams that only send the
+        # terminal item frame).
+        arguments = item.get("arguments")
+        if isinstance(arguments, str):
+            fixed = _coerce_float_ints_in_args_str(arguments)
+            if fixed != arguments:
+                item["arguments"] = fixed
+                return _rebuild_sse_frame(frame, payload, etype)
+    return _rebuild_sse_frame(frame, payload, etype) if item_renamed else [frame]
+
+
+# 帧类型 → 处理器（顺序不敏感：按类型查表；没登记的帧一律原样转发）
+_FRAME_HANDLERS = {
+    "response.completed": _rf_terminal,
+    "response.failed": _rf_terminal,
+    "response.incomplete": _rf_terminal,
+    "response.output_item.added": _rf_output_item_added,
+    "response.function_call_arguments.delta": _rf_fc_args_delta,
+    "response.function_call_arguments.done": _rf_fc_args_done,
+    "response.output_item.done": _rf_output_item_done,
+}
+
+
+def _rewrite_sse_frame(frame, state):
+    """一帧 SSE：解析 → 记账 → 按帧类型查表处理 → 没认领就原样字节转发。
+
+    **不可变约束**：这里只做白名单改写，任何异常/没登记的帧都必须返回原字节
+    （`tests/test_sse_golden.py` 用重构前的逐帧输出把它钉住了）。
+    state: {"pending": {item_id: entry}, "completed": bool, ...}
+    """
     try:
         if state.get("completed") or not frame.strip():
             return [frame]
-        text = frame.decode("utf-8", errors="replace")
-        event = None
-        data_lines = []
-        for line in text.splitlines():
-            line = line.rstrip("\r")
-            if line.startswith("event:"):
-                event = line[6:].strip()
-            elif line.startswith("data:"):
-                data_lines.append(line[5:].strip())
-        if not data_lines:
+        # 老实现会在函数开头就建好 flushed（哪怕这一帧根本不认领）；保持同一份状态形状，
+        # 免得基线和其它读 state 的代码看到不同的键集合。
+        state.setdefault("flushed", set())
+        parsed = _parse_sse_frame(frame)
+        if parsed is None:
             return [frame]
-        try:
-            payload = json.loads("\n".join(data_lines))
-        except json.JSONDecodeError:
+        etype, payload = parsed
+        _track_item_state(state, etype, payload)
+        handler = _FRAME_HANDLERS.get(etype)
+        if handler is None:
             return [frame]
-        if not isinstance(payload, dict):
-            return [frame]
-        etype = payload.get("type") or event
-
-        # 追踪"开过几个输出项、关掉几个"：上游不发终止帧时靠它判断内容是否已完整
-        # （2026-09-23，见 sse_turn_looks_complete 的说明）
-        if etype == "response.output_item.added":
-            state.setdefault("items_open", set()).add(_item_identity(payload))
-        elif etype == "response.output_item.done":
-            identity = _item_identity(payload)
-            state.setdefault("items_open", set()).discard(identity)
-            state.setdefault("items_done", set()).add(identity)
-            item = payload.get("item")
-            if isinstance(item, dict):
-                # 留一份完成的项：上游不发终止帧时，补的 response.completed 里要带上 output
-                state.setdefault("completed_items", []).append(item)
-
-        if etype == "response.completed" or etype == "response.failed" or etype == "response.incomplete":
-            state["completed"] = True
-            terminal_renamed = False
-            if _is_muse_model(_sse_state_model(state)):
-                response_obj = payload.get("response")
-                if isinstance(response_obj, dict):
-                    terminal_renamed = _split_muse_namespaced_items(response_obj.get("output"))
-            out = []
-            for item_id, entry in list(pending.items()):
-                pending.pop(item_id, None)
-                state.setdefault("flushed", set()).add(item_id)
-                _log(f"[vision-proxy] apply_patch call interrupted by terminal event item_id={item_id}")
-                out.extend(_flush_apply_patch(entry, interrupted=True))
-            out.extend(_rebuild_sse_frame(frame, payload, etype) if terminal_renamed else [frame])
-            return out
-
-        if etype == "response.output_item.added":
-            item = payload.get("item") or {}
-            if _is_muse_model(_sse_state_model(state)) and _fix_namespaced_tool_name(item):
-                _log("[vision-proxy] muse namespaced tool call split (stream added)")
-                return _rebuild_sse_frame(frame, payload, etype)
-            name = item.get("name") or ""
-            if item.get("type") == "function_call" and _is_apply_patch_name(name):
-                item_id = item.get("id")
-                entry = {
-                    "item_id": item_id,
-                    "call_id": item.get("call_id") or item_id,
-                    "name": name,
-                    "args_acc": "",
-                    "output_index": payload.get("output_index", 0),
-                }
-                if item_id:
-                    pending[item_id] = entry
-                else:
-                    _log("[vision-proxy] apply_patch function_call without item id; cannot track stream")
-                new_item = dict(item)
-                new_item["type"] = "custom_tool_call"
-                new_item["input"] = ""
-                new_item.pop("arguments", None)
-                new_payload = dict(payload)
-                new_payload["item"] = new_item
-                return [_sse_event("response.output_item.added", new_payload)]
-            return [frame]
-
-        if etype == "response.function_call_arguments.delta":
-            entry = pending.get(payload.get("item_id"))
-            if entry is not None:
-                delta = payload.get("delta")
-                if not isinstance(delta, str):
-                    _log(f"[vision-proxy] non-string function delta, forwarding raw: {type(delta).__name__}")
-                    return [frame]
-                entry["args_acc"] += delta
-                return []
-            return [frame]
-
-        if etype == "response.function_call_arguments.done":
-            item_id = payload.get("item_id")
-            entry = pending.pop(item_id, None)
-            if entry is not None:
-                arguments = payload.get("arguments")
-                if isinstance(arguments, str):
-                    entry["args_acc"] = arguments
-                flushed.add(item_id)
-                return _flush_apply_patch(entry, interrupted=False)
-            # Untracked generic call (e.g. Muse exec_command): coerce floats
-            # in place so the Codex executor accepts the arguments.
-            arguments = payload.get("arguments")
-            if isinstance(arguments, str):
-                fixed = _coerce_float_ints_in_args_str(arguments)
-                if fixed != arguments:
-                    payload["arguments"] = fixed
-                    return _rebuild_sse_frame(frame, payload, etype)
-            return [frame]
-
-        if etype == "response.output_item.done":
-            item = payload.get("item") or {}
-            item_renamed = _is_muse_model(_sse_state_model(state)) and _fix_namespaced_tool_name(item)
-            if item_renamed:
-                _log("[vision-proxy] muse namespaced tool call split (stream done)")
-            name = item.get("name") or ""
-            if item.get("type") == "function_call" and _is_apply_patch_name(name):
-                item_id = item.get("id")
-                if item_id in flushed:
-                    return []  # already flushed at function_call_arguments.done
-                entry = pending.pop(item_id, None)
-                interrupted = item.get("status") == "incomplete" or payload.get("status") == "incomplete"
-                if entry is None:
-                    # Untracked: convert directly from the final item (still fail-safe for parsing).
-                    entry = {
-                        "item_id": item_id,
-                        "call_id": item.get("call_id") or item_id,
-                        "name": name,
-                        "args_acc": item.get("arguments") if isinstance(item.get("arguments"), str) else "",
-                        "output_index": payload.get("output_index", 0),
-                    }
-                else:
-                    arguments = item.get("arguments")
-                    if isinstance(arguments, str):
-                        entry["args_acc"] = arguments
-                flushed.add(item_id)
-                return _flush_apply_patch(entry, interrupted=interrupted)
-            if item.get("type") == "function_call":
-                # Untracked generic call: same float->int normalization as the
-                # arguments.done branch (covers upstreams that only send the
-                # terminal item frame).
-                arguments = item.get("arguments")
-                if isinstance(arguments, str):
-                    fixed = _coerce_float_ints_in_args_str(arguments)
-                    if fixed != arguments:
-                        item["arguments"] = fixed
-                        return _rebuild_sse_frame(frame, payload, etype)
-            return _rebuild_sse_frame(frame, payload, etype) if item_renamed else [frame]
-
-        return [frame]
+        return handler(frame, payload, etype, state)
     except Exception as exc:
         _log(f"[vision-proxy] sse frame rewrite failed, forwarding raw: {exc!r}")
         return [frame]
@@ -417,21 +462,10 @@ def _complete_sse_frame(frame, state):
     if compat.get("saw_created"):
         return [frame]
     try:
-        text = frame.decode("utf-8", errors="replace")
-        event = None
-        data_lines = []
-        for line in text.splitlines():
-            line = line.rstrip("\r")
-            if line.startswith("event:"):
-                event = line[6:].strip()
-            elif line.startswith("data:"):
-                data_lines.append(line[5:].strip())
-        if not data_lines:
+        parsed = _parse_sse_frame(frame)     # 与 _rewrite_sse_frame 共用同一个解析器
+        if parsed is None:
             return [frame]
-        payload = json.loads("\n".join(data_lines))
-        if not isinstance(payload, dict):
-            return [frame]
-        etype = payload.get("type") or event
+        etype, payload = parsed
         if etype == "response.created":
             compat["saw_created"] = True
             return [frame]

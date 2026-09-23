@@ -1,0 +1,168 @@
+{
+ "apply_patch_stream": {
+  "frames": [
+   "data: {\"type\": \"response.created\", \"response\": {\"id\": \"r3\", \"status\": \"in_progress\", \"model\": \"deepseek-v4.1-flash\"}}\n\n",
+   "event: response.output_item.added\ndata: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"item\": {\"id\": \"fc_p\", \"type\": \"custom_tool_call\", \"status\": \"in_progress\", \"name\": \"apply_patch\", \"call_id\": \"cp\", \"input\": \"\"}}\n\n",
+   "event: response.custom_tool_call_input.delta\ndata: {\"type\": \"response.custom_tool_call_input.delta\", \"item_id\": \"fc_p\", \"output_index\": 0, \"call_id\": \"cp\", \"delta\": \"*** Begin Patch\\n*** Update File: a.txt\\n@@\\n-old\\n+new\\n*** End Patch\\n\"}\n\n",
+   "event: response.custom_tool_call_input.done\ndata: {\"type\": \"response.custom_tool_call_input.done\", \"item_id\": \"fc_p\", \"output_index\": 0, \"call_id\": \"cp\", \"input\": \"*** Begin Patch\\n*** Update File: a.txt\\n@@\\n-old\\n+new\\n*** End Patch\\n\"}\n\n",
+   "event: response.output_item.done\ndata: {\"type\": \"response.output_item.done\", \"output_index\": 0, \"item\": {\"type\": \"custom_tool_call\", \"id\": \"fc_p\", \"call_id\": \"cp\", \"name\": \"apply_patch\", \"input\": \"*** Begin Patch\\n*** Update File: a.txt\\n@@\\n-old\\n+new\\n*** End Patch\\n\", \"status\": \"completed\"}}\n\n",
+   "data: {\"type\": \"response.completed\", \"response\": {\"id\": \"r3\", \"status\": \"completed\", \"output\": []}}\n\n"
+  ],
+  "state": {
+   "completed": true,
+   "completed_items": [
+    {
+     "arguments": "*** Begin Patch\n*** End Patch\n",
+     "call_id": "cp",
+     "id": "fc_p",
+     "name": "apply_patch",
+     "status": "completed",
+     "type": "function_call"
+    }
+   ],
+   "flushed": [
+    "fc_p"
+   ],
+   "items_done": [
+    "#0"
+   ],
+   "items_open": [],
+   "pending": {}
+  }
+ },
+ "deepseek_native": {
+  "frames": [
+   "data: {\"type\": \"response.created\", \"response\": {\"id\": \"r1\", \"status\": \"in_progress\", \"model\": \"deepseek-v4.1-flash\"}}\n\n",
+   "data: {\"type\": \"response.in_progress\", \"response\": {\"id\": \"r1\"}}\n\n",
+   "data: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"item\": {\"id\": \"msg_1\", \"type\": \"message\", \"status\": \"in_progress\", \"role\": \"assistant\", \"content\": []}}\n\n",
+   "data: {\"type\": \"response.content_part.added\", \"item_id\": \"msg_1\", \"output_index\": 0, \"content_index\": 0, \"part\": {\"type\": \"output_text\", \"text\": \"\"}}\n\n",
+   "data: {\"type\": \"response.output_text.delta\", \"item_id\": \"msg_1\", \"output_index\": 0, \"content_index\": 0, \"delta\": \"你好\"}\n\n",
+   "data: {\"type\": \"response.output_text.delta\", \"item_id\": \"msg_1\", \"output_index\": 0, \"content_index\": 0, \"delta\": \"，世界\"}\n\n",
+   "data: {\"type\": \"response.output_text.done\", \"item_id\": \"msg_1\", \"output_index\": 0, \"content_index\": 0, \"text\": \"你好，世界\"}\n\n",
+   "data: {\"type\": \"response.output_item.done\", \"output_index\": 0, \"item\": {\"id\": \"msg_1\", \"type\": \"message\", \"status\": \"completed\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"你好，世界\"}]}}\n\n",
+   "data: {\"type\": \"response.completed\", \"response\": {\"id\": \"r1\", \"status\": \"completed\", \"output\": []}}\n\n"
+  ],
+  "state": {
+   "completed": true,
+   "completed_items": [
+    {
+     "content": [
+      {
+       "text": "你好，世界",
+       "type": "output_text"
+      }
+     ],
+     "id": "msg_1",
+     "role": "assistant",
+     "status": "completed",
+     "type": "message"
+    }
+   ],
+   "flushed": [],
+   "items_done": [
+    "#0"
+   ],
+   "items_open": [],
+   "pending": {}
+  }
+ },
+ "dup_item_ids": {
+  "frames": [
+   "data: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"item\": {\"id\": \"dup\", \"type\": \"message\", \"status\": \"in_progress\", \"content\": []}}\n\n",
+   "data: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"item\": {\"id\": \"dup\", \"type\": \"message\", \"status\": \"in_progress\", \"content\": []}}\n\n",
+   "data: {\"type\": \"response.output_item.done\", \"output_index\": 0, \"item\": {\"id\": \"dup\", \"type\": \"message\", \"status\": \"completed\", \"content\": [{\"type\": \"output_text\", \"text\": \"x\"}]}}\n\n"
+  ],
+  "state": {
+   "completed": false,
+   "completed_items": [
+    {
+     "content": [
+      {
+       "text": "x",
+       "type": "output_text"
+      }
+     ],
+     "id": "dup",
+     "status": "completed",
+     "type": "message"
+    }
+   ],
+   "flushed": [],
+   "items_done": [
+    "#0"
+   ],
+   "items_open": [],
+   "pending": {}
+  }
+ },
+ "junk_and_unknown": {
+  "frames": [
+   "event: ping\ndata: {\"type\": \"response.something.new\", \"x\": 1}\n\n",
+   "data: not-json\n\n",
+   "\n\n",
+   ": comment only\n\n"
+  ],
+  "state": {
+   "completed": false,
+   "flushed": [],
+   "pending": {}
+  }
+ },
+ "muse_namespaced_tool": {
+  "frames": [
+   "data: {\"type\": \"response.created\", \"response\": {\"id\": \"r2\", \"status\": \"in_progress\", \"model\": \"muse-spark-1.3-contributor\"}}\n\n",
+   "data: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"item\": {\"id\": \"fc_1\", \"type\": \"function_call\", \"status\": \"in_progress\", \"name\": \"shell:exec\", \"call_id\": \"c1\", \"arguments\": \"\"}}\n\n",
+   "data: {\"type\": \"response.output_item.done\", \"output_index\": 0, \"item\": {\"id\": \"fc_1\", \"type\": \"function_call\", \"status\": \"completed\", \"name\": \"shell:exec\", \"call_id\": \"c1\", \"arguments\": \"{}\"}}\n\n",
+   "data: {\"type\": \"response.completed\", \"response\": {\"id\": \"r2\", \"status\": \"completed\", \"output\": [{\"id\": \"fc_1\", \"type\": \"function_call\", \"name\": \"shell:exec\", \"call_id\": \"c1\", \"arguments\": \"{}\"}]}}\n\n"
+  ],
+  "state": {
+   "completed": true,
+   "completed_items": [
+    {
+     "arguments": "{}",
+     "call_id": "c1",
+     "id": "fc_1",
+     "name": "shell:exec",
+     "status": "completed",
+     "type": "function_call"
+    }
+   ],
+   "flushed": [],
+   "items_done": [
+    "#0"
+   ],
+   "items_open": [],
+   "pending": {}
+  }
+ },
+ "no_terminal_frames": {
+  "frames": [
+   "data: {\"type\": \"response.created\", \"response\": {\"id\": \"r4\", \"status\": \"in_progress\", \"model\": \"muse-spark-1.3-contributor\"}}\n\n",
+   "data: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"item\": {\"id\": \"msg_4\", \"type\": \"message\", \"status\": \"in_progress\", \"role\": \"assistant\", \"content\": []}}\n\n",
+   "data: {\"type\": \"response.output_item.done\", \"output_index\": 0, \"item\": {\"id\": \"msg_4\", \"type\": \"message\", \"status\": \"completed\", \"role\": \"assistant\", \"content\": [{\"type\": \"output_text\", \"text\": \"好了\"}]}}\n\n"
+  ],
+  "state": {
+   "completed": false,
+   "completed_items": [
+    {
+     "content": [
+      {
+       "text": "好了",
+       "type": "output_text"
+      }
+     ],
+     "id": "msg_4",
+     "role": "assistant",
+     "status": "completed",
+     "type": "message"
+    }
+   ],
+   "flushed": [],
+   "items_done": [
+    "#0"
+   ],
+   "items_open": [],
+   "pending": {}
+  }
+ }
+}
