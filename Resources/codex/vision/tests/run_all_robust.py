@@ -6,8 +6,9 @@ import subprocess, sys, os, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 tests = [
-    ("原有单元 (12)", ["python3", os.path.join(HERE, "test_units.py")]),
-    ("代理混沌 (32)", ["python3", os.path.join(HERE, "test_robust.py")]),
+    ("原有单元 (37)", ["python3", os.path.join(HERE, "test_units.py")]),
+    ("终止事件修补 (4)", ["python3", os.path.join(HERE, "test_terminal_repair_relay.py")]),
+    ("代理混沌 (31)", ["python3", os.path.join(HERE, "test_robust.py")]),
     ("model_discovery 混沌 (14)", ["python3", os.path.join(HERE, "test_model_discovery_robust.py")]),
     ("installer/patch 混沌 (8)", ["python3", os.path.join(HERE, "test_installer_patch_robust.py")]),
 ]

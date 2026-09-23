@@ -12,6 +12,7 @@
 # 用法：
 #   ensure-proxy.sh [--env-file PATH] [--vision-dir PATH] [--port N]
 #                   [--trigger installer|watchdog|manual] [--check-only] [--dry-run] [--quiet]
+#                   [--force-restart]
 # 退出码：0 = 代理已验证在跑；1 = 这次没能让它跑起来；2 = 参数/环境问题
 #
 # 测试用的两个口子（正常跑不用管）：
@@ -25,6 +26,7 @@ PORT=19100
 TRIGGER=manual
 CHECK_ONLY=0
 DRY_RUN=0
+FORCE_RESTART=0
 QUIET=0
 
 while [ $# -gt 0 ]; do
@@ -35,6 +37,7 @@ while [ $# -gt 0 ]; do
     --trigger)    TRIGGER="$2"; shift 2 ;;
     --check-only) CHECK_ONLY=1; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
+    --force-restart) FORCE_RESTART=1; shift ;;
     --quiet)      QUIET=1; shift ;;
     *) echo "ensure-proxy: 不认识的参数 $1" >&2; exit 2 ;;
   esac
@@ -201,8 +204,8 @@ fi
 
 PREV_REPAIR="$(state_get last_repair_at)"
 
-# ---- 已经在跑：只更新状态，什么都不动 ----
-if probe; then
+# ---- 已经在跑：只更新状态，什么都不动（--force-restart 除外：配置刚同步完新代码，必须换新的）----
+if probe && [ "$FORCE_RESTART" != 1 ]; then
   interp="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$PLIST" 2>/dev/null || true)"
   ver=""
   [ -n "$interp" ] && ver="$(test_interpreter "$interp" 2>/dev/null)"
@@ -217,8 +220,12 @@ if probe; then
   exit 0
 fi
 
-# ---- 不在跑：修 ----
-logline "代理没在跑（端口 $PORT 无响应）→ 开始修复（trigger=${TRIGGER}）"
+# ---- 不在跑（或要求强制重启）：修 ----
+if [ "$FORCE_RESTART" = 1 ] && probe; then
+  logline "按 --force-restart 重启代理（跑着也要换成刚同步的新代码，trigger=${TRIGGER}）"
+else
+  logline "代理没在跑（端口 $PORT 无响应）→ 开始修复（trigger=${TRIGGER}）"
+fi
 SKIP=""
 if [ "$(state_get last_result)" = "failed" ]; then
   SKIP="$(state_get interpreter)"

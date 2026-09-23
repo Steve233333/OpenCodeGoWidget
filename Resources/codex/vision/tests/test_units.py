@@ -519,6 +519,42 @@ def t_provider_prefix_keeps_aliases():
     assert vp._rewrite_zen_model(p) is True and p["model"] == "x-preview-f-free", p
 
 
+def _sse(state, payload):
+    """把一帧喂进状态机（等价于真实流里的一帧）"""
+    return vp._rewrite_sse_frame(f"data: {json.dumps(payload)}\n\n".encode(), state)
+
+
+def t_terminal_repair_sees_complete_turn():
+    """2026-09-23：上游不发终止帧、但内容已完整（开过的项都 done）→ 应判定"可补 completed"。
+    对齐 opencodex 的 modelResponsesTerminalRepair（muse-spark 在 Go/Zen 网关的常见收尾）。"""
+    st = {"pending": {}, "completed": False}
+    _sse(st, {"type": "response.created", "response": {"id": "r1"}})
+    _sse(st, {"type": "response.output_item.added", "output_index": 0,
+              "item": {"id": "msg_1", "type": "message", "status": "in_progress"}})
+    assert vp.sse_turn_looks_complete(st) is False, "项还开着，不该判定完整"
+    _sse(st, {"type": "response.output_item.done", "output_index": 0,
+              "item": {"id": "msg_1", "type": "message", "status": "completed"}})
+    assert vp.sse_turn_looks_complete(st) is True, "开过的项都 done 了，应判定完整"
+    assert st["completed_items"] and st["completed_items"][0]["id"] == "msg_1", "要留一份完成的项"
+
+
+def t_terminal_repair_rejects_partial_turn():
+    st = {"pending": {}, "completed": False}
+    _sse(st, {"type": "response.output_item.added", "output_index": 0, "item": {"id": "a"}})
+    _sse(st, {"type": "response.output_item.done", "output_index": 0, "item": {"id": "a"}})
+    _sse(st, {"type": "response.output_item.added", "output_index": 1, "item": {"id": "b"}})
+    assert vp.sse_turn_looks_complete(st) is False, "还有项没 done，不能当完整"
+    empty = {"pending": {}, "completed": False}
+    assert vp.sse_turn_looks_complete(empty) is False, "什么都没有时也不算完整"
+
+
+def t_terminal_frame_still_wins():
+    """真收到终止帧时，状态机照旧标记 completed（不依赖我们的修补）"""
+    st = {"pending": {}, "completed": False}
+    _sse(st, {"type": "response.completed", "response": {"id": "r1", "status": "completed"}})
+    assert st["completed"] is True
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)

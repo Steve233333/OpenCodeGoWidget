@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import signal
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -38,6 +39,8 @@ from .config import (
     MUSE_MAX_STALL_RETRIES,
     RESPONSES_ALWAYS_BRIDGE,
     RESPONSES_FALLBACK_MODELS,
+    TERMINAL_GRACE_SECONDS,
+    TERMINAL_IDLE_MAX_ROUNDS,
     ZEN_SUFFIX,
     ZEN_UPSTREAM,
     _ANTHROPIC_VERSION,
@@ -72,6 +75,7 @@ from .sse import (
     _rewrite_sse_frame,
     _split_sse_frame,
     _sse_looks_like_stall,
+    sse_turn_looks_complete,
 )
 from .toolfix import (
     _fix_tool_required,
@@ -1102,10 +1106,33 @@ class Proxy:
             writer.write(frame_bytes)
             await writer.drain()
 
+        # 2026-09-23：上游"挂着不发字节"时别让 Codex 一直转圈（muse 空转的另一半）。
+        # 给底层 socket 套一个空闲宽限：空闲到点且这一轮内容已完整 → 收尾补终止帧；
+        # 内容还没完整就继续等（长思考不能被掐），但连续空闲超过 TERMINAL_IDLE_MAX_ROUNDS 才算真死。
+        idle_rounds = 0
+        try:
+            sock = response.fp.raw._sock          # urllib 响应的底层 socket
+            sock.settimeout(TERMINAL_GRACE_SECONDS)
+            _log(f"[vision-proxy] SSE 空闲宽限 {TERMINAL_GRACE_SECONDS:.0f}s 已启用")
+        except Exception:
+            sock = None
+
         while True:
-            chunk = await asyncio.to_thread(read_chunk, 65536)
+            try:
+                chunk = await asyncio.to_thread(read_chunk, 65536)
+            except (socket.timeout, TimeoutError):
+                if sse_turn_looks_complete(state):
+                    _log(f"[vision-proxy] 上游空闲 {TERMINAL_GRACE_SECONDS:.0f}s 且内容已完整 → 收尾"
+                         f"（trigger=idle model={state.get('compat', {}).get('model')}）")
+                    break
+                idle_rounds += 1
+                if idle_rounds >= TERMINAL_IDLE_MAX_ROUNDS:
+                    _log(f"[vision-proxy] 上游连续空闲 {idle_rounds}×{TERMINAL_GRACE_SECONDS:.0f}s 且内容不完整 → 收尾")
+                    break
+                continue
             if not chunk:
                 break
+            idle_rounds = 0        # 有数据就重置：计数只统计"连续"空闲，慢但活着的流不会被误掐
             buffer.extend(chunk)
             while True:
                 frame, rest = _split_sse_frame(buffer)
@@ -1126,7 +1153,32 @@ class Proxy:
                 for out_frame in _rewrite_sse_frame(compat_frame, state):
                     await emit(out_frame)
         # P2 hardening: a stream that ends without ANY terminal event would hang
-        # codex-rs ("stream closed before response.completed"). Synthesize failure.
+        # codex-rs ("stream closed before response.completed"). Synthesize a terminal frame.
+        # 2026-09-23：先按 opencodex 的 modelResponsesTerminalRepair 契约分两种 ——
+        # 内容已经完整（开过的输出项都 done 了）就补 response.completed，这一轮照常收尾；
+        # 只有内容确实不完整时才判 response.failed（老行为）。
+        if not state.get("completed"):
+            model = compat.get("model") if compat else getattr(self, "_last_model", None)
+            if sse_turn_looks_complete(state):
+                done_payload = {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_" + uuid.uuid4().hex[:24],
+                        "object": "response",
+                        "created_at": int(time.time()),
+                        "completed_at": int(time.time()),
+                        "status": "completed",
+                        "model": model,
+                        # 已经发过的项原样带上：客户端若从 completed 帧里取最终 output，
+                        # 也不会拿到空数组（对齐 opencodex 的做法）
+                        "output": list(state.get("completed_items") or []),
+                    },
+                }
+                _log(f"[vision-proxy] 上游没发终止帧但内容已完整 → 补 response.completed model={model}")
+                frame_bytes = f"data: {json.dumps(done_payload)}\n\n".encode()
+                for compat_frame in _complete_sse_frame(frame_bytes, state):
+                    for out_frame in _rewrite_sse_frame(compat_frame, state):
+                        await emit(out_frame)
         if not state.get("completed"):
             model = compat.get("model") if compat else getattr(self, "_last_model", None)
             fail_payload = {

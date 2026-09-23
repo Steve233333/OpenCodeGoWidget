@@ -101,6 +101,24 @@ else
   bad "⑤ 幂等性不对（rc=${rc}，日志 $before → $after 行）"
 fi
 
+# ⑥ --force-restart：配置刚同步完新代码，跑着的旧进程必须被换掉（否则新代码永远不生效）
+pid_before="$(/bin/launchctl list | awk -v l="$TEST_LABEL" '$3 == l {print $1}')"
+PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" bash "$ensure" \
+  --port "$TEST_PORT" --vision-dir "$TMP/v4" --env-file "$TMP/env4" \
+  --trigger installer --force-restart >/dev/null 2>&1
+rc=$?
+pid_after=""
+for _ in $(seq 1 10); do
+  pid_after="$(/bin/launchctl list | awk -v l="$TEST_LABEL" '$3 == l {print $1}')"
+  if [ -n "$pid_after" ] && [ "$pid_after" != "-" ] && [ "$pid_after" != "$pid_before" ]; then break; fi
+  sleep 1
+done
+if [ "$rc" = 0 ] && [ -n "$pid_after" ] && [ "$pid_after" != "-" ] && [ "$pid_after" != "$pid_before" ]; then
+  ok "⑥ --force-restart 会换掉跑着的旧进程（pid $pid_before → ${pid_after}）"
+else
+  bad "⑥ --force-restart 没换进程（rc=${rc}，pid $pid_before → ${pid_after:-空}）"
+fi
+
 if [ "$fail" = 0 ]; then
   echo "全部通过 ✅"
   exit 0

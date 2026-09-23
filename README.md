@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.30.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.31.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.30.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.31.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.30.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.30.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.31.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.31.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,38 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.31 — Muse 终止事件修补（对齐 opencodex 的 modelResponsesTerminalRepair）
+
+现象：muse-spark 在 OpenCode Go/Zen 的 Responses 模式下「做任务弄着弄着空转」。翻 opencodex 的
+`#5240`（今天刚合并）看到根因和我们一致但修法更好：
+
+- **上游发完内容却不发终止帧**（省略 `response.completed` 与 usage）。我们原来的处理是**立刻**补一个
+  `response.failed` —— 这一轮被判「中断」，内容其实已经完整；
+- opencodex 的做法是 `modelResponsesTerminalRepair`（`graceMs: 5s`）：**等一个宽限窗口，如果开过的每个
+  输出项都收到过 `response.output_item.done`（内容完整），就补 `response.completed`**，只有内容确实不完整
+  才判失败。
+
+这一版把同一套契约搬过来（不是照抄实现，是按我们的流式管线重写）：
+
+- `proxy/sse.py`：状态机新增"开过几个输出项 / 关掉几个 / 完成的项留一份"的追踪，并导出
+  `sse_turn_looks_complete(state)`（开过的项都 done 且至少一个）；
+- `proxy/server.py`：① 收尾时先按上面判定 —— 内容完整就补 `response.completed`（带上已经发过的 output 项），
+  不完整才保持原来的 `response.failed`（老行为不丢）；② 新增**空闲宽限**：给上游 socket 套 5 秒读超时，
+  "挂着不发字节"且内容已完整时立刻收尾（这是"空转"的另一半 —— 以前会一直等）；连续空闲 24×5s=120s
+  仍不完整才判失败；有数据就重置计数，慢但活着的流不会被误掐。
+
+验证：
+- 新增 `tests/test_terminal_repair_relay.py`（中继层，4 条）：上游关连接不发终止帧 → 补 completed 且
+  带上 output 项 / 上游挂着不发字节 → 空闲宽限补 completed / 内容不完整 → 仍判 failed / 真终止帧原样转发。
+  已接进 `build.sh --test` 门槛（Python 全量 37+4+31+18+8 全绿）。
+- 顺带修一个我刚引入的坑：ensure-proxy 变"幂等不重启"后，**「配置」同步了新代理代码却不会重启它**
+  （新代码永远不生效）→ 加 `--force-restart`，安装器这一步强制换新进程；`scripts/test-ensure-proxy.sh`
+  第 ⑥ 条断言"跑着的旧进程会被换掉"（pid 变化）。
+- 真机：deepseek 流式 200 且日志出现 `SSE 空闲宽限 5s 已启用`；muse 冒烟 200（顺带看到 narration-only
+  空转重试真实触发一次 #1/#2 后成功）。
+
+版本 **1.1.11.31 (71)**。
 
 ### v1.1.11.30 — 让"系统升级/重启后代理掉线"自己好起来
 
@@ -132,16 +164,6 @@ macOS 27 升级后 Codex 报 "Reconnecting… waiting for network" 的根因链�
 **验证**：步骤文件全部 `zsh -n` 通过；主脚本 + 13 步重组后与拆分前**逐行一致**；再从打包好的 App 包里拷出 `codex/`、用假 `HOME` 完整跑了一遍更新模式（`--skip-patch --skip-proxy-start`）。
 
 版本 **1.1.11.29 (69)**。
-
-### v1.1.11.28 — 重构第三阶段：本地代理拆包（纯搬移，行为不变）
-
-`vision_proxy.py` **3793 行 / 107 个顶层符号**的单体脚本 → 薄入口（55 行）+ `proxy/` 包（config / bridges_chat / bridges_messages / toolfix / search_sidecar / muse / apply_patch / sse / server）。
-
-**怎么证明是纯搬移**：107 个顶层符号逐个按源码片段比对，**全部逐字节一致**；入口保留兼容层，所以老的 66 个 Python 用例 + 13 项 Muse 自检照旧通过。`check-drift.sh` 改成整目录递归比对（含 `proxy/` 子目录），`docs/gen-model-matrix.py` 改成从包里抠常量。
-
-顺带修掉一个原有的静默 bug：`_perform_web_search` 的 env 兜底用到 `pathlib` 却从没 import（外面是裸 `except: pass`）→ 补上。真机冒烟：DeepSeek / GLM（走 chat 桥回落）/ Muse 各一条 200，日志零 Traceback。
-
-版本 **1.1.11.28 (68)**。
 
 ## 本地构建
 

@@ -51,8 +51,9 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   # Codex 侧就是 "Reconnecting… waiting for network"。现在由脚本逐个实测候选解释器再决定。
   if [[ "$SKIP_PROXY_START" -eq 0 ]]; then
     log "阶段：重启本地代理（ensure-proxy：实测挑解释器 → 起服务 → 探活）…"
+    # --force-restart：这一步刚把新的代理代码同步下来，跑着的旧进程必须换掉才会生效
     if "$VISION_DIR/ensure-proxy.sh" --vision-dir "$VISION_DIR" --env-file "$ENV_FILE" \
-         --trigger installer >>"$LOG" 2>&1; then
+         --trigger installer --force-restart >>"$LOG" 2>&1; then
       PROXY_OK=1
       log "本地代理已启动并验证（127.0.0.1:19100）"
     else

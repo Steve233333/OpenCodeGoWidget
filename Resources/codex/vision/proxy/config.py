@@ -212,6 +212,13 @@ _OC_SESSION_FALLBACK = uuid.uuid4().hex
 
 _BRIDGE_NONSTREAM_MAX_BYTES = 64 * 1024 * 1024  # P5: cap for buffered non-stream chat bodies
 
+# 终止事件宽限（2026-09-23，对齐 opencodex 的 modelResponsesTerminalRepair 契约）：
+# muse-spark 在 OpenCode Go/Zen 的 Responses 模式下，长思考后可能"内容发完了但不发终止帧"，
+# 或者干脆挂在连接上不再吐字节。以前前者会被判 response.failed（这一轮算中断），后者会让
+# Codex 一直转圈 —— 现在给一个宽限窗口：内容已完整就自己补 response.completed 收尾。
+TERMINAL_GRACE_SECONDS = 5.0     # 多久没新字节算"空闲"（socket 读超时）
+TERMINAL_IDLE_MAX_ROUNDS = 24    # 内容还没完整时最多容忍多少次空闲（24 × 5s = 120s）才判失败
+
 
 _SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark", "grok-")
 

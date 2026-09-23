@@ -2,6 +2,38 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.31 — Muse 终止事件修补（对齐 opencodex 的 modelResponsesTerminalRepair）
+
+现象：muse-spark 在 OpenCode Go/Zen 的 Responses 模式下「做任务弄着弄着空转」。翻 opencodex 的
+`#5240`（今天刚合并）看到根因和我们一致但修法更好：
+
+- **上游发完内容却不发终止帧**（省略 `response.completed` 与 usage）。我们原来的处理是**立刻**补一个
+  `response.failed` —— 这一轮被判「中断」，内容其实已经完整；
+- opencodex 的做法是 `modelResponsesTerminalRepair`（`graceMs: 5s`）：**等一个宽限窗口，如果开过的每个
+  输出项都收到过 `response.output_item.done`（内容完整），就补 `response.completed`**，只有内容确实不完整
+  才判失败。
+
+这一版把同一套契约搬过来（不是照抄实现，是按我们的流式管线重写）：
+
+- `proxy/sse.py`：状态机新增"开过几个输出项 / 关掉几个 / 完成的项留一份"的追踪，并导出
+  `sse_turn_looks_complete(state)`（开过的项都 done 且至少一个）；
+- `proxy/server.py`：① 收尾时先按上面判定 —— 内容完整就补 `response.completed`（带上已经发过的 output 项），
+  不完整才保持原来的 `response.failed`（老行为不丢）；② 新增**空闲宽限**：给上游 socket 套 5 秒读超时，
+  "挂着不发字节"且内容已完整时立刻收尾（这是"空转"的另一半 —— 以前会一直等）；连续空闲 24×5s=120s
+  仍不完整才判失败；有数据就重置计数，慢但活着的流不会被误掐。
+
+验证：
+- 新增 `tests/test_terminal_repair_relay.py`（中继层，4 条）：上游关连接不发终止帧 → 补 completed 且
+  带上 output 项 / 上游挂着不发字节 → 空闲宽限补 completed / 内容不完整 → 仍判 failed / 真终止帧原样转发。
+  已接进 `build.sh --test` 门槛（Python 全量 37+4+31+18+8 全绿）。
+- 顺带修一个我刚引入的坑：ensure-proxy 变"幂等不重启"后，**「配置」同步了新代理代码却不会重启它**
+  （新代码永远不生效）→ 加 `--force-restart`，安装器这一步强制换新进程；`scripts/test-ensure-proxy.sh`
+  第 ⑥ 条断言"跑着的旧进程会被换掉"（pid 变化）。
+- 真机：deepseek 流式 200 且日志出现 `SSE 空闲宽限 5s 已启用`；muse 冒烟 200（顺带看到 narration-only
+  空转重试真实触发一次 #1/#2 后成功）。
+
+版本 **1.1.11.31 (71)**。
+
 ### v1.1.11.30 — 让"系统升级/重启后代理掉线"自己好起来
 
 **起因（macOS 27 升级那次，日志里坐实的链条）**：

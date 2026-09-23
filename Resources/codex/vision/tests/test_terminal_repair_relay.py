@@ -1,0 +1,133 @@
+"""终止事件修补的**中继层**回归测试（2026-09-23）。
+
+背景：muse-spark 在 OpenCode Go/Zen 的 Responses 模式下，长思考后可能
+  (a) 内容发完但**不发终止帧**，或 (b) 直接**挂在连接上不再吐字节**。
+以前 (a) 会被判 `response.failed`（这一轮算中断），(b) 会让 Codex 一直转圈。
+现在对齐 opencodex 的 `modelResponsesTerminalRepair` 契约：内容已完整（开过的输出项都收到
+`response.output_item.done`）就补 `response.completed` 收尾；不完整才判失败。
+
+这个文件把「上游怎么发、代理怎么收尾」这一层也钉住 —— 单元测试只测了状态机判定，
+真正的合成路径（含 SSE 头、帧重写、兼容层）在这里跑一遍。
+
+Run: python3 tests/test_terminal_repair_relay.py
+"""
+import asyncio
+import json
+import os
+import socket
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+
+from proxy.server import Proxy  # noqa: E402
+
+PASS, FAIL = [], []
+
+
+class FakeWriter:
+    def __init__(self):
+        self.buf = b""
+
+    def write(self, data):
+        self.buf += data
+
+    async def drain(self):
+        pass
+
+    def is_closing(self):
+        return False
+
+
+class FakeUpstream:
+    """假上游：先吐给定的 SSE 帧，然后按 mode 收尾。
+
+    mode="close"  → 直接读到 EOF（上游关了连接，但没发终止帧）
+    mode="idle"   → 先抛 socket.timeout（模拟"挂着不发"），再 EOF
+    mode="failed" → 内容不完整就断（只有一个 output_item.added，没有 done）
+    """
+
+    def __init__(self, frames, mode="close"):
+        self.chunks = [b"".join(frames), b""]
+        self.mode = mode
+        self._timed_out = False
+
+    def read1(self, _n=65536):
+        if self.mode == "idle" and not self._timed_out:
+            self._timed_out = True
+            raise socket.timeout("模拟上游挂着不发字节")
+        return self.chunks.pop(0) if self.chunks else b""
+
+    # 中继那句 `getattr(response, "read1", response.read)` 会**先**求值默认值，
+    # 所以即便走 read1 也要有 read 这个属性（真 urllib 响应两个都有）
+    read = read1
+
+
+def frame(payload):
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+CREATED = frame({"type": "response.created", "response": {"id": "resp_test", "status": "in_progress"}})
+ITEM_ADDED = frame({"type": "response.output_item.added", "output_index": 0,
+                    "item": {"id": "msg_1", "type": "message", "status": "in_progress"}})
+ITEM_DONE = frame({"type": "response.output_item.done", "output_index": 0,
+                   "item": {"id": "msg_1", "type": "message", "status": "completed",
+                            "content": [{"type": "output_text", "text": "做完了"}]}})
+
+
+async def run_relay(mode, frames):
+    proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+    writer = FakeWriter()
+    upstream = FakeUpstream(frames, mode=mode)
+    await proxy._send_response_sse(writer, upstream, 200,
+                                  [("Content-Type", "text/event-stream")],
+                                  retry=None, model="muse-spark-1.2-contributor")
+    return writer.buf.decode("utf-8", errors="replace")
+
+
+def check(name, fn):
+    try:
+        fn()
+        PASS.append(name)
+        print(f"  PASS {name}")
+    except Exception as exc:  # noqa: BLE001
+        FAIL.append((name, repr(exc)))
+        print(f"  FAIL {name}: {exc!r}")
+
+
+def t_closed_without_terminal_repairs_completed():
+    out = asyncio.run(run_relay("close", [CREATED, ITEM_ADDED, ITEM_DONE]))
+    assert '"type": "response.completed"' in out or '"type":"response.completed"' in out, out[-400:]
+    assert "response.failed" not in out, "内容已完整时不该判失败"
+    assert '"msg_1"' in out, "补的 completed 里要带上已经发过的 output 项"
+
+
+def t_idle_upstream_repairs_completed():
+    """挂着不发字节、但内容已完整 → 空闲宽限到点就该收尾，而不是让客户端一直转圈"""
+    out = asyncio.run(run_relay("idle", [CREATED, ITEM_ADDED, ITEM_DONE]))
+    assert "response.completed" in out, out[-400:]
+    assert "response.failed" not in out, out[-400:]
+
+
+def t_partial_turn_still_fails():
+    """内容不完整就断 → 保持老行为判失败（别把半截内容伪装成正常收尾）"""
+    out = asyncio.run(run_relay("failed", [CREATED, ITEM_ADDED]))
+    assert "response.failed" in out, out[-400:]
+
+
+def t_real_terminal_is_forwarded_untouched():
+    frames = [CREATED, ITEM_ADDED, ITEM_DONE,
+              frame({"type": "response.completed",
+                     "response": {"id": "resp_test", "status": "completed", "output": []}})]
+    out = asyncio.run(run_relay("close", frames))
+    assert out.count("response.completed") >= 1
+    assert "response.failed" not in out
+
+
+if __name__ == "__main__":
+    for name, fn in list(globals().items()):
+        if name.startswith("t_"):
+            check(name, fn)
+    print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
+    sys.exit(1 if FAIL else 0)

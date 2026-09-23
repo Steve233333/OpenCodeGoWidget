@@ -178,6 +178,30 @@ def _rebuild_sse_frame(frame, payload, etype):
     return [f"data: {data}\n\n".encode()]
 
 
+def _item_identity(payload):
+    """输出项的身份：output_index 在同一个项的 added/done 之间是稳定的，优先用它；
+    没有就退回 item.id / item_id。"""
+    idx = payload.get("output_index")
+    if isinstance(idx, int):
+        return f"#{idx}"
+    item = payload.get("item")
+    if isinstance(item, dict) and item.get("id"):
+        return str(item["id"])
+    return str(payload.get("item_id") or "")
+
+
+def sse_turn_looks_complete(state):
+    """上游没发终止事件时，判断"这一轮内容是不是已经完整"。
+
+    判据（对齐 opencodex 的 modelResponsesTerminalRepair）：**开过的每个输出项都收到过
+    `response.output_item.done`，且至少有一个项**。满足就说明内容是完整的，只是缺终止帧 ——
+    该补 `response.completed` 收尾，而不是把这一轮判成"中断"（muse-spark 在 Go/Zen 网关常见）。
+    """
+    done = state.get("items_done") or set()
+    still_open = state.get("items_open") or set()
+    return bool(done) and not still_open
+
+
 def _rewrite_sse_frame(frame, state):
     """One SSE frame. Fail-safe: any anomaly returns the raw frame bytes.
 
@@ -206,6 +230,19 @@ def _rewrite_sse_frame(frame, state):
         if not isinstance(payload, dict):
             return [frame]
         etype = payload.get("type") or event
+
+        # 追踪"开过几个输出项、关掉几个"：上游不发终止帧时靠它判断内容是否已完整
+        # （2026-09-23，见 sse_turn_looks_complete 的说明）
+        if etype == "response.output_item.added":
+            state.setdefault("items_open", set()).add(_item_identity(payload))
+        elif etype == "response.output_item.done":
+            identity = _item_identity(payload)
+            state.setdefault("items_open", set()).discard(identity)
+            state.setdefault("items_done", set()).add(identity)
+            item = payload.get("item")
+            if isinstance(item, dict):
+                # 留一份完成的项：上游不发终止帧时，补的 response.completed 里要带上 output
+                state.setdefault("completed_items", []).append(item)
 
         if etype == "response.completed" or etype == "response.failed" or etype == "response.incomplete":
             state["completed"] = True
