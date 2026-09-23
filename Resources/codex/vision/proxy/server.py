@@ -39,7 +39,13 @@ from .config import (
     MUSE_STALL_HOLD_BYTES,
     MUSE_STALL_HOLD_SECONDS,
     MUSE_STALL_TEXT_LIMIT,
+    IO_BUFFER_BYTES,
+    IO_CHUNK_BYTES,
+    RETRY_BACKOFF_BASE,
     TERMINAL_GRACE_SECONDS,
+    WEB_SEARCH_BRIDGE_LIMIT,
+    WEB_SEARCH_INLINE_LIMIT,
+    WEB_SEARCH_TOOL_LIMIT,
     TERMINAL_IDLE_MAX_ROUNDS,
     ZEN_SUFFIX,
     ZEN_UPSTREAM,
@@ -202,7 +208,7 @@ class _PrefixedResponse:
         return self._upstream.read(n)
 
     def read1(self, n=None):
-        return self.read(65536 if n is None else n)
+        return self.read(IO_CHUNK_BYTES if n is None else n)
 
     def close(self):
         try:
@@ -338,7 +344,7 @@ class Proxy:
                 return
             body = bytearray(body_start)
             while len(body) < content_length:
-                chunk = await reader.read(min(65536, content_length - len(body)))
+                chunk = await reader.read(min(IO_CHUNK_BYTES, content_length - len(body)))
                 if not chunk:
                     break
                 body.extend(chunk)
@@ -389,7 +395,7 @@ class Proxy:
                                     parsed["input"].append({
                                         "type": "message",
                                         "role": "user",
-                                        "content": [{"type": "input_text", "text": f"[web_search sidecar] 已为你实时搜索完成，直接基于以下搜索结果回答：\n{search_res[:4000]}"}]
+                                        "content": [{"type": "input_text", "text": f"[web_search sidecar] 已为你实时搜索完成，直接基于以下搜索结果回答：\n{search_res[:WEB_SEARCH_INLINE_LIMIT]}"}]
                                     })
                                     proactive_changed = True
                                     _log(f"[vision-proxy] proactive REAL search injected for {model} query='{last_text[:30]}' len={len(search_res)}")
@@ -703,7 +709,7 @@ class Proxy:
                                     "status": "completed",
                                     "model": model,
                                     "output": [
-                                        {"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": f"Search results for '{ws_query}':\n{search_res[:4000]}", "annotations": []}]},
+                                        {"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": f"Search results for '{ws_query}':\n{search_res[:WEB_SEARCH_INLINE_LIMIT]}", "annotations": []}]},
                                         {"type": "function_call_output", "call_id": ws_call_id, "output": search_res}
                                     ],
                                     "error": None,
@@ -833,7 +839,7 @@ class Proxy:
                     ))
                     if i < attempts - 1 and transient:
                         _log(f"[vision-proxy] upstream transient error ({reason}), retry {i + 1}/{attempts - 1}")
-                        time.sleep(0.8 * (i + 1))
+                        time.sleep(RETRY_BACKOFF_BASE * (i + 1))
                         continue
                     raise
             raise last_exc
@@ -862,7 +868,7 @@ class Proxy:
         if not wants_stream:
             raw = bytearray()
             while len(raw) < _BRIDGE_NONSTREAM_MAX_BYTES:
-                chunk = await asyncio.to_thread(chat_resp.read, 262144)
+                chunk = await asyncio.to_thread(chat_resp.read, IO_BUFFER_BYTES)
                 if not chunk:
                     break
                 raw.extend(chunk)
@@ -897,14 +903,14 @@ class Proxy:
                         # along with the original web_search call output
                         # The model called web_search, we will provide the results immediately
                         # Append the search results as a new message and tool output
-                        obj["output"].append({"type": "function_call_output", "call_id": ws_call_id, "output": search_res[:6000]})
+                        obj["output"].append({"type": "function_call_output", "call_id": ws_call_id, "output": search_res[:WEB_SEARCH_TOOL_LIMIT]})
                         # Also add a synthetic message with the results so the model can see them in this turn
                         # (Codex will see the tool output in the next request, but for immediate feedback we add a message)
                         # Actually, the current response already has the function_call, we are adding the output
                         # The client will then make a new request with this output in history, but for now we return
                         # a response that already contains both the call and the output, so the next turn is not needed
                         # To make it work, we will also add a message that summarizes the search
-                        obj["output"].append({"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": f"Search results for '{ws_query}':\n{search_res[:3000]}", "annotations": []}]})
+                        obj["output"].append({"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": f"Search results for '{ws_query}':\n{search_res[:WEB_SEARCH_BRIDGE_LIMIT]}", "annotations": []}]})
                         _log(f"[vision-proxy] bridge sidecar injected search results for {model} len={len(search_res)}")
                     except Exception as e:
                         _log(f"[vision-proxy] bridge sidecar failed: {e!r}")
@@ -925,7 +931,7 @@ class Proxy:
         upstream_ended_cleanly = False
         while not tr.truncated and not tr.finished:
             try:
-                chunk = await asyncio.to_thread(read_chunk, 65536)
+                chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except Exception as exc:  # socket reset mid-stream etc.
                 _log(f"[vision-proxy] bridge upstream read error model={model}: {exc!r}")
                 break
@@ -972,7 +978,7 @@ class Proxy:
                 resp.close()
             except Exception:
                 pass
-            await asyncio.sleep(0.8 * (attempt + 1))
+            await asyncio.sleep(RETRY_BACKOFF_BASE * (attempt + 1))
         return last
 
     async def _open_messages_upstream(self, parsed, path, headers, upstream):
@@ -1010,7 +1016,7 @@ class Proxy:
                 _log(f"[vision-proxy] messages bridge open failed model={model} "
                      f"attempt={attempt + 1}/{attempts}: {exc!r} ({reason})")
                 if attempt < attempts - 1:
-                    await asyncio.sleep(0.8 * (attempt + 1))
+                    await asyncio.sleep(RETRY_BACKOFF_BASE * (attempt + 1))
                     continue
                 return False
             try:
@@ -1042,7 +1048,7 @@ class Proxy:
                     messages_resp.close()
                 except Exception:
                     pass
-            await asyncio.sleep(0.8 * (attempt + 1))
+            await asyncio.sleep(RETRY_BACKOFF_BASE * (attempt + 1))
         return False
 
     async def _send_messages_bridge(self, writer, messages_resp, original_parsed, model, txn=None):
@@ -1054,7 +1060,7 @@ class Proxy:
         if not wants_stream:
             raw = bytearray()
             while len(raw) < _BRIDGE_NONSTREAM_MAX_BYTES:
-                chunk = await asyncio.to_thread(messages_resp.read, 262144)
+                chunk = await asyncio.to_thread(messages_resp.read, IO_BUFFER_BYTES)
                 if not chunk:
                     break
                 raw.extend(chunk)
@@ -1081,7 +1087,7 @@ class Proxy:
         upstream_ended_cleanly = False
         while not tr.truncated and not tr.finished:
             try:
-                chunk = await asyncio.to_thread(read_chunk, 65536)
+                chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except Exception as exc:
                 _log(f"[vision-proxy] messages bridge upstream read error model={model}: {exc!r}")
                 break
@@ -1158,7 +1164,7 @@ class Proxy:
         read_chunk = getattr(response, "read1", None) or response.read
         while True:
             try:
-                chunk = await asyncio.to_thread(read_chunk, 65536)
+                chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except Exception as exc:
                 _log(f"[vision-proxy] muse stall probe read failed: {exc!r}")
                 break
@@ -1245,7 +1251,7 @@ class Proxy:
 
         while True:
             try:
-                chunk = await asyncio.to_thread(read_chunk, 65536)
+                chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except (socket.timeout, TimeoutError):
                 if sse_turn_looks_complete(state):
                     _log(f"[vision-proxy] 上游空闲 {grace:.0f}s 且内容已完整 → 收尾"

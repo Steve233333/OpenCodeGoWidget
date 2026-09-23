@@ -196,69 +196,6 @@ def _sse_data_frame(payload):
 
 _sse_data_frame.seq = 1
 
-
-def _build_chat_fallback_events(model, raw, effort=None, tool_param_types=None):
-    """Turn aggregated chat stream/JSON output into full Responses SSE bytes."""
-    base = _bridge_base_response(model)
-    frames = [_sse_data_frame({"type": "response.created", "response": base}),
-              _sse_data_frame({"type": "response.in_progress", "response": base})]
-    items_done, output_index = [], 0
-    if isinstance(raw, bytes):
-        text, call_list, _, usage = _parse_chat_stream_chunks(raw)
-    else:
-        obj = raw
-        choice = (obj.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        content = message.get("content")
-        text = content if isinstance(content, str) else ""
-        if not text and isinstance(content, list):
-            text = "".join(p.get("text", "") for p in content if isinstance(p, dict))
-        call_list = [{"id": tc.get("id"),
-                      "name": ((tc.get("function") or {}).get("name") or ""),
-                      "args": ((tc.get("function") or {}).get("arguments") or "")}
-                     for tc in message.get("tool_calls") or []]
-        usage = obj.get("usage")
-    # MiMo 会把工具调用写成 XML 混在正文里（2026-09-23）：先摘出来当真正的 function_call
-    text, markup_calls = parse_mimo_tool_markup(text, tool_param_types)
-    call_list = call_list + markup_calls
-    if text:
-        msg_id = "msg_" + uuid.uuid4().hex[:24]
-        added_item = {"id": msg_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}
-        frames.append(_sse_data_frame({"type": "response.output_item.added", "output_index": output_index, "item": added_item}))
-        empty_part = {"type": "output_text", "text": "", "annotations": []}
-        frames.append(_sse_data_frame({"type": "response.content_part.added", "item_id": msg_id,
-                                       "output_index": output_index, "content_index": 0, "part": empty_part}))
-        frames.append(_sse_data_frame({"type": "response.output_text.delta", "item_id": msg_id,
-                                       "output_index": output_index, "content_index": 0, "delta": text}))
-        final_part = {"type": "output_text", "text": text, "annotations": []}
-        frames.append(_sse_data_frame({"type": "response.output_text.done", "item_id": msg_id,
-                                       "output_index": output_index, "content_index": 0, "text": text}))
-        frames.append(_sse_data_frame({"type": "response.content_part.done", "item_id": msg_id,
-                                       "output_index": output_index, "content_index": 0, "part": final_part}))
-        done_item = dict(added_item, status="completed", content=[final_part])
-        frames.append(_sse_data_frame({"type": "response.output_item.done", "output_index": output_index, "item": done_item}))
-        items_done.append(done_item)
-        output_index += 1
-    for call in call_list:
-        args = _sanitize_fc_args(call["args"] or "{}")
-        call_id = call["id"] or ("call_" + uuid.uuid4().hex[:16])
-        fc_id = "fc_" + uuid.uuid4().hex[:24]
-        added_item = {"id": fc_id, "type": "function_call", "status": "in_progress",
-                      "call_id": call_id, "name": call["name"], "arguments": ""}
-        frames.append(_sse_data_frame({"type": "response.output_item.added", "output_index": output_index, "item": added_item}))
-        frames.append(_sse_data_frame({"type": "response.function_call_arguments.delta", "item_id": fc_id,
-                                       "output_index": output_index, "delta": args}))
-        frames.append(_sse_data_frame({"type": "response.function_call_arguments.done", "item_id": fc_id,
-                                       "output_index": output_index, "arguments": args}))
-        done_item = dict(added_item, status="completed", arguments=args)
-        frames.append(_sse_data_frame({"type": "response.output_item.done", "output_index": output_index, "item": done_item}))
-        items_done.append(done_item)
-        output_index += 1
-    final = dict(base, status="completed", output=items_done, usage=_chat_usage_to_responses(usage))
-    frames.append(_sse_data_frame({"type": "response.completed", "response": final}))
-    return b"".join(frames)
-
-
 def _build_chat_fallback_json(model, obj, effort=None, tool_param_types=None):
     """Turn a non-streaming chat completion JSON into a Responses response object."""
     choice = (obj.get("choices") or [{}])[0]

@@ -291,3 +291,15 @@ APPLY_PATCH_INPUT_DESCRIPTION = (
     "add space-prefixed context lines or a single-sided `@@ <header>` if the `-` line is ambiguous. "
     "Relative paths only; never `@@ ... @@`."
 )
+
+
+# ---------------------------------------------------------------------------
+# I/O 与重试的常量（2026-09-23 收敛：这些以前散在 server.py/sse.py 的逻辑里）
+# ---------------------------------------------------------------------------
+IO_CHUNK_BYTES = 65536            # 流式读块（SSE / chat / messages 都用它）
+IO_BUFFER_BYTES = 262144          # 非流式缓冲读块
+RETRY_BACKOFF_BASE = 0.8          # 第 N 次重试等 RETRY_BACKOFF_BASE * N 秒
+WEB_SEARCH_INLINE_LIMIT = 4000    # 搜索结果注入到 input 时的截断
+WEB_SEARCH_TOOL_LIMIT = 6000      # 注入到 function_call_output 时的截断
+WEB_SEARCH_BRIDGE_LIMIT = 3000    # 桥接路径注入时的截断
+SSE_MAX_BUFFERED_FRAME = 8 * 1024 * 1024   # 单帧缓冲上限（超过就整块当 raw frame 放行）

@@ -90,19 +90,23 @@ def _sse_bytes(chunks):
 
 
 def t_stream_text_and_tool():
-    sse = _sse_bytes([
+    """chat 流 → Responses：正文 + 工具调用 + usage（走生产路径：增量翻译器）"""
+    tr = vp.ChatBridgeTranslator("mimo-v2.5", effort="high")
+    out = tr.on_created()
+    for ev in [
         {"choices": [{"delta": {"role": "assistant", "content": "你"}}]},
         {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_z", "type": "function",
                                                 "function": {"name": "shell", "arguments": "{\"cmd\""}}]}}]},
         {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": ":\"pwd\"}"}}]}}]},
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}],
          "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
-    ])
-    frames = vp._build_chat_fallback_events("mimo-v2.5", sse, "high")
-    lines = [l for l in frames.decode().split("\n") if l.startswith("data: ")]
-    types = [json.loads(l[6:])["type"] for l in lines]
-    assert types[0] == "response.created" and types[-1] == "response.completed"
-    completed = json.loads(lines[-1][6:])
+    ]:
+        out += tr.on_chat_frame(("data: " + json.dumps(ev) + "\n\n").encode())
+    out += tr.on_finish()
+    lines = [l for l in out.decode().split("\n") if l.startswith("data: ")]
+    types = [json.loads(l[5:].strip())["type"] for l in lines]
+    assert types[0] == "response.created" and types[-1] == "response.completed", types[:3] + types[-3:]
+    completed = json.loads(lines[-1][5:].strip())
     assert completed["response"]["status"] == "completed"
     assert completed["response"]["usage"]["total_tokens"] == 15
     fc = [o for o in completed["response"]["output"] if o["type"] == "function_call"][0]
@@ -110,13 +114,15 @@ def t_stream_text_and_tool():
 
 
 def t_stream_swallowed_brace_repair():
+    """坏掉的 JSON 参数（少了 {）也要修回来 —— 走生产路径：增量翻译器"""
     bad_args = 'cmd":"pwd"}'  # missing {" prefix (fault-20 style)
     chunk = json.dumps({"choices": [{"delta": {"tool_calls": [
         {"index": 0, "id": "c9", "type": "function",
          "function": {"name": "shell", "arguments": bad_args}}]}, "finish_reason": "tool_calls"}]})
-    frames = vp._build_chat_fallback_events("glm-5.3", ("data: " + chunk + "\n\n").encode())
-    lines = [l for l in frames.decode().split("\n") if l.startswith("data: ")]
-    completed = json.loads(lines[-1][6:])
+    tr = vp.ChatBridgeTranslator("glm-5.3")
+    out = tr.on_created() + tr.on_chat_frame(("data: " + chunk + "\n\n").encode()) + tr.on_finish()
+    lines = [l for l in out.decode().split("\n") if l.startswith("data: ")]
+    completed = json.loads(lines[-1][5:].strip())
     fc = [o for o in completed["response"]["output"] if o["type"] == "function_call"][0]
     assert json.loads(fc["arguments"]) == {"cmd": "pwd"}, fc["arguments"]
 

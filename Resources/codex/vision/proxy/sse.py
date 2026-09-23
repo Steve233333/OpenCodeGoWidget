@@ -11,6 +11,7 @@ from .apply_patch import (
 )
 from .config import (
     MUSE_STALL_TEXT_LIMIT,
+    SSE_MAX_BUFFERED_FRAME,
     _MUSE_STALL_MARKERS,
     _log,
 )
@@ -106,7 +107,7 @@ def _sse_event(event_type, payload):
     return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
 
-def _split_sse_frame(buffer, max_buffered=8 * 1024 * 1024):
+def _split_sse_frame(buffer, max_buffered=SSE_MAX_BUFFERED_FRAME):
     """Return (frame_bytes|None, rest). The frame INCLUDES its trailing
     delimiter so passthrough stays byte-identical. If no delimiter and the
     buffer exceeds the cap, return the whole buffer as a raw frame to avoid

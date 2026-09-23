@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.35.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.36.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.35.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.36.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.35.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.35.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.36.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.36.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,23 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.36 — 转换层收敛 ④（先行）：魔数入表、删死代码、补架构文档
+
+Phase ① 之后先把**风险最低、收益明确**的第 ④ 阶段做掉（② `handle()` 拆管线、③ SSE 管道化还在排队）：
+
+- **24 处裸魔数变成具名常量**（`proxy/config.py`）：`IO_CHUNK_BYTES` / `IO_BUFFER_BYTES` /
+  `RETRY_BACKOFF_BASE` / `WEB_SEARCH_*_LIMIT` / `SSE_MAX_BUFFERED_FRAME` —— 值一个没改，只是不再是
+  散在逻辑里的 `65536`、`0.8 * (i + 1)`、`[:4000]`。
+- **删掉只被测试用的死代码** `_build_chat_fallback_events`（生产早走增量翻译器）：它那两条测试
+  （"流里正文 + 工具调用拼装"、"坏 JSON 参数修复"）**改走生产路径**（`ChatBridgeTranslator`）继续守着，
+  死代码没了、覆盖没少。
+- **新增 `Resources/codex/vision/README.md`**：一张图看懂模块分工、策略表字段含义、每个模型家族现在的行为、
+  "症状 → 先看哪里"对照表、测试与门槛。以后加模型或排查问题不用再翻代码。
+
+验证：全量 **47 + 3 + 8 + 31 + 14 + 8** 全绿；真机冒烟四个家族全绿（DeepSeek / MiMo / Muse / GLM）。
+
+版本 **1.1.11.36 (76)**。
 
 ### v1.1.11.35 — 转换层收敛 ①：模型策略只有一处真源
 
@@ -148,43 +165,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 真机实测：同一条 muse 回答（137 字）以前同一毫秒全出来，现在分成 16 帧、0.6 秒内逐步显示。
 
 版本 **1.1.11.34 (74)**。
-
-### v1.1.11.33 — Muse「没有流式文字」：一半是网关、一半是我们的守卫
-
-**先说结论：这次不是终止修复的锅，主要也不是我们能控制的。** 直连网关（完全绕开我们）实测同一请求：
-
-```
-1.7s   response.created / in_progress / output_item.added（一个 reasoning 项）
-       …… 中间 50 秒一声不响 ……
-56.2s  output_item.done + 正文 delta 开始
-89.2s  response.incomplete
-```
-
-**OpenCode Go 网关对 muse 就是"先静默憋着、最后一次性吐"**：它在 1.7 秒只发了个"开始思考"的帧，
-真正的推理与正文要等模型整轮想完才 flush 出来。所以客户端在那 50 秒里只能是"正在思考"。
-
-我们能控制的两块，这次都修了：
-
-**① 我们的空转守卫以前会把整段读完才转发（放大了这个问题）。**
-`_guard_muse_stall` 原本 `response.read()` 读完整个流再判断 —— muse 于是**永远**不是逐字流式，
-长回合里客户端要等整段结束才看到东西。现在改成**有限扣留**：出现工具调用 / 正文超过 300 字 /
-扣满 32 KB / 扣满 8 秒 → 立刻放行（已读部分先给客户端，剩下的边流边转）；只有"短叙述 + 没工具调用
-+ 流已结束"那种经典空转才重发（上限仍 2 次，熔断不变）。重发拿到的新响应走同一个守卫（递归、次数递减），
-所以重发之后也是流式的。
-**踩到的坑**：第一版放行点仍然是 39.8 秒 —— 因为用了 `read(65536)`，它会**阻塞到凑满 64 KB**；
-换成 `read1`（有数据就返回）后扣留窗口才真正生效。
-
-**② Muse 的推理也吃 `max_output_tokens` —— 预算小就会"只思考不出字"。**
-实测：80 预算那一轮 `output_tokens=80` 里 `reasoning_tokens=77`，于是**一个字没吐**、
-直接 `response.incomplete` + `incomplete_details.reason=max_output_tokens`（截图里你用的正是「极高」档）。
-新增下限 `MUSE_MIN_MAX_OUTPUT_TOKENS = 16384`：**只在客户端显式给了、且小于下限时抬高**，
-没给就照上游默认（不擅自设上限）；日志会记 `muse max_output_tokens 80 → 16384`。
-
-验证：同一个"80 预算"请求 —— 修前 `response.incomplete` + 正文 0 字；修后 18.3 秒、正文 45 字、
-末帧 `response.completed`。新增单测（守卫放行/仍会重发/重发次数上限/预算下限），
-Python 全量 **45 + 8 + 31 + 14 + 8** 全绿。
-
-版本 **1.1.11.33 (73)**。
 
 ## 本地构建
 
