@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.36.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.37.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.36.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.37.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.36.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.36.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.37.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.37.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,35 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.37 — 转换层收敛收尾：SSE 引擎拆完 + handle 拆完（并加部署护栏）
+
+**③ SSE 引擎（完成）**
+- `_rewrite_sse_frame` 159 → **22 行**：解析 → 记账 → 按帧类型查表分派 → 没认领就原样字节转发；
+  5 个 handler（`_rf_terminal` / `_rf_output_item_added` / `_rf_fc_args_delta` / `_rf_fc_args_done` /
+  `_rf_output_item_done`）。
+- `_complete_sse_frame` 247 → **39 行**：三个共享 `seq/out/compat` 的闭包抽成 `_ChatCompatCtx` 类，
+  7 个帧分支变成类方法 + `_COMPAT_HANDLERS` 分派表。
+- 护栏：`tests/test_sse_golden.py` + `tests/fixtures/sse_golden.json` —— 用**重构前**的逐帧输出当规格
+  （deepseek 原生流 / muse 命名空间工具 / apply_patch 参数流 / 无终止帧 / 垃圾帧 / 重复 item_id），
+  改完**逐字节一致**；另有一条专门钉"没登记的帧必须原样字节转发"。
+
+**② 请求管线（完成）**
+- `handle()` 485 → **31 行**（只剩：建 txn → `_turn_begin` → `_turn_execute` → 异常映射 → 收尾日志）。
+- `_turn_begin`（52 行）：读请求体 → 准备 → 回传 `turn`；`_prepare_parsed_request`（89 行）负责模型名兼容 /
+  apply_patch 改写 / 合成搜索 / 工具历史修补 / muse 注入 / 预算与推理档位；`_turn_execute`（341 行）承接
+  上游与路由执行（这一块内部还能再按 route/bridge/native 细分，但不影响本阶段目标）。
+- server.py 1398 → 849 行；pipeline.py 独立成文件（`RequestPipelineMixin` 组合进 `Proxy`）。
+
+**新增部署护栏（今天的教训）**
+`scripts/deploy-proxy.sh`：备份运行目录 → 同步 → 强制重启 → **跑四家族冒烟** → 失败自动回滚并重启。
+起因：这次我把 `pipeline.py` 的重构**先部署再冒烟**，漏传一个变量（`incoming_headers`）导致四家族全 502，
+你的 Codex 先踩到了；补传后已恢复。以后统一走这个脚本，坏的代码上不了线。
+
+验证：全量 **47 + 3 + 8 + 31 + 14 + 8** 全绿；SSE 基线逐字节一致；真机冒烟四家族全绿
+（DeepSeek 47 / MiMo 44 / Muse 24 / GLM 70 字，markup 均 0）。
+
+版本 **1.1.11.37 (77)**。
 
 ### v1.1.11.36 — 转换层收敛 ④（先行）：魔数入表、删死代码、补架构文档
 
@@ -148,23 +177,6 @@ Phase ① 之后先把**风险最低、收益明确**的第 ④ 阶段做掉（�
 （DeepSeek 46 字 / MiMo 27 字 / Muse 30 字 / GLM 63 字，markup 均 0）。
 
 版本 **1.1.11.35 (75)**。
-
-### v1.1.11.34 — 正文"闪一下全出来" → 按正常逐字滴出去
-
-**原因**：上游（尤其 Go 网关给 muse）是在末尾把几百个小 delta **一次性涌过来**的（直连实测：
-56.2 秒那一刻 397 帧一起到）——不是我们丢帧，是真的没有"字"可以一个个发。
-
-**做法（漏桶 / TextDeltaPacer）**：转发时按固定速率把正文滴出去，看起来就是正常逐字：
-
-- 上游本来就均匀的流（deepseek 那种每帧几字）→ 桶是空的，**零延迟、零改动**；
-- 上游猛推 → 按 300 字/秒滴，片长 ~40ms；积压超过 4 秒的量就**自动加速**（上限 1500 字/秒），
-  这样长答案不会滴太久、也不会在结尾"啪一下补完"；
-- **只碰 `response.output_text.delta`**：工具调用参数帧（`function_call_arguments.delta`，apply_patch 靠它）
-  和其它帧一律零延迟原样转发 —— 这条我专门写了断言，免得把工具调用也拖慢。
-
-真机实测：同一条 muse 回答（137 字）以前同一毫秒全出来，现在分成 16 帧、0.6 秒内逐步显示。
-
-版本 **1.1.11.34 (74)**。
 
 ## 本地构建
 

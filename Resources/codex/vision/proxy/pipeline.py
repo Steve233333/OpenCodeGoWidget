@@ -115,6 +115,8 @@ def _rewrite_go_model(parsed):
 
 
 class RequestPipelineMixin:
+    """Proxy 的请求管线（作为 mixin 与 Proxy 组合；方法依赖 Proxy 上的网络/工具方法）。"""
+
 
     async def _prepare_parsed_request(self, parsed, body):
         """请求准备（原 handle() 里那段 82 行）：模型名兼容（zen/go）、apply_patch 工具改写、
@@ -208,60 +210,14 @@ class RequestPipelineMixin:
 
     """Proxy 的请求管线（作为 mixin 与 Proxy 组合；方法依赖 Proxy 上的网络/工具方法）。"""
 
-    async def handle(self, reader, writer):
+    async def _turn_execute(self, writer, turn, txn):
+        """上游准备 → 路由决策 → 桥/原生执行 → relay（handle() 的执行段，2026-09-23 拆出来）。"""
+        method = turn["method"]; path = turn["path"]; body = turn["body"]
+        parsed = turn["parsed"]; model = turn["model"]
+        zen_route = turn["zen_route"]; go_route = turn["go_route"]
+        incoming_headers = turn["incoming_headers"]
         response = None
-        response_started = False
-        txn = {"t0": time.monotonic(), "method": "?", "path": "?", "model": "-",
-               "route": "direct", "status": None, "bridge": None}
         try:
-            request_head = await self._read_head(reader)
-            if request_head is None:
-                return
-            request_line, incoming_headers, body_start = request_head
-            method, path, _ = request_line.split(" ", 2)
-            txn["method"], txn["path"] = method, path
-            try:
-                content_length = int(_header_value(incoming_headers, "content-length") or 0)
-            except ValueError:
-                await self._send_error(writer, 400, "invalid Content-Length")
-                return
-            body = bytearray(body_start)
-            while len(body) < content_length:
-                chunk = await reader.read(min(IO_CHUNK_BYTES, content_length - len(body)))
-                if not chunk:
-                    break
-                body.extend(chunk)
-            if len(body) < content_length:
-                await self._send_error(writer, 400, "incomplete request body")
-                return
-            parsed = None
-            if body:
-                try:
-                    parsed = json.loads(bytes(body))
-                except json.JSONDecodeError:
-                    pass
-            zen_changed = go_changed = False
-            if isinstance(parsed, dict):
-                body, zen_changed, go_changed = await self._prepare_parsed_request(parsed, body)
-            model = parsed.get("model") if isinstance(parsed, dict) else None
-            zen_route = isinstance(parsed, dict) and zen_changed
-            go_route = isinstance(parsed, dict) and go_changed
-            self._last_model = model
-            txn["model"] = model or "-"
-            txn["route"] = "go" if go_route else ("zen" if zen_route else "direct")
-            _log(f"[vision-proxy] request {method} {path} model={model} body_bytes={len(body)} zen={zen_route} go={go_route}")
-            # intercept search=true history -> search=false model (preserve integrity)
-            if go_route and _intercept_unsupported_history(parsed, model):
-                txn["status"] = 400
-                await self._send_error(
-                    writer,
-                    400,
-                    "Cross-model history blocked: target model does not support web_search (mimo/GLM/Zen free). "
-                    "History contains web_search_call from previous DeepSeek/Luna/Muse session. "
-                    "Please start a new session for this model to preserve context integrity. "
-                    f"Model={model} go_route={go_route}",
-                )
-                return
             if zen_route or go_route:
                 zen_key = os.environ.get("ZEN_API_KEY")
                 if not zen_key:
@@ -445,7 +401,7 @@ class RequestPipelineMixin:
                                 await self._write_head(writer, 200, [("Content-Type", "application/json")], len(body_bytes))
                                 writer.write(body_bytes)
                                 await writer.drain()
-                                response_started = True
+                                txn["response_started"] = True
                                 txn["status"] = 200
                                 txn["bridge"] = "web-search-sidecar"
                                 # Close original response and return
@@ -462,7 +418,7 @@ class RequestPipelineMixin:
                         await self._write_head(writer, getattr(response, "status", 200), list(response.headers.items()), len(body_bytes))
                         writer.write(body_bytes)
                         await writer.drain()
-                        response_started = True
+                        txn["response_started"] = True
                         txn["status"] = getattr(response, "status", 200)
                         return
                 except Exception as e:
@@ -523,7 +479,7 @@ class RequestPipelineMixin:
                                 await self._write_head(writer, 200, [("Content-Type", "application/json")], len(body_bytes))
                                 writer.write(body_bytes)
                                 await writer.drain()
-                                response_started = True
+                                txn["response_started"] = True
                                 txn["status"] = 200
                                 txn["bridge"] = "web-search-sidecar-response"
                                 try:
@@ -574,7 +530,7 @@ class RequestPipelineMixin:
             except Exception as e:
                 _log(f"[vision-proxy] sidecar response handling failed: {e!r}")
 
-            response_started = True
+            txn["response_started"] = True
             txn["status"] = getattr(response, "status", None) or getattr(response, "code", None)
             # 2026-09-20：Muse 空转兜底（narration-only turn）。是不是空转要读完整段响应才知道，
             # 所以重发只能在 _send_response 里做；这里把「拿同一份请求体重发一次」的能力传进去。
@@ -590,11 +546,81 @@ class RequestPipelineMixin:
             # model 显式传进去：_last_model 是服务实例上的共享字段，并发请求会互相覆盖，
             # 用它的后果是"另一个模型的响应被按 Muse 规则改名/漏改名"。
             await self._send_response(writer, response, model=model, retry=stall_retry)
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+
+    async def _turn_begin(self, reader, writer, txn):
+        """读请求 → 准备（模型名兼容/注入/预算/历史拦截）→ 回传一个 turn；请求不合法返回 None。"""
+        request_head = await self._read_head(reader)
+        if request_head is None:
+            return None
+        request_line, incoming_headers, body_start = request_head
+        method, path, _ = request_line.split(" ", 2)
+        txn["method"], txn["path"] = method, path
+        try:
+            content_length = int(_header_value(incoming_headers, "content-length") or 0)
+        except ValueError:
+            await self._send_error(writer, 400, "invalid Content-Length")
+            return None
+        body = bytearray(body_start)
+        while len(body) < content_length:
+            chunk = await reader.read(min(IO_CHUNK_BYTES, content_length - len(body)))
+            if not chunk:
+                break
+            body.extend(chunk)
+        if len(body) < content_length:
+            await self._send_error(writer, 400, "incomplete request body")
+            return None
+        parsed = None
+        if body:
+            try:
+                parsed = json.loads(bytes(body))
+            except json.JSONDecodeError:
+                pass
+        zen_changed = go_changed = False
+        if isinstance(parsed, dict):
+            body, zen_changed, go_changed = await self._prepare_parsed_request(parsed, body)
+        model = parsed.get("model") if isinstance(parsed, dict) else None
+        zen_route = isinstance(parsed, dict) and zen_changed
+        go_route = isinstance(parsed, dict) and go_changed
+        self._last_model = model
+        txn["model"] = model or "-"
+        txn["route"] = "go" if go_route else ("zen" if zen_route else "direct")
+        _log(f"[vision-proxy] request {method} {path} model={model} body_bytes={len(body)} zen={zen_route} go={go_route}")
+        # intercept search=true history -> search=false model (preserve integrity)
+        if go_route and _intercept_unsupported_history(parsed, model):
+            txn["status"] = 400
+            await self._send_error(
+                writer,
+                400,
+                "Cross-model history blocked: target model does not support web_search (mimo/GLM/Zen free). "
+                "History contains web_search_call from previous DeepSeek/Luna/Muse session. "
+                "Please start a new session for this model to preserve context integrity. "
+                f"Model={model} go_route={go_route}",
+            )
+            return None
+        return {"method": method, "path": path, "body": body, "parsed": parsed,
+                "model": model, "zen_route": zen_route, "go_route": go_route,
+                "incoming_headers": incoming_headers}
+
+    async def handle(self, reader, writer):
+        response = None
+        txn = {"t0": time.monotonic(), "method": "?", "path": "?", "model": "-",
+               "route": "direct", "status": None, "bridge": None}
+        try:
+            turn = await self._turn_begin(reader, writer, txn)
+            if turn is None:
+                return
+            await self._turn_execute(writer, turn, txn)
         except (ConnectionResetError, BrokenPipeError):
             txn["status"] = txn["status"] or 499
         except Exception as exc:
             _log(f"[vision-proxy] handler error: {exc!r}\n{__import__('traceback').format_exc()}")
-            if not response_started:
+            if not txn.get("response_started"):
                 txn["status"] = 502
                 # 2026-09-19：把底层异常类型带出去，Codex 里那句 502 才有信息量
                 # （以前只有 "Upstream proxy request failed"，看不出是 TLS/DNS/超时还是别的）。
@@ -607,8 +633,6 @@ class RequestPipelineMixin:
                 _log("[vision-proxy] txn {method} {path} model={model} route={route} "
                      "status={status} bridge={bridge} ms={ms}".format(
                          ms=int((time.monotonic() - txn["t0"]) * 1000), **{k: v for k, v in txn.items() if k != "t0"}))
-            if response is not None:
-                response.close()
             writer.close()
             try:
                 await writer.wait_closed()

@@ -526,6 +526,145 @@ class _ChatCompatCtx:
         self.seq += 2
         self.compat["seq"] = self.seq
 
+    def _on_text_delta(self, frame, payload, rid, rmodel):
+        self.ensure_started(rid, rmodel)
+        if not compat.get("msg_item"):
+            item_id = f"msg_{compat.get('self.seq', 0)}"
+            output_index = compat.get("next_index", 0)
+            compat["msg_item"] = {"item_id": item_id, "output_index": output_index,
+                                  "text": "", "done": False}
+            self.out.append(_sse_event("response.output_item.added", {
+                "type": "response.output_item.added", "sequence_number": self.seq,
+                "output_index": output_index,
+                "item": {"id": item_id, "type": "message", "status": "in_progress",
+                         "role": "assistant",
+                         "content": [{"type": "output_text", "text": "", "annotations": []}]}}))
+            self.out.append(_sse_event("response.content_part.added", {
+                "type": "response.content_part.added", "sequence_number": self.seq + 1,
+                "item_id": item_id, "output_index": output_index, "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []}}))
+            self.seq += 2
+            compat["seq"] = self.seq
+        item = compat["msg_item"]
+        delta = payload.get("delta", "")
+        if isinstance(delta, str):
+            item["text"] += delta
+        new_payload = dict(payload)
+        new_payload["item_id"] = item["item_id"]
+        new_payload["output_index"] = item["output_index"]
+        new_payload["content_index"] = 0
+        self.out.append(_sse_event("response.output_text.delta", new_payload))
+        return self.out
+
+    def _on_item_added(self, frame, payload, rid, rmodel):
+        item = payload.get("item") or {}
+        if item.get("type") == "function_call":
+            self.ensure_started(rid or item.get("id"), rmodel)
+            item_id = item.get("id") or f"fc_{compat.get('self.seq', 0)}"
+            output_index = payload.get("output_index", compat.get("next_index", 0) or 0)
+            compat["fc_item"] = {
+                "item_id": item_id,
+                "output_index": output_index,
+                "name": item.get("name"),
+                "call_id": item.get("call_id") or item_id,
+                "args_acc": item.get("arguments") if isinstance(item.get("arguments"), str) else "",
+                "done": False,
+            }
+        return [frame]
+
+    def _on_fc_args_delta(self, frame, payload, rid, rmodel):
+        self.ensure_started(rid, rmodel)
+        item = compat.get("fc_item")
+        if not item:
+            item_id = f"fc_{compat.get('self.seq', 0)}"
+            output_index = compat.get("next_index", 1) or 1
+            compat["fc_item"] = {"item_id": item_id, "output_index": output_index,
+                                 "name": None, "call_id": None,
+                                 "args_acc": "", "done": False}
+            item = compat["fc_item"]
+            self.out.append(_sse_event("response.output_item.added", {
+                "type": "response.output_item.added", "sequence_number": self.seq,
+                "output_index": output_index,
+                "item": {"id": item_id, "type": "function_call", "status": "in_progress",
+                         "name": "unknown", "call_id": item_id, "arguments": ""}}))
+            self.seq += 1
+            compat["seq"] = self.seq
+        delta = payload.get("delta", "")
+        if isinstance(delta, str):
+            item["args_acc"] += delta
+        new_payload = dict(payload)
+        new_payload["item_id"] = item["item_id"]
+        new_payload["output_index"] = item["output_index"]
+        self.out.append(_sse_event("response.function_call_arguments.delta", new_payload))
+        return self.out
+
+    def _on_fc_args_done(self, frame, payload, rid, rmodel):
+        item = compat.get("fc_item")
+        if item:
+            if isinstance(payload.get("arguments"), str):
+                item["args_acc"] = payload["arguments"]
+            raw_args = payload.get("arguments")
+            new_payload = dict(payload)
+            new_payload["item_id"] = item["item_id"]
+            new_payload["output_index"] = item["output_index"]
+            if _fc_args_broken(raw_args):
+                repaired = _repair_json_object_args(raw_args)
+                if repaired != raw_args:
+                    _log(f"[vision-proxy] repaired fc args in arguments.done item_id={item['item_id']} "
+                         f"model={compat.get('model')} broken={raw_args[:60]!r}")
+                    new_payload["arguments"] = repaired
+                    return [_sse_event("response.function_call_arguments.done", new_payload)]
+            return [_sse_event("response.function_call_arguments.done", new_payload)]
+        # no tracked fc_item (e.g. args.done without prior added/delta): repair in place
+        raw_args = payload.get("arguments")
+        if _fc_args_broken(raw_args):
+            repaired = _repair_json_object_args(raw_args)
+            if repaired != raw_args:
+                _log(f"[vision-proxy] repaired fc args in arguments.done (untracked) "
+                     f"broken={raw_args[:60]!r}")
+                new_payload = dict(payload)
+                new_payload["arguments"] = repaired
+                return [_sse_event("response.function_call_arguments.done", new_payload)]
+        return [frame]
+
+    def _on_terminal(self, frame, payload, rid, rmodel):
+        if compat.get("started"):
+            self.close_message()
+            self.close_function_call()
+        self.out.append(frame)
+        return self.out
+
+    def _on_item_done(self, frame, payload, rid, rmodel):
+        item = payload.get("item") or {}
+        if item.get("type") == "function_call" and compat.get("fc_item"):
+            compat["fc_item"]["done"] = True
+        if item.get("type") == "function_call" and _fc_args_broken(item.get("arguments")):
+            repaired = _repair_json_object_args(item.get("arguments"))
+            if repaired != item.get("arguments"):
+                _log(f"[vision-proxy] repaired fc args in output_item.done call_id={item.get('call_id')} "
+                     f"model={compat.get('model')} broken={str(item.get('arguments'))[:60]!r}")
+                new_payload = dict(payload)
+                fixed_item = dict(item)
+                fixed_item["arguments"] = repaired
+                new_payload["item"] = fixed_item
+                return [_sse_event("response.output_item.done", new_payload)]
+        return [frame]
+
+    def _on_text_done(self, frame, payload, rid, rmodel):
+        return [frame]
+
+# 帧类型 → 补帧处理器（2026-09-23：原先是一条 if/elif 链）
+_COMPAT_HANDLERS = {
+    "response.output_text.delta": "_on_text_delta",
+    "response.output_item.added": "_on_item_added",
+    "response.function_call_arguments.delta": "_on_fc_args_delta",
+    "response.function_call_arguments.done": "_on_fc_args_done",
+    "response.completed": "_on_terminal",
+    "response.failed": "_on_terminal",
+    "response.incomplete": "_on_terminal",
+    "response.output_item.done": "_on_item_done",
+}
+
 def _complete_sse_frame(frame, state):
     """Repair chat-adapted zen/go streams (mimo/glm/kimi/hy3) that omit the
     standard Responses SSE envelope: no response.created/in_progress, and
@@ -556,132 +695,10 @@ def _complete_sse_frame(frame, state):
 
         ctx = _ChatCompatCtx(compat)
 
-        if etype == "response.output_text.delta":
-            ctx.ensure_started(rid, rmodel)
-            if not compat.get("msg_item"):
-                item_id = f"msg_{compat.get('ctx.seq', 0)}"
-                output_index = compat.get("next_index", 0)
-                compat["msg_item"] = {"item_id": item_id, "output_index": output_index,
-                                      "text": "", "done": False}
-                ctx.out.append(_sse_event("response.output_item.added", {
-                    "type": "response.output_item.added", "sequence_number": ctx.seq,
-                    "output_index": output_index,
-                    "item": {"id": item_id, "type": "message", "status": "in_progress",
-                             "role": "assistant",
-                             "content": [{"type": "output_text", "text": "", "annotations": []}]}}))
-                ctx.out.append(_sse_event("response.content_part.added", {
-                    "type": "response.content_part.added", "sequence_number": ctx.seq + 1,
-                    "item_id": item_id, "output_index": output_index, "content_index": 0,
-                    "part": {"type": "output_text", "text": "", "annotations": []}}))
-                ctx.seq += 2
-                compat["seq"] = ctx.seq
-            item = compat["msg_item"]
-            delta = payload.get("delta", "")
-            if isinstance(delta, str):
-                item["text"] += delta
-            new_payload = dict(payload)
-            new_payload["item_id"] = item["item_id"]
-            new_payload["output_index"] = item["output_index"]
-            new_payload["content_index"] = 0
-            ctx.out.append(_sse_event("response.output_text.delta", new_payload))
-            return ctx.out
-
-        if etype == "response.output_item.added":
-            item = payload.get("item") or {}
-            if item.get("type") == "function_call":
-                ctx.ensure_started(rid or item.get("id"), rmodel)
-                item_id = item.get("id") or f"fc_{compat.get('ctx.seq', 0)}"
-                output_index = payload.get("output_index", compat.get("next_index", 0) or 0)
-                compat["fc_item"] = {
-                    "item_id": item_id,
-                    "output_index": output_index,
-                    "name": item.get("name"),
-                    "call_id": item.get("call_id") or item_id,
-                    "args_acc": item.get("arguments") if isinstance(item.get("arguments"), str) else "",
-                    "done": False,
-                }
+        handler = _COMPAT_HANDLERS.get(etype)
+        if handler is None:
             return [frame]
-
-        if etype == "response.function_call_arguments.delta":
-            ctx.ensure_started(rid, rmodel)
-            item = compat.get("fc_item")
-            if not item:
-                item_id = f"fc_{compat.get('ctx.seq', 0)}"
-                output_index = compat.get("next_index", 1) or 1
-                compat["fc_item"] = {"item_id": item_id, "output_index": output_index,
-                                     "name": None, "call_id": None,
-                                     "args_acc": "", "done": False}
-                item = compat["fc_item"]
-                ctx.out.append(_sse_event("response.output_item.added", {
-                    "type": "response.output_item.added", "sequence_number": ctx.seq,
-                    "output_index": output_index,
-                    "item": {"id": item_id, "type": "function_call", "status": "in_progress",
-                             "name": "unknown", "call_id": item_id, "arguments": ""}}))
-                ctx.seq += 1
-                compat["seq"] = ctx.seq
-            delta = payload.get("delta", "")
-            if isinstance(delta, str):
-                item["args_acc"] += delta
-            new_payload = dict(payload)
-            new_payload["item_id"] = item["item_id"]
-            new_payload["output_index"] = item["output_index"]
-            ctx.out.append(_sse_event("response.function_call_arguments.delta", new_payload))
-            return ctx.out
-
-        if etype == "response.function_call_arguments.done":
-            item = compat.get("fc_item")
-            if item:
-                if isinstance(payload.get("arguments"), str):
-                    item["args_acc"] = payload["arguments"]
-                raw_args = payload.get("arguments")
-                new_payload = dict(payload)
-                new_payload["item_id"] = item["item_id"]
-                new_payload["output_index"] = item["output_index"]
-                if _fc_args_broken(raw_args):
-                    repaired = _repair_json_object_args(raw_args)
-                    if repaired != raw_args:
-                        _log(f"[vision-proxy] repaired fc args in arguments.done item_id={item['item_id']} "
-                             f"model={compat.get('model')} broken={raw_args[:60]!r}")
-                        new_payload["arguments"] = repaired
-                        return [_sse_event("response.function_call_arguments.done", new_payload)]
-                return [_sse_event("response.function_call_arguments.done", new_payload)]
-            # no tracked fc_item (e.g. args.done without prior added/delta): repair in place
-            raw_args = payload.get("arguments")
-            if _fc_args_broken(raw_args):
-                repaired = _repair_json_object_args(raw_args)
-                if repaired != raw_args:
-                    _log(f"[vision-proxy] repaired fc args in arguments.done (untracked) "
-                         f"broken={raw_args[:60]!r}")
-                    new_payload = dict(payload)
-                    new_payload["arguments"] = repaired
-                    return [_sse_event("response.function_call_arguments.done", new_payload)]
-            return [frame]
-
-        if etype in ("response.completed", "response.failed", "response.incomplete"):
-            if compat.get("started"):
-                ctx.close_message()
-                ctx.close_function_call()
-            ctx.out.append(frame)
-            return ctx.out
-
-        if etype == "response.output_item.done":
-            item = payload.get("item") or {}
-            if item.get("type") == "function_call" and compat.get("fc_item"):
-                compat["fc_item"]["done"] = True
-            if item.get("type") == "function_call" and _fc_args_broken(item.get("arguments")):
-                repaired = _repair_json_object_args(item.get("arguments"))
-                if repaired != item.get("arguments"):
-                    _log(f"[vision-proxy] repaired fc args in output_item.done call_id={item.get('call_id')} "
-                         f"model={compat.get('model')} broken={str(item.get('arguments'))[:60]!r}")
-                    new_payload = dict(payload)
-                    fixed_item = dict(item)
-                    fixed_item["arguments"] = repaired
-                    new_payload["item"] = fixed_item
-                    return [_sse_event("response.output_item.done", new_payload)]
-            return [frame]
-
-        if etype in ("response.output_text.done", "response.output_text.delta.any", "response.content_part.added"):
-            return [frame]
+        return getattr(ctx, handler)(frame, payload, rid, rmodel)
 
         return [frame]
     except Exception as exc:
@@ -726,14 +743,14 @@ def split_text_delta_frame(frame_bytes, chunk_chars=None):
     limit = chunk_chars or SMOOTH_TEXT_CHARS
     if not isinstance(delta, str) or len(delta) <= limit:
         return [(frame_bytes, 0.0)]
-    ctx.out = []
+    out = []
     for i in range(0, len(delta), limit):
         piece = dict(payload)
         piece["delta"] = delta[i:i + limit]
         # 别忘 SSE 的帧分隔符：少了它客户端会把后面的帧吞掉
-        ctx.out.append(((head + leading + json.dumps(piece, ensure_ascii=False) + "\n\n").encode("utf-8"),
+        out.append(((head + leading + json.dumps(piece, ensure_ascii=False) + "\n\n").encode("utf-8"),
                     SMOOTH_TEXT_INTERVAL))
-    return ctx.out
+    return out
 
 
 def text_delta_chars(frame_bytes):
