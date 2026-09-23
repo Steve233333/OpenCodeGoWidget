@@ -115,6 +115,97 @@ def _rewrite_go_model(parsed):
 
 
 class RequestPipelineMixin:
+
+    async def _prepare_parsed_request(self, parsed, body):
+        """请求准备（原 handle() 里那段 82 行）：模型名兼容（zen/go）、apply_patch 工具改写、
+        给无原生搜索的模型合成 web_search、工具/历史修补、muse 注入、输出预算与推理档位。
+
+        返回 (body, zen_changed, go_changed)；逻辑与搬移前逐行一致。
+        """
+        if isinstance(parsed, dict):
+            model_changed = _rewrite_model_compat(parsed)
+            zen_changed = _rewrite_zen_model(parsed)
+            go_changed = _rewrite_go_model(parsed)
+            tools_changed = _rewrite_apply_patch_tool(parsed)
+            model = parsed.get("model") if isinstance(parsed, dict) else None
+            synth_changed = (zen_changed or go_changed) and _inject_synthetic_web_search(parsed, model, go_changed)
+            # Proactive sidecar: for non-search models that now have synthetic web_search, if user asks to search, pre-fetch
+            proactive_changed = False
+            if go_changed and model:
+                is_search_capable = has_native_search(model)
+                if not is_search_capable:
+                    last_text = ""
+                    for it in reversed(parsed.get("input", []) or []):
+                        if isinstance(it, dict) and it.get("role") == "user":
+                            for part in it.get("content", []) or []:
+                                if isinstance(part, dict) and part.get("type") == "input_text" and isinstance(part.get("text"), str):
+                                    last_text = part["text"]
+                                    break
+                            if last_text:
+                                break
+                    has_synth = any(isinstance(t, dict) and t.get("type") == "function" and t.get("name") == "web_search" for t in parsed.get("tools", []) or [])
+                    has_native = any(isinstance(t, dict) and t.get("type") == "web_search" for t in parsed.get("tools", []) or [])
+                    _log(f"[vision-proxy] sidecar check model={model} go={go_changed} has_synth={has_synth} has_native={has_native} text='{last_text[:30]}' stream={parsed.get('stream')}")
+                    if last_text and (has_synth or has_native) and any(kw in last_text.lower() for kw in ["搜", "搜索", "新闻", "search", "news", "天气", "weather", "热点", "热榜", "today"]):
+                        try:
+                            # REAL search for BOTH stream and non-stream: inject results before upstream so
+                            # the model answers directly instead of calling web_search (which would 400 / sandbox-fail).
+                            zen_key = os.environ.get("ZEN_API_KEY")
+                            try:
+                                search_res = await asyncio.wait_for(_perform_web_search(last_text, zen_key), timeout=25.0)
+                            except asyncio.TimeoutError:
+                                _log(f"[vision-proxy] proactive real search timeout for {model}, using hint")
+                                search_res = ""
+                            if search_res and len(search_res) > 60:
+                                parsed["input"].append({
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [{"type": "input_text", "text": f"[web_search sidecar] 已为你实时搜索完成，直接基于以下搜索结果回答：\n{search_res[:WEB_SEARCH_INLINE_LIMIT]}"}]
+                                })
+                                proactive_changed = True
+                                _log(f"[vision-proxy] proactive REAL search injected for {model} query='{last_text[:30]}' len={len(search_res)}")
+                            else:
+                                placeholder = f"Web search is available for '{last_text[:50]}'. You have real-time search capability via the web_search tool. Please use web_search to search and then summarize. Do not claim you have no search ability."
+                                parsed["input"].append({
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [{"type": "input_text", "text": f"[web_search sidecar] {placeholder}"}]
+                                })
+                                proactive_changed = True
+                                _log(f"[vision-proxy] proactive sidecar hint injected for {model} query='{last_text[:30]}' (search empty)")
+                        except Exception as e:
+                            _log(f"[vision-proxy] proactive sidecar failed: {e!r}")
+            wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)
+            ac_changed = (zen_changed or go_changed) and _normalize_assistant_content(parsed)
+            fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
+            id_changed = (zen_changed or go_changed) and _sanitize_input_ids(parsed)
+            req_changed = (zen_changed or go_changed) and _fix_tool_required(parsed)
+            # 2026-09-20：Muse(Meta 后端) 专属兼容（muse-codex-compat skill）。
+            # 三条都自带 model 网关，其他模型的 payload 保持字节不变。
+            muse_schema_changed = (zen_changed or go_changed) and _sanitize_muse_tool_schemas(parsed)
+            muse_preamble_changed = (zen_changed or go_changed) and _inject_muse_no_preamble(parsed)
+            muse_first_changed = (zen_changed or go_changed) and _inject_muse_tool_first(parsed)
+            # Muse 的推理也吃 max_output_tokens（实测 80 预算里 reasoning 占 77 → 一个字没吐就 incomplete）。
+            # 只抬高客户端显式给的小值，没给就照上游默认（2026-09-23）。
+            _min_budget = policy_for(model).min_output_tokens
+            _cur_budget = parsed.get("max_output_tokens") if isinstance(parsed, dict) else None
+            if _min_budget and isinstance(_cur_budget, int) and _cur_budget < _min_budget:
+                parsed["max_output_tokens"] = _min_budget
+                _log(f"[vision-proxy] {model} max_output_tokens {_cur_budget} → {_min_budget}"
+                     f"（推理计入这个预算，太小会只思考不出字）")
+            # reasoning clamp: generic high fallback, hand-written registry, zero probe
+            reasoning_changed = False
+            if isinstance(parsed, dict) and isinstance(parsed.get("reasoning"), dict):
+                eff = parsed["reasoning"].get("effort")
+                if isinstance(eff, str) and eff:
+                    clamped = _clamp_reasoning_effort(parsed.get("model"), eff)
+                    if clamped != eff:
+                        parsed["reasoning"]["effort"] = clamped
+                        reasoning_changed = True
+            if model_changed or zen_changed or go_changed or tools_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or reasoning_changed or muse_schema_changed or muse_preamble_changed or muse_first_changed:
+                body = bytearray(json.dumps(parsed).encode())
+        return body, zen_changed, go_changed
+
     """Proxy 的请求管线（作为 mixin 与 Proxy 组合；方法依赖 Proxy 上的网络/工具方法）。"""
 
     async def handle(self, reader, writer):
@@ -149,88 +240,9 @@ class RequestPipelineMixin:
                     parsed = json.loads(bytes(body))
                 except json.JSONDecodeError:
                     pass
+            zen_changed = go_changed = False
             if isinstance(parsed, dict):
-                model_changed = _rewrite_model_compat(parsed)
-                zen_changed = _rewrite_zen_model(parsed)
-                go_changed = _rewrite_go_model(parsed)
-                tools_changed = _rewrite_apply_patch_tool(parsed)
-                model = parsed.get("model") if isinstance(parsed, dict) else None
-                synth_changed = (zen_changed or go_changed) and _inject_synthetic_web_search(parsed, model, go_changed)
-                # Proactive sidecar: for non-search models that now have synthetic web_search, if user asks to search, pre-fetch
-                proactive_changed = False
-                if go_changed and model:
-                    is_search_capable = has_native_search(model)
-                    if not is_search_capable:
-                        last_text = ""
-                        for it in reversed(parsed.get("input", []) or []):
-                            if isinstance(it, dict) and it.get("role") == "user":
-                                for part in it.get("content", []) or []:
-                                    if isinstance(part, dict) and part.get("type") == "input_text" and isinstance(part.get("text"), str):
-                                        last_text = part["text"]
-                                        break
-                                if last_text:
-                                    break
-                        has_synth = any(isinstance(t, dict) and t.get("type") == "function" and t.get("name") == "web_search" for t in parsed.get("tools", []) or [])
-                        has_native = any(isinstance(t, dict) and t.get("type") == "web_search" for t in parsed.get("tools", []) or [])
-                        _log(f"[vision-proxy] sidecar check model={model} go={go_changed} has_synth={has_synth} has_native={has_native} text='{last_text[:30]}' stream={parsed.get('stream')}")
-                        if last_text and (has_synth or has_native) and any(kw in last_text.lower() for kw in ["搜", "搜索", "新闻", "search", "news", "天气", "weather", "热点", "热榜", "today"]):
-                            try:
-                                # REAL search for BOTH stream and non-stream: inject results before upstream so
-                                # the model answers directly instead of calling web_search (which would 400 / sandbox-fail).
-                                zen_key = os.environ.get("ZEN_API_KEY")
-                                try:
-                                    search_res = await asyncio.wait_for(_perform_web_search(last_text, zen_key), timeout=25.0)
-                                except asyncio.TimeoutError:
-                                    _log(f"[vision-proxy] proactive real search timeout for {model}, using hint")
-                                    search_res = ""
-                                if search_res and len(search_res) > 60:
-                                    parsed["input"].append({
-                                        "type": "message",
-                                        "role": "user",
-                                        "content": [{"type": "input_text", "text": f"[web_search sidecar] 已为你实时搜索完成，直接基于以下搜索结果回答：\n{search_res[:WEB_SEARCH_INLINE_LIMIT]}"}]
-                                    })
-                                    proactive_changed = True
-                                    _log(f"[vision-proxy] proactive REAL search injected for {model} query='{last_text[:30]}' len={len(search_res)}")
-                                else:
-                                    placeholder = f"Web search is available for '{last_text[:50]}'. You have real-time search capability via the web_search tool. Please use web_search to search and then summarize. Do not claim you have no search ability."
-                                    parsed["input"].append({
-                                        "type": "message",
-                                        "role": "user",
-                                        "content": [{"type": "input_text", "text": f"[web_search sidecar] {placeholder}"}]
-                                    })
-                                    proactive_changed = True
-                                    _log(f"[vision-proxy] proactive sidecar hint injected for {model} query='{last_text[:30]}' (search empty)")
-                            except Exception as e:
-                                _log(f"[vision-proxy] proactive sidecar failed: {e!r}")
-                wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)
-                ac_changed = (zen_changed or go_changed) and _normalize_assistant_content(parsed)
-                fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
-                id_changed = (zen_changed or go_changed) and _sanitize_input_ids(parsed)
-                req_changed = (zen_changed or go_changed) and _fix_tool_required(parsed)
-                # 2026-09-20：Muse(Meta 后端) 专属兼容（muse-codex-compat skill）。
-                # 三条都自带 model 网关，其他模型的 payload 保持字节不变。
-                muse_schema_changed = (zen_changed or go_changed) and _sanitize_muse_tool_schemas(parsed)
-                muse_preamble_changed = (zen_changed or go_changed) and _inject_muse_no_preamble(parsed)
-                muse_first_changed = (zen_changed or go_changed) and _inject_muse_tool_first(parsed)
-                # Muse 的推理也吃 max_output_tokens（实测 80 预算里 reasoning 占 77 → 一个字没吐就 incomplete）。
-                # 只抬高客户端显式给的小值，没给就照上游默认（2026-09-23）。
-                _min_budget = policy_for(model).min_output_tokens
-                _cur_budget = parsed.get("max_output_tokens") if isinstance(parsed, dict) else None
-                if _min_budget and isinstance(_cur_budget, int) and _cur_budget < _min_budget:
-                    parsed["max_output_tokens"] = _min_budget
-                    _log(f"[vision-proxy] {model} max_output_tokens {_cur_budget} → {_min_budget}"
-                         f"（推理计入这个预算，太小会只思考不出字）")
-                # reasoning clamp: generic high fallback, hand-written registry, zero probe
-                reasoning_changed = False
-                if isinstance(parsed, dict) and isinstance(parsed.get("reasoning"), dict):
-                    eff = parsed["reasoning"].get("effort")
-                    if isinstance(eff, str) and eff:
-                        clamped = _clamp_reasoning_effort(parsed.get("model"), eff)
-                        if clamped != eff:
-                            parsed["reasoning"]["effort"] = clamped
-                            reasoning_changed = True
-                if model_changed or zen_changed or go_changed or tools_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or reasoning_changed or muse_schema_changed or muse_preamble_changed or muse_first_changed:
-                    body = bytearray(json.dumps(parsed).encode())
+                body, zen_changed, go_changed = await self._prepare_parsed_request(parsed, body)
             model = parsed.get("model") if isinstance(parsed, dict) else None
             zen_route = isinstance(parsed, dict) and zen_changed
             go_route = isinstance(parsed, dict) and go_changed
