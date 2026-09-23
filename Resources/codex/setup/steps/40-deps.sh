@@ -9,7 +9,7 @@
 # ---------------------------------------------------------------------------
 for tool in openssl security codesign; do
   if ! command -v "$tool" >/dev/null 2>&1; then
-    die "缺少依赖：$tool。请先运行 xcode-select --install 安装命令行工具后重试。"
+    die "缺少依赖：${tool}。请先运行 xcode-select --install 安装命令行工具后重试。"
   fi
 done
 # clang 只用来"给副本编一个启动器"（注入 --user-data-dir）。包里已经带了预编译的通用二进制

@@ -54,7 +54,7 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
     # 注意：匹配完整 bundle 路径，避免误杀安装器自身或其它含关键字的进程
     if pgrep -f "ChatGPT-Patched.app/Contents/MacOS" >/dev/null 2>&1; then
       if [[ "$MODE" == "update" ]]; then
-        log "检测到官方已升级（$MARKER_VER -> $SRC_VER），副本仍在运行，尝试自动退出重建..."
+        log "检测到官方已升级（$MARKER_VER -> ${SRC_VER}），副本仍在运行，尝试自动退出重建..."
         pkill -f "ChatGPT-Patched.app/Contents/MacOS" 2>/dev/null || true
         for _ in {1..10}; do pgrep -f "ChatGPT-Patched.app/Contents/MacOS" >/dev/null 2>&1 || break; sleep 0.5; done
       else
@@ -64,20 +64,20 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
     if bash "$PATCH_BASE/patch.sh" --auto-update; then
       # --auto-update 在已是最新时无输出，仍视为成功
       PATCH_OK=1
-      PATCH_VER_MSG="（$SRC_VER）"
+      PATCH_VER_MSG="（${SRC_VER}）"
       log "ChatGPT-Patched.app 已同步至 $SRC_VER"
     else
       # 回退：auto-update 可能因运行中 defer，尝试 --install
       if bash "$PATCH_BASE/patch.sh" --install; then
         PATCH_OK=1
-        PATCH_VER_MSG="（$SRC_VER）"
+        PATCH_VER_MSG="（${SRC_VER}）"
         log "ChatGPT-Patched.app 已生成（fallback --install）"
       else
         log "WARN: patch.sh 执行失败，详见 $PATCH_BASE/patch.log"
       fi
     fi
   else
-    log "副本已是最新（$SRC_VER），跳过重建"
+    log "副本已是最新（${SRC_VER}），跳过重建"
     PATCH_OK=1
     PATCH_VER_MSG="（$SRC_VER 已是最新）"
   fi

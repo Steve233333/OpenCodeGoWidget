@@ -96,6 +96,16 @@ if [ "${SKIP_PIPELINE_TEST:-0}" != "1" ] && [ -x "scripts/test-usage-pipeline.sh
   fi
 fi
 
+# 2026-09-23：代理生命周期（挑解释器/起服务/探活）也只有一份实现（ensure-proxy.sh），
+# 单独验它：坏的会被跳过、全坏不写脏文件、真起一次端口要有响应、已在跑时幂等。
+echo "==> 代理生命周期自检（离线；解释器挑选 / 修复 / 幂等）"
+if [ "${SKIP_ENSURE_PROXY_TEST:-0}" != "1" ] && [ -x "scripts/test-ensure-proxy.sh" ]; then
+  if ! "scripts/test-ensure-proxy.sh"; then
+    echo "!! 代理生命周期自检没过，先修好再打包（或 SKIP_ENSURE_PROXY_TEST=1 ./build.sh 跳过）"
+    exit 1
+  fi
+fi
+
 echo "==> 本地代理自检（Python 全量测试 + Muse 兼容层）"
 if [ "${SKIP_PROXY_TEST:-0}" != "1" ]; then
   if [ -f "Resources/codex/vision/tests/run_all_robust.py" ]; then
@@ -177,7 +187,7 @@ echo "==> 编译 App"
 # 源码清单（2026-09-23 Phase 1/2）：主 App = Sources/ 全量（含 Views/ 子目录）；Widget = 共享部分。
 # 以前两个目标各手写一长串文件名，拆文件时漏加一个就"打包时才编译失败"，现在只维护一份排除名单。
 APP_ONLY_SOURCES=(
-  "App" "DashboardView" "QuotaViews" "ChartViews" "SelfCheckViews" "SettingsViews"
+  "App" "DashboardView" "QuotaViews" "ChartViews" "SelfCheckViews" "SettingsViews" "ProxyWatchdog"
   "CodexInstaller" "CodexSetupView" "UpdateChecker" "HealthCheck" "CookieSync"
   "OpenCodeKeyFetcher" "OpenCodeLoginView"
 )

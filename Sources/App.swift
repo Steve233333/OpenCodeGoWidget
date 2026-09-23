@@ -58,24 +58,35 @@ struct OpenCodeGoWidgetApp: App {
 
 
 struct MenuBarIconView: View {
+    // 代理没救回来时挂个红点（2026-09-23）：Codex 那边会一直"等网络"，
+    // 这里给个不打扰、也不要系统通知权限的提示入口。
+    @ObservedObject private var watchdog = ProxyWatchdog.shared
+
     var body: some View {
-        Group {
-            if let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
-               let img = NSImage(contentsOf: url) {
-                let _ = img.isTemplate = true
-                Image(nsImage: img)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(width: 16, height: 16)
-            } else if let nsImg = NSImage(named: "MenuBarIcon") {
-                let _ = nsImg.isTemplate = true
-                Image(nsImage: nsImg)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 16, height: 16)
-            } else {
-                Image(systemName: "chart.bar.fill")
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let url = Bundle.main.url(forResource: "MenuBarIcon", withExtension: "png"),
+                   let img = NSImage(contentsOf: url) {
+                    let _ = img.isTemplate = true
+                    Image(nsImage: img)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: 16, height: 16)
+                } else if let nsImg = NSImage(named: "MenuBarIcon") {
+                    let _ = nsImg.isTemplate = true
+                    Image(nsImage: nsImg)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 16, height: 16)
+                } else {
+                    Image(systemName: "chart.bar.fill")
+                }
+            }
+            if watchdog.status == .failed {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 5, height: 5)
             }
         }
         .frame(width: 16, height: 16)
@@ -96,6 +107,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // 非 SMAppService 回退（旧系统）由系统登录项手动添加
+        // 2026-09-23：看护本地代理 —— 系统升级/重启后 launchd 任务可能没挂上，
+        // 以前只能靠用户再点一次「配置」（macOS 27 升级后 Codex 就是这样卡住的）。
+        ProxyWatchdog.shared.start()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

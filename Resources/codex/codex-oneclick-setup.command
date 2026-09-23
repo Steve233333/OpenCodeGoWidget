@@ -84,7 +84,7 @@ _cleanup_oneclick_lock() {
   # 2026-09-20：异常中断也要留痕（以前 zsh 的 glob 报错会让脚本无声退出，
   # 日志最后一行停在半路，完全查不出原因）
   if [[ "$_oc_status" -ne 0 ]]; then
-    log "ERROR: 配置脚本异常中断（退出码 $_oc_status）。请把这一行以上 30 行日志发给开发者。"
+    log "ERROR: 配置脚本异常中断（退出码 ${_oc_status}）。请把这一行以上 30 行日志发给开发者。"
   fi
 }
 trap _cleanup_oneclick_lock EXIT INT TERM

@@ -489,6 +489,36 @@ def t_union_alpha_is_messages_only_model():
     assert "union-alpha" not in vp.RESPONSES_FALLBACK_MODELS
 
 
+def t_provider_prefix_routes_like_suffix():
+    """2026-09-23：macOS 27 升级后 Codex 发过 opencode-go/<slug>，以前认不出来 → 401。"""
+    p = {"model": "opencode-go/deepseek-v4.1-flash"}
+    assert vp._rewrite_go_model(p) is True, p
+    assert p["model"] == "deepseek-v4.1-flash", p
+
+    p = {"model": "opencode-zen/muse-spark-1.2-contributor"}
+    assert vp._rewrite_zen_model(p) is True, p
+    assert p["model"] == "muse-spark-1.2-contributor", p
+
+
+def t_provider_prefix_does_not_steal_other_routes():
+    # go 前缀不能被 zen 分支吃掉（顺序是 zen → go）
+    p = {"model": "opencode-go/x"}
+    assert vp._rewrite_zen_model(p) is False and p["model"] == "opencode-go/x", p
+    # 裸名 / 官方模型 / 陌生前缀一律原样，行为不变
+    for raw in ("deepseek-v4-flash-vision-exp", "deepseek-v4-pro", "foo/bar", "glm-5.3"):
+        p = {"model": raw}
+        assert vp._rewrite_go_model(p) is False and vp._rewrite_zen_model(p) is False, raw
+        assert p["model"] == raw, raw
+
+
+def t_provider_prefix_keeps_aliases():
+    # 别名表在去前缀后照旧生效
+    p = {"model": "opencode-go/ox-alpha"}
+    assert vp._rewrite_go_model(p) is True and p["model"] == "ox-alpha-free", p
+    p = {"model": "opencode-zen/ox-alpha"}
+    assert vp._rewrite_zen_model(p) is True and p["model"] == "x-preview-f-free", p
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)

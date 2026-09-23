@@ -41,9 +41,9 @@ if [[ -z "$DEFAULT_MODEL" || -z "$EXTRACT_MODEL" ]]; then
     die "python3 跑不起来（macOS 没装命令行工具时 /usr/bin/python3 只是占位程序），所以 models.json 根本没生成。
 请先运行：xcode-select --install  然后回来重新点「配置」。"
   elif [[ ! -s "$MODEL_TMPL" ]]; then
-    die "模板文件缺失或为空：$MODEL_TMPL（重装「OpenCode 小组件」App 可修复）。"
+    die "模板文件缺失或为空：${MODEL_TMPL}（重装「OpenCode 小组件」App 可修复）。"
   else
-    die "models.json 生成为空：模板里按当前 Key 过滤后没有可用模型（Go=$HAS_GO DeepSeek=$HAS_DS）。请检查 Key 是否有效。"
+    die "models.json 生成为空：模板里按当前 Key 过滤后没有可用模型（Go=$HAS_GO DeepSeek=${HAS_DS}）。请检查 Key 是否有效。"
   fi
 fi
 
@@ -105,4 +105,4 @@ else:
     open(dst, "w").write(text)
 PY
 chmod 600 "$CODEX_HOME/config.toml"
-log "config.toml 已生成（默认模型 $DEFAULT_MODEL，记忆模型 $EXTRACT_MODEL，base_url $BASE_URL，记忆默认关闭）"
+log "config.toml 已生成（默认模型 ${DEFAULT_MODEL}，记忆模型 ${EXTRACT_MODEL}，base_url ${BASE_URL}，记忆默认关闭）"

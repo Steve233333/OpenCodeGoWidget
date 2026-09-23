@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.29.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.30.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.29.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.30.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.29.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.29.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.30.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.30.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,22 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.30 — 让"系统升级/重启后代理掉线"自己好起来
+
+macOS 27 升级后 Codex 报 "Reconnecting… waiting for network" 的根因链已查实：安装器用 `command -v python3` 挑到了 **Xcode 自带的 Python 3.9**（一时起不来）→ 代理 5 分钟没监听 → 之后 Codex 又发了带前缀的 `opencode-go/...`（路由不认 → 401）。
+
+这次补三个结构性缺口：
+
+- **代理生命周期只有一份实现**（新 `vision/ensure-proxy.sh`）：解释器改成**逐个实测**（python.org 3.x → /usr/local → Homebrew → /usr/bin 兜底），挑完写 plist、起服务、**探活验证**，并记状态文件；安装器和 App 都调它。
+- **App 自己救回来**（新 `ProxyWatchdog`）：启动后 10 秒 / 每 5 分钟 / 唤醒时探活，端口活着就什么都不做；死了才修。救不回来 → 菜单栏红点 + 面板顶部红字 + 设置里「修复本地代理」按钮（不要通知权限、不加常驻 LaunchAgent）。
+- **前缀也能路由**：`opencode-go/<slug>` ≡ `<slug>-go`、`opencode-zen/<slug>` ≡ `<slug>-zen`。
+
+顺带把自检的代理行改成三态（未加载 / 加载了没进程 / 进程在端口不通）+ 显示当前解释器；并修掉全项目 25 处 `$VAR` 紧跟中文标点的 shell 可移植性 bug（bash 在非 UTF-8 locale 下会把它当变量名，`set -u` 直接报 unbound）。
+
+真机实测：bootout 掉代理后 **2.6 秒**自动修好（解释器从 Xcode 3.9 换成 python.org 3.13.1），`opencode-go/deepseek-v4.1-flash` 由 401 变 **200**。
+
+版本 **1.1.11.30 (70)**。
 
 ### v1.1.11.29 — 重构第四阶段：安装器拆步骤 + 配置后自检（必跑）
 
@@ -126,14 +142,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 顺带修掉一个原有的静默 bug：`_perform_web_search` 的 env 兜底用到 `pathlib` 却从没 import（外面是裸 `except: pass`）→ 补上。真机冒烟：DeepSeek / GLM（走 chat 桥回落）/ Muse 各一条 200，日志零 Traceback。
 
 版本 **1.1.11.28 (68)**。
-
-### v1.1.11.27 — 重构第二阶段：界面代码拆开（纯重构，界面一模一样）
-
-`App.swift` 1265 行 → 拆成应用壳 + `Views/` 下的仪表盘/图表/配额/设置/自检五个文件；改名一处（`ContentView` → `DashboardView`）。
-
-**怎么证明界面没变**：拆完把新旧源码逐行比对，去掉空行/注释/import 后 **1122 行 vs 1122 行完全一致** —— 纯搬移。顺带清掉两条编译告警（现在构建零告警），`build.sh` 改成递归扫描 `Sources/`（含 `Views/` 子目录）。
-
-版本 **1.1.11.27 (67)**。
 
 ## 本地构建
 

@@ -22,6 +22,8 @@ struct DashboardView: View {
     @State private var chartAlignment: ChartAlignment = BillingCycle.loadAlignment()
     /// 小组件共享通道的自检警告（写盘失败 / App Group 容器拿不到时置位，界面顶部显示）
     @State private var widgetStoreWarning: String?
+    // 代理看护：救不回来时在面板顶部给一行红字（不打扰、也不要通知权限）
+    @ObservedObject private var watchdog = ProxyWatchdog.shared
     @State private var autoTimer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
     /// 历史回填在跑时，每 5 秒把快照重读回界面 —— 否则进度条要等 5 分钟自动刷新才动一次
     @State private var liveTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
@@ -61,6 +63,23 @@ struct DashboardView: View {
 
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 16) {
+                    if watchdog.status == .failed {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("本地代理没起来：Codex 会显示「Reconnecting… waiting for network」")
+                                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(.red)
+                                Text(watchdog.detail).font(.system(size: 9)).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("修复") { Task { await watchdog.repairNow() } }
+                                .controlSize(.mini)
+                                .disabled(watchdog.busy)
+                        }
+                        .padding(8)
+                        .background(Color.red.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
                     if let snap = snapshot {
                         VStack(spacing: 12) {
                             // 账期/自然月堆叠柱状图 — 账期默认对齐 Go 月重置日，解决月中开套餐被自然月切断

@@ -2,6 +2,56 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.30 — 让"系统升级/重启后代理掉线"自己好起来
+
+**起因（macOS 27 升级那次，日志里坐实的链条）**：
+
+1. App 点「配置」时 PATH 很干净，安装器用 `command -v python3` 挑解释器 → 命中 `/usr/bin/python3`
+   （**Xcode 自带的 Python 3.9**），plist 就这么写死了；
+2. 刚升完系统它一时起不来 → 11:04:30 起代理一直没监听（KeepAlive 重试到 11:09:51 才成功）
+   → Codex 侧表现成 **"Reconnecting… waiting for network"**；
+3. 代理回来时代码已经把模型切成 `opencode-go/deepseek-v4.1-flash`，路由只认 `-go`/`-zen` 后缀
+   → 被当成"官方 DeepSeek 模型"转发到 api.deepseek.com → **401**。
+
+上周加的「配置后自检」正好抓到了第 2 条（`自检① 本地代理：❌`）。这次补的是三个结构性缺口：
+
+**① 代理生命周期只有一份实现（新 `vision/ensure-proxy.sh`）**
+挑解释器 → 写状态文件 → 写/刷新 plist → 起服务 → **探活验证**，安装器与 App 都调它。
+解释器改成**逐个实测**（`import ssl,json,asyncio` 跑得通才算），优先级：
+python.org `3.*`（版本号倒序，跳过 `Versions/Current` 软链）→ `/usr/local` → Homebrew → `/usr/bin/python3`
+（仅兜底，且日志明说"依赖 Xcode/命令行工具"）。绝不再看 PATH 里第一个。
+状态文件 `~/.local/share/agent-vision-toolkit/proxy-runtime`（key=value）：解释器、版本、上次修复时间、
+上次结果 —— App 自检直接读它显示。
+
+**② App 自己把代理救回来（新 `Sources/ProxyWatchdog.swift`）**
+启动后 10 秒、每 5 分钟、系统唤醒时先探活（**端口有响应就立刻返回，平时零开销零日志**）；
+没响应才调 ensure-proxy.sh，顺手把"新模型自动发现"那个 launchd 任务也检查/重挂一次。
+救不回来时：**菜单栏图标红点 + 面板顶部红字 + 设置里「修复本地代理」按钮**（不引入通知权限）。
+不新增常驻 LaunchAgent —— App 本身是登录项，少一个零件。
+
+**③ 带 provider 前缀的模型名也能路由**
+`opencode-go/<slug>` ≡ `<slug>-go`、`opencode-zen/<slug>` ≡ `<slug>-zen`，归一化在一处（`proxy/config.py`
+的 `normalize_route_model`），之后照走原有 go/zen 分支（别名表、日志格式不变），裸名行为完全不变。
+
+**④ 自检说人话**
+「配置后自检」与 App 的 `HealthCheck` 把代理从二态改成**三态**：未加载 / 加载了但进程没起来（带 launchctl
+最后退出码）/ 进程在但端口不通，各自给对应的下一步；并显示当前解释器与上次自动修复时间。
+
+**顺手修的一个 shell 可移植性 bug**：全项目 25 处 `$VAR` 后面紧跟中文标点（如 `$PORT）`），
+bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u` 直接报 unbound（我写这个脚本时实测踩到）。
+统一改成 `${VAR}` 写法，安装器 + 步骤文件 + 新脚本一起修。
+
+**验证**：
+
+- 离线（进了 `build.sh --test` 门槛）：`scripts/test-ensure-proxy.sh` 6 条 —— 跳过跑不起来的解释器、
+  全坏时 rc=1 且不写脏文件、兜底解释器有警告、**真起一次**（临时 label + 端口 19531 + 临时目录）端口有响应、
+  优先用 python.org 而不是 `/usr/bin/python3`、已在跑时幂等；Python 侧补了前缀路由 3 组单测。
+- 真机：`launchctl bootout` 掉代理后跑 ensure-proxy → **2.6 秒修好**，plist 从 `/usr/bin/python3`(3.9)
+  换成 `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3`(3.13.1)，端口恢复响应；
+  `opencode-go/deepseek-v4.1-flash` 实测 **200**（修之前是 401）。
+
+版本 **1.1.11.30 (70)**。
+
 ### v1.1.11.29 — 重构第四阶段：安装器拆步骤 + 配置后自检（必跑）+ 残骸清单
 
 `codex-oneclick-setup.command` 968 行一个文件、从互斥锁一路写到汇总。这一版拆成**主脚本 + 步骤文件**：

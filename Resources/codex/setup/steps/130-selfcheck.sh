@@ -18,18 +18,33 @@ log "环境：HOME=$HOME"
 _sc_fail=0
 
 # ② 三个关键服务/文件
-# 2a. 本地代理（launchd）
+# 2a. 本地代理（launchd）—— 2026-09-23 改成三态：未加载 / 加载了但没进程 / 进程在但端口不通。
+# macOS 27 升级那次就是"加载了但没起来"，以前只报"launchd 里没有"，看不出到底是哪一步。
 if [[ "$SKIP_PROXY_START" -eq 1 ]]; then
   log "自检① 本地代理：已按 --skip-proxy-start 跳过启动（属预期）"
 else
-  _proxy_pid="$(launchctl list 2>/dev/null | awk '/com.agent-vision-toolkit.proxy/ {print $1}' | head -1)"
-  if [[ -n "${_proxy_pid:-}" && "${_proxy_pid}" != "-" ]]; then
-    log "自检① 本地代理：✅ 运行中（launchd pid ${_proxy_pid}）"
-  else
+  _proxy_line="$(launchctl list 2>/dev/null | awk '/com.agent-vision-toolkit.proxy/ {print; exit}')"
+  _proxy_pid="$(printf '%s' "$_proxy_line" | awk '{print $1}')"
+  _proxy_exit="$(printf '%s' "$_proxy_line" | awk '{print $2}')"
+  _proxy_listen=0
+  if curl -s -o /dev/null -m 2 "http://127.0.0.1:19100/v1/models" 2>/dev/null; then _proxy_listen=1; fi
+  _proxy_interp="$(sed -n 's/^interpreter=//p' "$VISION_DIR/proxy-runtime" 2>/dev/null | head -1)"
+  _proxy_repair="$(sed -n 's/^last_repair_at=//p' "$VISION_DIR/proxy-runtime" 2>/dev/null | head -1)"
+  [[ -n "$_proxy_interp" ]] && log "自检① 代理解释器：$_proxy_interp${_proxy_repair:+（上次自动修复 ${_proxy_repair}）}"
+  if [[ -z "$_proxy_line" ]]; then
     _sc_fail=$((_sc_fail + 1))
-    log "自检① 本地代理：❌ launchd 里没有 com.agent-vision-toolkit.proxy"
-    log "        下一步：看 ~/Library/LaunchAgents/com.agent-vision-toolkit.proxy.plist 有没有生成；再手动跑"
-    log "        launchctl kickstart -k gui/$(id -u)/com.agent-vision-toolkit.proxy，然后 tail ~/.local/share/agent-vision-toolkit/proxy.err.log"
+    log "自检① 本地代理：❌ launchd 里没有这个任务（没挂上）"
+    log "        下一步：跑 $VISION_DIR/ensure-proxy.sh 一键修（它会挑可用解释器并重挂）；App 的看护每 5 分钟也会自动试"
+  elif [[ "$_proxy_pid" == "-" ]]; then
+    _sc_fail=$((_sc_fail + 1))
+    log "自检① 本地代理：❌ 任务加载了但进程没起来（launchctl 上次退出码 ${_proxy_exit:-?}）"
+    log "        下一步：看 $VISION_DIR/ensure-proxy.log 里「解释器不可用 / 起不来」那几行，和 $VISION_DIR/proxy.err.log 的尾巴"
+  elif [[ "$_proxy_listen" -eq 0 ]]; then
+    _sc_fail=$((_sc_fail + 1))
+    log "自检① 本地代理：❌ 进程在（pid ${_proxy_pid}）但 127.0.0.1:19100 不通"
+    log "        下一步：tail $VISION_DIR/proxy.err.log 看它启动时报了什么"
+  else
+    log "自检① 本地代理：✅ 运行中（launchd pid ${_proxy_pid}，端口有响应）"
   fi
 fi
 

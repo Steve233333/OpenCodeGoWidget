@@ -47,15 +47,27 @@ enum HealthCheck {
         items.append(HealthItem(level: .ok, title: "运行环境",
             detail: "macOS \(osStr) (\(buildStr)) · 小组件 \(appVer) · 构建 SDK \(sdkName) · 最低要求 macOS \(minOS)"))
 
-        // ---- 1. 本地代理：进程 + 端口 ----
-        let proxyLoaded = launchctlHas("com.agent-vision-toolkit.proxy")
+        // ---- 1. 本地代理：三态（未加载 / 加载了但没进程 / 进程在但端口不通）+ 用的哪个解释器 ----
+        // 2026-09-23：macOS 27 升级那次就是"加载了但没起来"，以前只报"没响应"，看不出是哪一步。
         let proxyAlive = await proxyResponds()
-        if proxyLoaded && proxyAlive {
-            items.append(HealthItem(level: .ok, title: "本地代理", detail: "已加载且 127.0.0.1:19100 有响应"))
-        } else if proxyAlive {
-            items.append(HealthItem(level: .warn, title: "本地代理", detail: "端口有响应，但 launchd 里没找到任务（重启后会消失，建议重跑一次「配置」）"))
+        let proxyJob = launchctlJobState("com.agent-vision-toolkit.proxy")
+        let runtime = proxyRuntimeInfo()
+        let interpText = runtime["interpreter"].flatMap { $0.isEmpty ? nil : $0 } ?? ""
+        let verText = runtime["version"] ?? ""
+        let repairText = runtime["last_repair_at"] ?? ""
+        let suffix = (interpText.isEmpty ? "" : "；解释器 \(interpText)" + (verText.isEmpty || verText == "?" ? "" : "（Python \(verText)）"))
+            + (repairText.isEmpty ? "" : "；上次自动修复 \(repairText)")
+        if proxyJob.loaded && proxyAlive {
+            items.append(HealthItem(level: .ok, title: "本地代理", detail: "已加载且 127.0.0.1:19100 有响应" + suffix))
+        } else if proxyJob.loaded && !proxyAlive {
+            let exit = proxyJob.lastExit.map { "launchctl 最后退出码 \($0)" } ?? "launchctl 没给退出码"
+            items.append(HealthItem(level: .fail, title: "本地代理",
+                detail: "任务已加载但进程没起来（\(exit)）→ 点「修复本地代理」；再不行重跑「配置」。日志：~/.local/share/agent-vision-toolkit/ensure-proxy.log" + suffix))
+        } else if !proxyJob.loaded && proxyAlive {
+            items.append(HealthItem(level: .warn, title: "本地代理", detail: "端口有响应，但 launchd 里没有这个任务（重启后会消失）→ 点「修复本地代理」" + suffix))
         } else {
-            items.append(HealthItem(level: .fail, title: "本地代理", detail: "127.0.0.1:19100 没响应；Codex 会报 502。点「配置」重建，或看 ~/Library/Logs/codex-oneclick-setup.log"))
+            items.append(HealthItem(level: .fail, title: "本地代理",
+                detail: "127.0.0.1:19100 没响应，launchd 里也没这个任务 → App 的看护每 5 分钟会自动重挂；也可以点「修复本地代理」或重跑「配置」" + suffix))
         }
 
         // ---- 2. Go 模型自动发现任务 ----
@@ -242,16 +254,50 @@ enum HealthCheck {
     }
 
     static func launchctlHas(_ label: String) -> Bool {
+        launchctlJobState(label).loaded
+    }
+
+    /// launchd 任务的三件事：有没有加载 / 有没有进程 / 上次退出码（2026-09-23 自检分三态要用）
+    struct LaunchctlJobState {
+        var loaded = false
+        var pid: Int?
+        var lastExit: Int?
+    }
+
+    static func launchctlJobState(_ label: String) -> LaunchctlJobState {
+        var state = LaunchctlJobState()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         p.arguments = ["list"]
         let pipe = Pipe()
         p.standardOutput = pipe
-        do { try p.run() } catch { return false }
+        do { try p.run() } catch { return state }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         let out = String(data: data, encoding: .utf8) ?? ""
-        return out.split(separator: "\n").contains { $0.contains(label) }
+        for line in out.split(separator: "\n") where line.hasSuffix(label) {
+            // 格式：PID<TAB>状态码<TAB>标签；没进程时 PID 是 "-"
+            let cols = line.split(separator: "\t").map(String.init)
+            guard cols.count >= 3 else { continue }
+            state.loaded = true
+            state.pid = Int(cols[0])
+            state.lastExit = Int(cols[1])
+            break
+        }
+        return state
+    }
+
+    /// ensure-proxy.sh 写的状态文件（key=value）：当前解释器 / 上次修复时间
+    static func proxyRuntimeInfo() -> [String: String] {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/agent-vision-toolkit/proxy-runtime")
+        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return [:] }
+        var map: [String: String] = [:]
+        for line in text.split(separator: "\n") {
+            let parts = line.split(separator: "=", maxSplits: 1)
+            if parts.count == 2 { map[String(parts[0])] = String(parts[1]) }
+        }
+        return map
     }
 
     static func proxyResponds() async -> Bool {

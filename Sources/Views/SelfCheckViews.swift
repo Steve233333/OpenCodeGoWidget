@@ -19,6 +19,18 @@ struct HealthCheckRow: View {
                 Button("复制报告") { copyReport() }
                     .controlSize(.mini)
                     .disabled(items == nil)
+                // 2026-09-23：代理掉了不用重跑整套「配置」—— 这里跑的就是看护用的那个脚本
+                // （挑解释器 / 写 plist / 起服务 / 探活），跑完自动重跑一遍自检。
+                Button("修复本地代理") {
+                    Task {
+                        running = true
+                        await ProxyWatchdog.shared.repairNow()
+                        items = await HealthCheck.run()
+                        running = false
+                    }
+                }
+                .controlSize(.mini)
+                .disabled(running)
                 Button(items == nil ? "开始自检" : "收起") {
                     if let _ = items {
                         items = nil

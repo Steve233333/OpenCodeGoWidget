@@ -48,6 +48,7 @@ from .config import (
     _clamp_reasoning_effort,
     _log,
     load_env_file,
+    normalize_route_model,
 )
 from .muse import (
     _build_muse_retry_body,
@@ -82,15 +83,19 @@ from .toolfix import (
 
 def _rewrite_zen_model(parsed):
     """Strip the trailing "-zen" suffix for Zen free models. Returns True if the
-    body was rewritten so the caller re-serializes it."""
-    model = parsed.get("model")
+    body was rewritten so the caller re-serializes it.
+
+    2026-09-23：也认 `opencode-zen/<slug>` 这种 provider 前缀（与后缀等价）。
+    """
+    raw = parsed.get("model")
+    model = normalize_route_model(raw)
     if not isinstance(model, str) or not model.endswith(ZEN_SUFFIX):
         return False
     bare = model[: -len(ZEN_SUFFIX)]
     ZEN_ALIASES = {"ox-alpha": "x-preview-f-free"}
     mapped = ZEN_ALIASES.get(bare, bare)
     parsed["model"] = mapped
-    _log(f"[vision-proxy] zen model compat {model} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))
+    _log(f"[vision-proxy] zen model compat {raw} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))
     return True
 
 
@@ -126,7 +131,9 @@ def _normalize_assistant_content(parsed):
 
 
 def _rewrite_go_model(parsed):
-    model = parsed.get("model")
+    # 2026-09-23：也认 `opencode-go/<slug>` 这种 provider 前缀（与后缀等价）
+    raw = parsed.get("model")
+    model = normalize_route_model(raw)
     if not isinstance(model, str) or not model.endswith(GO_SUFFIX):
         return False
     bare = model[: -len(GO_SUFFIX)]
@@ -134,7 +141,7 @@ def _rewrite_go_model(parsed):
     GO_ALIASES = {"ox-alpha": "ox-alpha-free"}
     mapped = GO_ALIASES.get(bare, bare)
     parsed["model"] = mapped
-    _log(f"[vision-proxy] go model compat {model} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))
+    _log(f"[vision-proxy] go model compat {raw} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))
     return True
 
 

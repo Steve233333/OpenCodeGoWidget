@@ -33,7 +33,6 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   rm -f "$tmp_env_x"
   chmod 600 "$ENV_FILE"
 
-  PY_BIN="$(command -v python3)"
   # 2026-09-19：python.org 的 Python 没跑过 "Install Certificates.command" 时没有 CA 根证书，
   # 代理所有 HTTPS 会 SSL: CERTIFICATE_VERIFY_FAILED（Codex 侧只看到 502，很难查）。
   # 能自动跑官方修复脚本就跑一次，别让用户自己去 /Applications 里双击。
@@ -46,54 +45,33 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
       fi
     fi
   done
-  PLIST="$HOME/Library/LaunchAgents/com.agent-vision-toolkit.proxy.plist"
-  mkdir -p "$HOME/Library/LaunchAgents"
-  cat > "$PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.agent-vision-toolkit.proxy</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$PY_BIN</string>
-    <string>$VISION_DIR/vision_proxy.py</string>
-    <string>--port</string><string>19100</string>
-    <string>--upstream</string><string>https://api.deepseek.com/</string>
-    <string>--env-file</string><string>$ENV_FILE</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>SSL_CERT_FILE</key><string>/etc/ssl/cert.pem</string>
-  </dict>
-  <key>KeepAlive</key><true/>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>$VISION_DIR/proxy.log</string>
-  <key>StandardErrorPath</key><string>$VISION_DIR/proxy.err.log</string>
-</dict>
-</plist>
-EOF
-
+  # 2026-09-23（Phase 5）：挑解释器 / 写 plist / 起服务 / 探活**只有一份实现** = ensure-proxy.sh。
+  # 以前这里用 `command -v python3` 挑解释器：App 点「配置」时 PATH 很干净，命中的是
+  # /usr/bin/python3（Xcode 自带的 3.9），刚升完 macOS 27 它一时起不来 → 代理 5 分钟没监听 →
+  # Codex 侧就是 "Reconnecting… waiting for network"。现在由脚本逐个实测候选解释器再决定。
   if [[ "$SKIP_PROXY_START" -eq 0 ]]; then
-    log "阶段：重启本地代理（最多等待 30 秒）…"
-    launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl unload "$PLIST" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
-    for _ in {1..30}; do
-      if lsof -nP -iTCP:19100 -sTCP:LISTEN >/dev/null 2>&1; then
-        PROXY_OK=1
-        break
-      fi
-      sleep 1
-    done
-    if [[ "$PROXY_OK" -eq 1 ]]; then
-      log "本地代理已启动（127.0.0.1:19100）"
+    log "阶段：重启本地代理（ensure-proxy：实测挑解释器 → 起服务 → 探活）…"
+    if "$VISION_DIR/ensure-proxy.sh" --vision-dir "$VISION_DIR" --env-file "$ENV_FILE" \
+         --trigger installer >>"$LOG" 2>&1; then
+      PROXY_OK=1
+      log "本地代理已启动并验证（127.0.0.1:19100）"
     else
-      log "WARN: 本地代理未在 30 秒内监听，请查看 $VISION_DIR/proxy.err.log"
+      log "WARN: 代理这次没能起来（详见 $VISION_DIR/ensure-proxy.log）——App 的看护每 5 分钟会再试一次"
     fi
   else
     PROXY_OK=1
     log "代理文件已生成（--skip-proxy-start，未启动服务）"
   fi
+
+  # 解释器只挑一次：Go 模型自动发现任务复用 ensure-proxy 挑中的那个（同一个决定，两处用）
+  PY_BIN="$(sed -n 's/^interpreter=//p' "$VISION_DIR/proxy-runtime" 2>/dev/null | head -1)"
+  if [[ -z "$PY_BIN" || ! -x "$PY_BIN" ]]; then
+    for _cand in /Library/Frameworks/Python.framework/Versions/*/bin/python3 \
+                 /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
+      if [[ -x "$_cand" ]]; then PY_BIN="$_cand"; break; fi
+    done
+  fi
+  log "Go 发现任务用的解释器：$PY_BIN"
 
   # Go 模型自动发现（quota 表 6h + 启动，跟表自动同步，限免自动识别）
   if [[ "$HAS_GO" -eq 1 ]]; then

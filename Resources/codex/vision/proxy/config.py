@@ -153,6 +153,25 @@ GO_SUFFIX = "-go"
 GO_UPSTREAM = "https://opencode.ai/zen/go"
 
 
+# ---------------------------------------------------------------------------
+# 模型名的 provider 前缀（2026-09-23）：
+# macOS 27 升级后实测 Codex 会发 `opencode-go/deepseek-v4.1-flash` 这种带 provider 前缀的
+# 模型名（路由只认 `-go` / `-zen` 后缀，认不出来就当"官方 DeepSeek"转发到 api.deepseek.com → 401）。
+# 这里把前缀**等价成后缀**，其它形态原样返回（裸名行为不变）。
+# ---------------------------------------------------------------------------
+_PROVIDER_PREFIXES = (("opencode-go/", GO_SUFFIX), ("opencode-zen/", ZEN_SUFFIX))
+
+
+def normalize_route_model(model):
+    """`opencode-go/<slug>` → `<slug>-go`，`opencode-zen/<slug>` → `<slug>-zen`；其余原样返回。"""
+    if not isinstance(model, str):
+        return model
+    for prefix, suffix in _PROVIDER_PREFIXES:
+        if model.startswith(prefix) and len(model) > len(prefix):
+            return model[len(prefix):] + suffix
+    return model
+
+
 RESPONSES_FALLBACK_MODELS = frozenset({
     "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni",
     # 2026-09-22：MiMo 2.6 两个新模型同属 chat 适配家族（/responses 需要走 chat 桥）
