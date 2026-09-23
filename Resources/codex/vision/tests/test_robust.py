@@ -332,13 +332,142 @@ def t_sanitize_input_ids_fuzz():
     # should have dropped 2 (colon and rs_)
     assert len(parsed["input"]) == 2 or len(parsed["input"]) <= 3
 
-def t_intercept_unsupported_history_fuzz():
-    for model in ["mimo-v2.5", "deepseek-v4-flash", "gpt-5.6-luna", "", None, "unknown-999", "ox-alpha-free"]:
-        for has_search in [True, False]:
-            inp = [{"type": "web_search_call", "action": {"type": "search", "query": "hi"}}] if has_search else [{"type": "message", "role": "user"}]
-            parsed = {"input": inp}
-            out = vp._intercept_unsupported_history(parsed, model)
-            assert isinstance(out, bool)
+# 2026-09-23：t_intercept_unsupported_history_fuzz 退役（400 拦截已删，改翻译）。
+# 下面这批测试锁的是新行为：历史里的 web_search_call 必须被翻成工具调用 + 诚实占位结果。
+
+def t_web_search_query_of_fallback():
+    assert vp.web_search_query_of({"action": {"queries": ["q1", "q2"]}}) == "q1"
+    assert vp.web_search_query_of({"action": {"queries": []}, "search_query": "sq"}) == "sq"
+    assert vp.web_search_query_of({"action": {"query": "aq"}}) == "aq"
+    assert vp.web_search_query_of({"action": {"type": "search"}}) == "search"
+    assert vp.web_search_query_of({"action": None}) == "search"
+    assert vp.web_search_query_of({}) == "search"
+    assert vp.web_search_query_of(None) == "search"
+    assert vp.web_search_query_of({"action": {"queries": [None, "ok"]}}) == "ok"
+    # 空白串不算查询词，继续往后兜底
+    assert vp.web_search_query_of({"action": {"queries": ["   "], "query": "q"}}) == "q"
+    assert vp.web_search_query_of({"action": {"queries": "not-a-list"}, "search_query": " s "}) == " s "
+
+def t_web_search_call_id_fallback():
+    assert vp.web_search_call_id({"id": "ws_1", "call_id": "ws_x"}) == "ws_1"
+    assert vp.web_search_call_id({"call_id": "ws_x"}) == "ws_x"
+    assert vp.web_search_call_id({"id": ""}).startswith("call_ws_")
+    assert vp.web_search_call_id(None).startswith("call_ws_")
+
+def t_web_search_history_chat_bridge():
+    req = {"model": "mimo-v2.6-flash-go", "stream": False, "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "换壳教程"}]},
+        {"type": "reasoning", "id": "rs_1", "summary": []},
+        {"type": "web_search_call", "id": "ws_1", "status": "completed",
+         "action": {"type": "search", "query": "iPhone 12 mini 换壳", "queries": ["iPhone 12 mini 换壳"]}},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "答案"}]},
+    ], "tools": [{"type": "function", "name": "shell", "parameters": {"type": "object", "properties": {}}}]}
+    out = vp._responses_request_to_chat(req)
+    msgs = out["messages"]
+    assert msgs[0]["role"] == "user"
+    call_msg = msgs[1]
+    assert call_msg["role"] == "assistant" and call_msg["content"] is None
+    call = call_msg["tool_calls"][0]
+    assert call["id"] == "ws_1" and call["type"] == "function"
+    assert call["function"]["name"] == "web_search"
+    assert json.loads(call["function"]["arguments"]) == {"query": "iPhone 12 mini 换壳"}
+    tool_msg = msgs[2]
+    assert tool_msg["role"] == "tool" and tool_msg["tool_call_id"] == "ws_1"
+    assert "iPhone 12 mini 换壳" in tool_msg["content"] and "结果未保留" in tool_msg["content"]
+    # 回放过搜索调用就必须有对应工具声明（否则上游认为调用了未声明的工具）
+    names = [t["function"]["name"] for t in out["tools"]]
+    assert names.count("web_search") == 1, names
+    # 幂等：已经声明过就不重复
+    req2 = dict(req, tools=[{"type": "function", "name": "web_search",
+                             "parameters": {"type": "object", "properties": {}}}])
+    out2 = vp._responses_request_to_chat(req2)
+    assert [t["function"]["name"] for t in out2["tools"]].count("web_search") == 1
+
+def t_web_search_history_chat_consecutive():
+    # 连续两条搜索 → 一条 assistant 带 2 个 tool_calls + 紧随两条 tool 结果
+    items = [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go"}]},
+        {"type": "web_search_call", "id": "ws_1", "action": {"type": "search", "queries": ["a"]}},
+        {"type": "web_search_call", "id": "ws_2", "action": {"type": "search", "queries": ["b"]}},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "ok"}]},
+    ]
+    out = vp._responses_request_to_chat({"model": "mimo-v2.5", "input": items})
+    msgs = out["messages"]
+    assert len(msgs) == 5, msgs
+    assert [c["id"] for c in msgs[1]["tool_calls"]] == ["ws_1", "ws_2"]
+    assert [m["tool_call_id"] for m in msgs[2:4]] == ["ws_1", "ws_2"]
+    assert msgs[4] == {"role": "assistant", "content": "ok"}
+    # 搜索连击不能吞掉后面的 function_call（两种 call 各自成格）
+    items.append({"type": "function_call", "call_id": "fc_1", "name": "shell", "arguments": '{"a":1}'})
+    msgs2 = vp._responses_request_to_chat({"model": "mimo-v2.5", "input": items})["messages"]
+    assert msgs2[-1]["tool_calls"][0]["id"] == "fc_1"
+
+def t_web_search_history_messages_bridge():
+    req = {"model": "union-alpha", "stream": False, "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "q"}]},
+        {"type": "web_search_call", "id": "ws_1", "action": {"type": "search", "queries": ["hello"]}},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "答案"}]},
+    ]}
+    out = vp._responses_request_to_messages(req)
+    msgs = out["messages"]
+    assert msgs[0]["role"] == "user"
+    tool_use = msgs[1]["content"][0]
+    assert tool_use["type"] == "tool_use" and tool_use["name"] == "web_search"
+    assert tool_use["id"] == "ws_1" and tool_use["input"] == {"query": "hello"}
+    tool_result = msgs[2]["content"][0]
+    assert tool_result["type"] == "tool_result" and tool_result["tool_use_id"] == "ws_1"
+    assert "hello" in tool_result["content"]
+    assert [t["name"] for t in out["tools"]] == ["web_search"]
+    assert "input_schema" in out["tools"][0]
+
+def t_history_replay_stats_reasoning():
+    # reasoning 仍不回放，但必须计数（以前是静默丢弃）
+    items = [
+        {"type": "reasoning", "id": "rs_1", "summary": []},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        {"type": "reasoning", "id": "rs_2", "summary": []},
+    ]
+    msgs, stats = vp._bridges_chat._translate_history(items)
+    assert stats["dropped_reasoning"] == 2 and stats["web_search_replayed"] == 0
+    assert len(msgs) == 1 and msgs[0]["role"] == "user"
+    msgs2, stats2 = vp._bridges_messages._translate_history(items, [])
+    assert stats2["dropped_reasoning"] == 2 and len(msgs2) == 1
+
+def t_web_search_history_fuzz():
+    for _ in range(100):
+        items = []
+        for _ in range(random.randint(1, 8)):
+            kind = random.choice(["message", "web_search_call", "reasoning", "function_call",
+                                  "function_call_output", "unknown_xyz"])
+            if kind == "message":
+                items.append({"type": "message", "role": random.choice(["user", "assistant", "developer"]),
+                              "content": [{"type": "input_text", "text": _rand_str(8)}]})
+            elif kind == "web_search_call":
+                items.append({"type": "web_search_call",
+                              "action": random.choice([None, {"type": "search", "queries": ["a"]},
+                                                       {"type": "search", "query": "b"},
+                                                       {"type": "search", "queries": []}])})
+            else:
+                items.append({"type": kind})
+        req = {"model": random.choice(["mimo-v2.6-flash-go", "glm-5.3-go", "union-alpha", None]),
+               "input": items, "tools": random.choice([None, [], [{"type": "function", "name": "shell"}]]), }
+        try:
+            chat = vp._responses_request_to_chat(req)
+            _msgs, stats = vp._bridges_chat._translate_history(items)
+            _msgs2, stats2 = vp._bridges_messages._translate_history(items, [])
+        except Exception as e:
+            assert False, f"history translation crash {items}: {e}"
+        assert isinstance(chat["messages"], list)
+        assert stats["web_search_replayed"] == stats2["web_search_replayed"]
+        assert stats["dropped_reasoning"] == stats2["dropped_reasoning"]
+
+def t_history_interception_removed():
+    # 回归锁：旧的 400「换会话」拦截已删（历史里有 web_search_call 不再被拦）
+    assert not hasattr(vp, "_intercept_unsupported_history")
+    assert not hasattr(vp, "_SEARCH_TRUE_PREFIXES")
+    for name in ("pipeline.py", "toolfix.py", "config.py"):
+        src = open(os.path.join(ROOT, "proxy", name), encoding="utf-8").read()
+        assert "Cross-model history blocked" not in src, f"{name} 还留着 400 文案"
 
 def t_fix_tool_required_fuzz():
     cases = [

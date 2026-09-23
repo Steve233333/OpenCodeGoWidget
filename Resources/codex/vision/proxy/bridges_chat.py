@@ -21,6 +21,12 @@ from .toolfix import (
     mimo_markup_hold_len,
     parse_mimo_tool_markup,
 )
+from .search_sidecar import (
+    synthetic_web_search_tool,
+    web_search_call_id,
+    web_search_query_of,
+    web_search_result_placeholder,
+)
 
 # 流式里"疑似 markup 开头"最多扣多久（字节）：超过就认定模型是在说字面量，按正文放出去
 MIMO_MARKUP_HOLD_MAX = 8192
@@ -54,21 +60,49 @@ def _content_parts_to_chat(content):
     return "\n".join(text_bits) if text_bits else None
 
 
-def _responses_request_to_chat(parsed):
-    """Translate a Responses API request body into Chat Completions format."""
+def _translate_history(items):
+    """Responses 的 input 条目 → (chat messages, stats)。
+
+    - message / function_call / function_call_output：与搬移前逐行一致。
+    - **web_search_call（2026-09-23）**：翻成 web_search 工具调用 + 诚实占位结果。
+      以前这种情况会把整条请求拦成 400「Cross-model history blocked」，切到 mimo/GLM
+      这类无原生搜索的模型就必须换会话；实测上游直接接受这种 tool_calls 历史（200），
+      所以改成翻译：上下文不断，也不用换会话。
+    - reasoning：各家推理格式不兼容，仍不回放，但计数（stats）让日志可见 —— 不再静默。
+    """
     messages = []
-    instructions = parsed.get("instructions")
-    if isinstance(instructions, str) and instructions.strip():
-        messages.append({"role": "system", "content": instructions})
-    raw_input = parsed.get("input")
-    if isinstance(raw_input, str):
-        items = [{"type": "message", "role": "user", "content": raw_input}]
-    elif isinstance(raw_input, list):
-        items = [i for i in raw_input if isinstance(i, dict)]
-    else:
-        items = []
+    stats = {"dropped_reasoning": 0, "web_search_replayed": 0}
+    # 搜索连击要合成"一条 assistant 带多个 tool_calls + 随后的多条 tool 结果"，
+    # 所以结果先攒着，等连击结束（下一个非搜索条目 / 读到底）再一起落进 messages。
+    pending_results = []
+
+    def flush_results():
+        if pending_results:
+            messages.extend(pending_results)
+            pending_results.clear()
+
     for item in items:
         itype = item.get("type") or "message"
+        if itype == "web_search_call":
+            query = web_search_query_of(item)
+            call = {
+                "id": web_search_call_id(item),
+                "type": "function",
+                "function": {"name": "web_search",
+                             "arguments": json.dumps({"query": query}, ensure_ascii=False)},
+            }
+            prev = messages[-1] if messages else None
+            # 连续多条搜索合并进同一条 assistant（与上面 function_call 同一个写法）
+            if pending_results and prev and prev.get("role") == "assistant" and isinstance(prev.get("tool_calls"), list):
+                prev["tool_calls"].append(call)
+            else:
+                flush_results()
+                messages.append({"role": "assistant", "content": None, "tool_calls": [call]})
+            pending_results.append({"role": "tool", "tool_call_id": call["id"],
+                                    "content": web_search_result_placeholder(query)})
+            stats["web_search_replayed"] += 1
+            continue
+        flush_results()
         if itype == "message":
             role = item.get("role") or "user"
             if role == "developer":
@@ -90,7 +124,40 @@ def _responses_request_to_chat(parsed):
             if not isinstance(output, str):
                 output = json.dumps(output, ensure_ascii=False)
             messages.append({"role": "tool", "tool_call_id": item.get("call_id"), "content": output})
-        # reasoning / web_search_call / other item types are dropped silently
+        elif itype == "reasoning":
+            stats["dropped_reasoning"] += 1
+        # 其他未知条目类型：与搬移前一致（丢弃）
+    flush_results()
+    return messages, stats
+
+
+def _log_history_replay(stats, parsed, bridge):
+    """历史回放"翻译了什么 / 丢了什么"必须留在日志里（这两件事以前都是静默的）。"""
+    translated = stats.get("web_search_replayed", 0)
+    dropped = stats.get("dropped_reasoning", 0)
+    if not translated and not dropped:
+        return
+    model = parsed.get("model") if isinstance(parsed, dict) else None
+    _log(f"[vision-proxy] history replay: translated {translated} web_search_call, "
+         f"dropped {dropped} reasoning items (model={model}, bridge={bridge})")
+
+
+def _responses_request_to_chat(parsed):
+    """Translate a Responses API request body into Chat Completions format."""
+    messages = []
+    instructions = parsed.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        messages.append({"role": "system", "content": instructions})
+    raw_input = parsed.get("input")
+    if isinstance(raw_input, str):
+        items = [{"type": "message", "role": "user", "content": raw_input}]
+    elif isinstance(raw_input, list):
+        items = [i for i in raw_input if isinstance(i, dict)]
+    else:
+        items = []
+    history, stats = _translate_history(items)
+    messages.extend(history)
+    _log_history_replay(stats, parsed, "chat")
     tools = []
     for tool in parsed.get("tools") or []:
         if isinstance(tool, dict) and tool.get("type") == "function":
@@ -99,6 +166,15 @@ def _responses_request_to_chat(parsed):
             if tool.get("description"):
                 fn["description"] = tool["description"]
             tools.append({"type": "function", "function": fn})
+    # 回放过 web_search 调用就必须有对应工具声明（Go 路由下边车已经注入过，这一步是幂等兜底）
+    if stats["web_search_replayed"] and not any(
+            isinstance(t.get("function"), dict) and t["function"].get("name") == "web_search"
+            for t in tools):
+        synthetic = synthetic_web_search_tool()
+        tools.append({"type": "function", "function": {
+            "name": synthetic["name"],
+            "parameters": synthetic["parameters"],
+            "description": synthetic["description"]}})
     payload = {"model": parsed.get("model"), "messages": messages, "stream": bool(parsed.get("stream"))}
     if tools:
         payload["tools"] = tools

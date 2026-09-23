@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.38.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.39.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.38.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.39.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.38.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.38.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.39.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.39.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,22 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.39 — 跨模型切换不再拦 400：把 web_search 历史翻成工具调用
+
+**现象**：从 DeepSeek / Muse 的会话切到 mimo / GLM，整轮 400「Cross-model history blocked … Please start a new session」。
+
+**根因**：这条 400 是我们自己拦的 —— 历史里的 `web_search_call` 在桥接层被静默丢掉，于是用"换会话"挡了。
+上游其实收得下这种历史（实测 200）。
+
+**修法**：两个桥各加一层翻译 —— `web_search_call` → `web_search` 工具调用 + 一条诚实占位结果
+（"当时搜过、结果未保留、要就重新搜"，不编造事实），并自动补上合成工具声明；**400 拦截整段删除**，
+4 处手写的前缀名单统一成 `has_native_search()`。reasoning 仍不回放，但不再静默（日志记条数）。
+
+**实测**：修前同一探针 400（一字不差）→ 修后 MiMo 2.6、GLM 5.3、流式/非流式、DeepSeek 带同历史全部 200；
+冒烟脚本新增「跨模型搜索历史」用例；全量 121 用例全绿。
+
+版本 **1.1.11.39 (79)**。
 
 ### v1.1.11.38 — 修「upstream 400：`arguments` must be valid JSON」
 
@@ -156,23 +172,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 （DeepSeek 47 / MiMo 44 / Muse 24 / GLM 70 字，markup 均 0）。
 
 版本 **1.1.11.37 (77)**。
-
-### v1.1.11.36 — 转换层收敛 ④（先行）：魔数入表、删死代码、补架构文档
-
-Phase ① 之后先把**风险最低、收益明确**的第 ④ 阶段做掉（② `handle()` 拆管线、③ SSE 管道化还在排队）：
-
-- **24 处裸魔数变成具名常量**（`proxy/config.py`）：`IO_CHUNK_BYTES` / `IO_BUFFER_BYTES` /
-  `RETRY_BACKOFF_BASE` / `WEB_SEARCH_*_LIMIT` / `SSE_MAX_BUFFERED_FRAME` —— 值一个没改，只是不再是
-  散在逻辑里的 `65536`、`0.8 * (i + 1)`、`[:4000]`。
-- **删掉只被测试用的死代码** `_build_chat_fallback_events`（生产早走增量翻译器）：它那两条测试
-  （"流里正文 + 工具调用拼装"、"坏 JSON 参数修复"）**改走生产路径**（`ChatBridgeTranslator`）继续守着，
-  死代码没了、覆盖没少。
-- **新增 `Resources/codex/vision/README.md`**：一张图看懂模块分工、策略表字段含义、每个模型家族现在的行为、
-  "症状 → 先看哪里"对照表、测试与门槛。以后加模型或排查问题不用再翻代码。
-
-验证：全量 **47 + 3 + 8 + 31 + 14 + 8** 全绿；真机冒烟四个家族全绿（DeepSeek / MiMo / Muse / GLM）。
-
-版本 **1.1.11.36 (76)**。
 
 ## 本地构建
 

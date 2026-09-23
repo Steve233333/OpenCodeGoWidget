@@ -94,7 +94,6 @@ from .sse import (
 )
 from .toolfix import (
     _fix_tool_required,
-    _intercept_unsupported_history,
     _normalize_fc_args_history,
     _sanitize_input_ids,
 )
@@ -319,7 +318,7 @@ class Proxy(RequestPipelineMixin):
                 return
             obj = _build_chat_fallback_json(model, obj, effort, tool_param_types=param_types)
             # Sidecar for web_search from non-search models via bridge - handle the search and inject results
-            if model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
+            if model and not has_native_search(model):
                 has_ws = False
                 ws_query = None
                 ws_call_id = None

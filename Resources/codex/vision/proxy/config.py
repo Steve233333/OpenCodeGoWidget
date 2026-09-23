@@ -203,9 +203,6 @@ MUSE_STALL_HOLD_BYTES = 32 * 1024      # 扣留上限：超过就放行
 MUSE_STALL_HOLD_SECONDS = 8.0         # 扣留上限：超过就放行（再长客户端就一直"正在思考"）
 
 
-_SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark", "grok-")
-
-
 MUSE_MODEL_PREFIX = "muse-spark"
 
 

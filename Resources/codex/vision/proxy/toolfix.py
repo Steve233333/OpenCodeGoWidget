@@ -6,7 +6,6 @@ import json
 import re
 
 from .config import (
-    _SEARCH_TRUE_PREFIXES,
     _log,
 )
 
@@ -196,29 +195,6 @@ def _normalize_fc_args_history(parsed):
     if changed:
         _log("[vision-proxy] repaired malformed function_call arguments in zen/go request history")
     return changed
-
-
-def _intercept_unsupported_history(parsed, model):
-    """Intercept search=true history -> search=false model.
-
-    Preserve context integrity: do not silently drop web_search_call history.
-    Return True if interception should happen (caller must return 400 with
-    user-facing guidance to start a new session).
-    """
-    if not isinstance(model, str):
-        return False
-    # strip -go / -zen suffix already done by caller; model is bare id
-    # Generic future-proof: only search-true whitelist keeps history, all others (known + unknown) intercept
-    if model.startswith(_SEARCH_TRUE_PREFIXES):
-        return False
-    input_items = parsed.get("input")
-    if not isinstance(input_items, list):
-        return False
-    for item in input_items:
-        if isinstance(item, dict) and item.get("type") == "web_search_call":
-            return True
-    # also check tools? history alone is enough
-    return False
 
 
 def _sanitize_input_ids(parsed):

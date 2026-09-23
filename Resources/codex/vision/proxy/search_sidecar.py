@@ -9,32 +9,21 @@ import pathlib   # 2026-09-23 Phase 3：原单体文件漏了这行（被 except
 import re
 import urllib.error
 import urllib.request
+import uuid
 
 from .config import (
     _log,
 )
+from .policy import has_native_search
 
 
-def _inject_synthetic_web_search(parsed, model=None, go_route=False):
-    """Inject synthetic web_search for all non-search Go models (无条件).
+def synthetic_web_search_tool():
+    """合成 web_search 工具定义（Responses 格式）。
 
-    接受后所有 mimo/glm/qwen/kimi 等都能通过 web_search 边车真搜
-    （DuckDuckGo 直连 3s 优先，deepseek 兜底），不再依赖 Codex 是否下发了原生 web_search。
+    唯一一份：边车注入（_inject_synthetic_web_search）与跨模型历史翻译
+    （bridges_chat / bridges_messages）都用它，避免两处定义漂移。
     """
-    if not go_route or not isinstance(model, str):
-        return False
-    if model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
-        return False
-    tools = parsed.get("tools")
-    if not isinstance(tools, list):
-        # Codex 没给 tools 列表（纯对话轮），为边车补一个
-        parsed["tools"] = []
-        tools = parsed["tools"]
-    # 已有合成的就不再重复注入
-    for t in tools:
-        if isinstance(t, dict) and t.get("type") == "function" and t.get("name") == "web_search":
-            return False
-    synthetic = {
+    return {
         "type": "function",
         "name": "web_search",
         "description": "Search the web for current information. Use this for news, weather, hot topics, or any question requiring recent/realtime data. Always prefer this over shell/Browser for web content.",
@@ -48,6 +37,71 @@ def _inject_synthetic_web_search(parsed, model=None, go_route=False):
             "additionalProperties": False
         }
     }
+
+
+def web_search_query_of(item):
+    """历史 web_search_call 的查询词（跨模型回放用）。
+
+    顺序固定：action.queries[0] → item.search_query → action.query → "search"。
+    历史里从来没有搜索结果正文（Codex 只带 query），所以只有查询词可用。
+    """
+    if not isinstance(item, dict):
+        return "search"
+    action = item.get("action")
+    if isinstance(action, dict):
+        queries = action.get("queries")
+        if isinstance(queries, list):
+            for q in queries:
+                if isinstance(q, str) and q.strip():
+                    return q
+    search_query = item.get("search_query")
+    if isinstance(search_query, str) and search_query.strip():
+        return search_query
+    if isinstance(action, dict):
+        query = action.get("query")
+        if isinstance(query, str) and query.strip():
+            return query
+    return "search"
+
+
+def web_search_call_id(item):
+    """历史 web_search_call 的调用 id：item.id → item.call_id → 生成 call_ws_<hex8>。"""
+    if isinstance(item, dict):
+        for key in ("id", "call_id"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return f"call_ws_{uuid.uuid4().hex[:8]}"
+
+
+def web_search_result_placeholder(query):
+    """历史搜索结果的诚实占位（不编造事实，只说明"搜过、结果没留下来"）。"""
+    q = query if isinstance(query, str) and query.strip() else "search"
+    return (f'（历史搜索结果未保留：这是之前对 "{q}" 的 web_search 调用，'
+            '其结果已用于当时的回答。如需这些信息，请重新调用 web_search。）')
+
+
+def _inject_synthetic_web_search(parsed, model=None, go_route=False):
+    """Inject synthetic web_search for all non-search Go models (无条件).
+
+    接受后所有 mimo/glm/qwen/kimi 等都能通过 web_search 边车真搜
+    （DuckDuckGo 直连 3s 优先，deepseek 兜底），不再依赖 Codex 是否下发了原生 web_search。
+    """
+    if not go_route or not isinstance(model, str):
+        return False
+    # 2026-09-23：这一句以前是手写前缀名单（4 处重复），现在只问策略层。
+    if has_native_search(model):
+        return False
+    tools = parsed.get("tools")
+    if not isinstance(tools, list):
+        # Codex 没给 tools 列表（纯对话轮），为边车补一个
+        parsed["tools"] = []
+        tools = parsed["tools"]
+    # 已有合成的就不再重复注入
+    for t in tools:
+        if isinstance(t, dict) and t.get("type") == "function" and t.get("name") == "web_search":
+            return False
+    synthetic = synthetic_web_search_tool()
     # 将原生 web_search（若有）替换为合成，或直接追加
     new_tools = []
     replaced = False

@@ -24,8 +24,7 @@ from .policy import (NATIVE_PROBES, ROUTE_BRIDGE, ROUTE_MESSAGES, ROUTE_NATIVE_O
                      has_native_search, policy_for)
 from .search_sidecar import (_inject_synthetic_web_search, _is_web_search_tool_call,
                              _normalize_web_search_call, _perform_web_search)
-from .toolfix import (_fix_tool_required, _intercept_unsupported_history,
-                      _normalize_fc_args_history, _sanitize_input_ids)
+from .toolfix import (_fix_tool_required, _normalize_fc_args_history, _sanitize_input_ids)
 
 
 
@@ -346,7 +345,8 @@ class RequestPipelineMixin:
                 return
             # Sidecar: handle web_search calls from non-search models (mimo/glm etc.)
             # If the primary model called synthetic web_search, delegate to deepseek and synthesize tool result
-            if not fallback_now and go_route and model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
+            # 是否"需要边车"只问策略层（以前这句手写前缀名单，与别的 3 处重复）
+            if not fallback_now and go_route and model and not has_native_search(model):
                 # Peek at response body for web_search calls (only for JSON non-stream for now)
                 try:
                     ctype = response.headers.get("Content-Type", "") if hasattr(response, "headers") else ""
@@ -430,7 +430,7 @@ class RequestPipelineMixin:
             # For now, handle the simple case where the response is JSON with web_search
             try:
                 ctype = response.headers.get("Content-Type", "") if hasattr(response, "headers") else ""
-                if "application/json" in ctype and go_route and model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
+                if "application/json" in ctype and go_route and model and not has_native_search(model):
                     # Peek at response body for web_search
                     body_peek = await asyncio.to_thread(response.read)
                     # Restore response for normal handling if not web_search
@@ -591,18 +591,8 @@ class RequestPipelineMixin:
         txn["model"] = model or "-"
         txn["route"] = "go" if go_route else ("zen" if zen_route else "direct")
         _log(f"[vision-proxy] request {method} {path} model={model} body_bytes={len(body)} zen={zen_route} go={go_route}")
-        # intercept search=true history -> search=false model (preserve integrity)
-        if go_route and _intercept_unsupported_history(parsed, model):
-            txn["status"] = 400
-            await self._send_error(
-                writer,
-                400,
-                "Cross-model history blocked: target model does not support web_search (mimo/GLM/Zen free). "
-                "History contains web_search_call from previous DeepSeek/Luna/Muse session. "
-                "Please start a new session for this model to preserve context integrity. "
-                f"Model={model} go_route={go_route}",
-            )
-            return None
+        # 2026-09-23：老 web_search_call 历史不再拦 400（换会话），由桥接层翻成
+        # web_search 工具调用 + 诚实占位结果（chat/messages 桥各一处，见 _translate_history）。
         return {"method": method, "path": path, "body": body, "parsed": parsed,
                 "model": model, "zen_route": zen_route, "go_route": go_route,
                 "incoming_headers": incoming_headers}

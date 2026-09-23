@@ -8,9 +8,16 @@ import uuid
 from .bridges_chat import (
     ChatBridgeTranslator,
     _bridge_base_response,
+    _log_history_replay,
 )
 from .config import (
     _log,
+)
+from .search_sidecar import (
+    synthetic_web_search_tool,
+    web_search_call_id,
+    web_search_query_of,
+    web_search_result_placeholder,
 )
 from .toolfix import (
     _sanitize_fc_args,
@@ -48,21 +55,17 @@ def _messages_content_blocks(content):
     return blocks
 
 
-def _responses_request_to_messages(parsed):
-    """Responses API 请求体 -> Anthropic Messages 请求体（union-alpha 这类 messages-only 模型）。"""
-    system_parts = []
-    instructions = parsed.get("instructions")
-    if isinstance(instructions, str) and instructions.strip():
-        system_parts.append(instructions.strip())
-    raw_input = parsed.get("input")
-    if isinstance(raw_input, str):
-        items = [{"type": "message", "role": "user", "content": raw_input}]
-    elif isinstance(raw_input, list):
-        items = [i for i in raw_input if isinstance(i, dict)]
-    else:
-        items = []
+def _translate_history(items, system_parts):
+    """Responses 的 input 条目 → (Anthropic messages, stats)。
 
+    - message / function_call / function_call_output：与搬移前逐行一致。
+    - **web_search_call（2026-09-23）**：翻成 tool_use + tool_result（占位结果）。
+      以前这里和 chat 桥一样把它静默丢掉，于是"切到无原生搜索的模型"要靠 400 拦；
+      现在翻译成 Anthropic 能吃的形状，上下文不断。
+    - reasoning：对 Anthropic 无意义，仍不回放，但计数以便日志可见。
+    """
     messages = []
+    stats = {"dropped_reasoning": 0, "web_search_replayed": 0}
 
     def push(role, blocks):
         if not blocks:
@@ -102,6 +105,21 @@ def _responses_request_to_messages(parsed):
                 "name": item.get("name") or "",
                 "input": arg_obj,
             }])
+        elif itype == "web_search_call":
+            call_id = web_search_call_id(item)
+            query = web_search_query_of(item)
+            push("assistant", [{
+                "type": "tool_use",
+                "id": call_id,
+                "name": "web_search",
+                "input": {"query": query},
+            }])
+            push("user", [{
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": web_search_result_placeholder(query),
+            }])
+            stats["web_search_replayed"] += 1
         elif itype in ("function_call_output", "custom_tool_call_output"):
             output = item.get("output")
             if not isinstance(output, str):
@@ -111,7 +129,28 @@ def _responses_request_to_messages(parsed):
                 "tool_use_id": item.get("call_id") or item.get("id") or "",
                 "content": output,
             }])
-        # reasoning / web_search_call 等条目对 Anthropic 无意义，静默丢掉
+        elif itype == "reasoning":
+            stats["dropped_reasoning"] += 1
+        # 其他未知条目类型：与搬移前一致（丢弃）
+    return messages, stats
+
+
+def _responses_request_to_messages(parsed):
+    """Responses API 请求体 -> Anthropic Messages 请求体（union-alpha 这类 messages-only 模型）。"""
+    system_parts = []
+    instructions = parsed.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        system_parts.append(instructions.strip())
+    raw_input = parsed.get("input")
+    if isinstance(raw_input, str):
+        items = [{"type": "message", "role": "user", "content": raw_input}]
+    elif isinstance(raw_input, list):
+        items = [i for i in raw_input if isinstance(i, dict)]
+    else:
+        items = []
+
+    messages, stats = _translate_history(items, system_parts)
+    _log_history_replay(stats, parsed, "messages")
 
     # Anthropic 要求首条是 user
     if messages and messages[0]["role"] != "user":
@@ -137,6 +176,14 @@ def _responses_request_to_messages(parsed):
                  else {"type": "object", "properties": {}}}
         if tool.get("description"):
             entry["description"] = tool["description"]
+        tools.append(entry)
+
+    # 回放过 web_search 调用就必须有对应工具声明，否则 Anthropic 校验 tool_use 时找不到工具
+    if stats["web_search_replayed"] and not any(t.get("name") == "web_search" for t in tools):
+        synthetic = synthetic_web_search_tool()
+        entry = {"name": synthetic["name"], "input_schema": synthetic["parameters"]}
+        if synthetic.get("description"):
+            entry["description"] = synthetic["description"]
         tools.append(entry)
 
     # max_tokens 是 Anthropic 必填；Codex 的 max_output_tokens 给上就照用

@@ -2,6 +2,47 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.39 — 跨模型切换不再拦 400：把 web_search 历史翻成工具调用
+
+**现象**：从 DeepSeek / Luna / Muse 的会话切到 mimo / GLM / zen 免费模型，整轮直接 400：
+```
+Cross-model history blocked: target model does not support web_search (mimo/GLM/Zen free).
+History contains web_search_call from previous DeepSeek/Luna/Muse session.
+Please start a new session for this model to preserve context integrity. Model=mimo-v2.6-flash go_route=True
+```
+
+**根因（实测定位）**：这条 400 是**我们自己拦的**，不是上游 —— 上游其实收得下这种历史。
+历史里的 `web_search_call` 在桥接层被静默丢掉，于是"丢掉历史"看起来像丢上下文，就用 400 挡了换会话。
+（历史里只有查询词，搜索结果正文 Codex 从来没带过来。）
+
+**修法**：
+
+- 两个桥（chat / messages）各加一个 `_translate_history()`：`web_search_call` →
+  `web_search` 工具调用 + 紧随一条**诚实占位**结果（"当时搜过、结果未保留、要就重新搜"，不编造事实）；
+  连续多条搜索合并成一条 assistant 的多个 `tool_calls`（Anthropic 侧是多个 `tool_use`）。
+  `call_id` 取历史 `id` → `call_id` → 生成 `call_ws_<hex8>`。
+- 回放过搜索调用时**自动补一条合成 `web_search` 工具声明**（定义与边车注入共用 `synthetic_web_search_tool()`，
+  幂等），避免上游收"未声明的工具调用"。
+- **删掉 400 拦截**：`_intercept_unsupported_history`、`config._SEARCH_TRUE_PREFIXES` 及其调用点全部移除；
+  剩下 4 处手写的 `model.startswith(("deepseek-","gpt-5.6-luna","muse-spark"))` 统一成 `policy.has_native_search()` ——
+  "要不要边车/翻译"在策略表里只有一处真源。
+- **reasoning 不再静默**：仍不回放（各家推理格式不兼容），但每个桥统计条数并记日志
+  `history replay: translated N web_search_call, dropped M reasoning items (model=…, bridge=…)`。
+
+**复现 + 验证（同一探针，本机 19100 实测）**：
+
+- 修前：`mimo-v2.6-flash-go` + 含 `web_search_call` 的历史 → **HTTP 400**（与你看到的一字不差）
+- 修后：同请求 → **HTTP 200**（正文"第一步是先关机并取出SIM卡托…"）；GLM 5.3、MiMo 流式、DeepSeek 带同历史
+  全部 200；代理日志出现上面的 `history replay` 行
+- `scripts/smoke-conversion.sh` 新增第 5 类用例「跨模型搜索历史」（mimo / GLM），部署脚本的冒烟会自动带上
+- 全量门槛 **48 + 3 + 8 + 2 + 38 + 14 + 8** 全绿（新增 8 条：翻译形状 / 查询兜底 / 连击合并 / messages 桥 /
+  reasoning 计数 / fuzz / 回归锁）
+
+zen 免费家族在本机会被上游 403（`free tier can only be used from within OpenCode`），
+所以只用离线单测覆盖它的 messages 桥翻译，没法真机跑。
+
+版本 **1.1.11.39 (79)**。
+
 ### v1.1.11.38 — 修「upstream 400：`arguments` must be valid JSON」
 
 **现象**：用 muse 继续一段老对话时，上游直接 400：

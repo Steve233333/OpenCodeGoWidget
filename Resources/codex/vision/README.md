@@ -16,6 +16,7 @@ Codex ──▶ vision_proxy.py（薄入口 + 兼容 re-export）
               ├─ proxy/toolfix.py     工具调用修补：坏 JSON 参数、历史里的 monster、MiMo XML→function_call
               ├─ proxy/muse.py        Muse 兼容：schema 修补、禁止空转前缀、空转重试、预算下限
               ├─ proxy/search_sidecar.py  给没有原生搜索的模型合成 web_search（结果来自 deepseek 代搜）
+              │                             + 历史翻译件：查询词/调用 id/占位结果/合成工具定义（两个桥共用）
               └─ proxy/apply_patch.py apply_patch 工具描述改写（custom → function）
 ```
 
@@ -63,9 +64,10 @@ Codex ──▶ vision_proxy.py（薄入口 + 兼容 re-export）
 | 话说一半断了 | 上游流断（`status=0`）/ 终止帧缺失：日志会写 `上游空闲 … 收尾` 或 `补 response.completed` |
 | 正文一次闪出来 | 上游把整段一次 flush（直连网关也这样）；本层只做平滑，不改内容 |
 | 工具调用没执行 / 正文冒出 `<tool_call>` | MiMo XML 解析是否命中：日志 `MiMo XML 工具调用已转成 function_call` |
+| 换模型接着聊被 400 拦（Cross-model history） | 已不该出现：历史里的 `web_search_call` 会翻成 `web_search` 调用 + 占位结果，日志写 `history replay: translated N web_search_call, dropped M reasoning items`；若又冒出来说明桥里的 `_translate_history` 被绕过 |
 
 ## 测试与门槛
 
-- 离线：`build.sh --test` 会跑 `tests/run_all_robust.py`（单元 47 + 策略基线 3 + 中继 8 + 混沌 31 + 发现 14 + 安装器 8）
-- 真机冒烟：`scripts/smoke-conversion.sh`（DeepSeek / MiMo / Muse / GLM 各一条流式请求）
+- 离线：`build.sh --test` 会跑 `tests/run_all_robust.py`（单元 48 + 策略基线 3 + 中继 8 + SSE 字节基线 2 + 混沌 38 + 发现 14 + 安装器 8）
+- 真机冒烟：`scripts/smoke-conversion.sh`（DeepSeek / MiMo / Muse / GLM 各一条流式请求 + 跨模型搜索历史两条）
 - shell 写法检查：`scripts/check-shell-cjk-vars.sh`（`$VAR` 后面别直接跟中文标点）
