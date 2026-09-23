@@ -259,3 +259,124 @@ def _fix_tool_required(parsed):
     if changed:
         _log("[vision-proxy] patched tool required[] to include limit for Zen/Go strict 400")
     return changed
+
+
+# ---------------------------------------------------------------------------
+# MiMo 原生 XML 工具调用（2026-09-23，抄 opencodex #5611/#5637 的作业）
+#
+# 实测（本机 9/22 的会话记录里真漏过）：MiMo 有自己的工具调用语法，网关没能把它转成
+# function_call，就把这段 markup 当正文吐出来了 ——
+#   <tool_call><function=write_stdin><parameter=session_id>77397</parameter>
+#   <parameter=chars>x</parameter></tool_call>
+# 形态还可能残缺（网关不补 </function>、多了孤立的 </parameter>），解析器要容错，
+# 解析不出来就把原文当普通文本（宁可漏一次修补，也不能把正文吃掉）。
+# ---------------------------------------------------------------------------
+MIMO_TOOL_CALL_OPEN = "<tool_call>"
+
+_MIMO_FUNCTION_RE = re.compile(r"<function\s*=\s*([A-Za-z_][\w.\-]*)>|<function\s+name\s*=\s*\"([^\"]+)\"\s*>")
+_MIMO_PARAM_RE = re.compile(
+    r"<parameter\s*=\s*([A-Za-z_][\w.\-]*)\s*>(.*?)</parameter>"
+    r"|<parameter\s+name\s*=\s*\"([^\"]+)\"\s*>(.*?)</parameter>",
+    re.S,
+)
+
+
+def _coerce_param_value(raw, want_type):
+    """按调用方给的 schema 类型转一下（工具参数写在请求的 tools 里，别靠名字猜）。"""
+    text = raw.strip()
+    if want_type == "integer":
+        try:
+            return int(text)
+        except ValueError:
+            return text
+    if want_type == "number":
+        try:
+            return float(text)
+        except ValueError:
+            return text
+    if want_type == "boolean":
+        if text.lower() in ("true", "false"):
+            return text.lower() == "true"
+        return text
+    return raw          # string / 未知类型：原样，注意不要 strip（chars 里的空格有意义）
+
+
+def parse_mimo_tool_markup(text, tool_param_types=None):
+    """把正文里的 MiMo XML 工具调用摘出来。
+
+    返回 (clean_text, calls)：
+      clean_text = 去掉 markup 之后的可见正文；
+      calls      = [{"id": None, "name": ..., "args": <JSON 字符串>}]（与 chat 的 tool_calls 同形状）。
+    `tool_param_types` 形如 {"write_stdin": {"session_id": "integer", ...}}，来自请求里的 tools；
+    没给就全部当字符串（宁可不猜）。
+    """
+    if not isinstance(text, str) or MIMO_TOOL_CALL_OPEN not in text:
+        return text, []
+    clean = []
+    calls = []
+    cursor = 0
+    while True:
+        start = text.find(MIMO_TOOL_CALL_OPEN, cursor)
+        if start < 0:
+            clean.append(text[cursor:])
+            break
+        end = text.find("</tool_call>", start)
+        if end < 0:
+            # 没有闭合：整段留在正文里（交给流式那层按超时/上限决定，静态解析不猜）
+            clean.append(text[cursor:])
+            break
+        block = text[start + len(MIMO_TOOL_CALL_OPEN):end]
+        m = _MIMO_FUNCTION_RE.search(block)
+        if not m:
+            clean.append(text[cursor:end + len("</tool_call>")])
+            cursor = end + len("</tool_call>")
+            continue
+        name = m.group(1) or m.group(2)
+        args = {}
+        for pm in _MIMO_PARAM_RE.finditer(block):
+            key = pm.group(1) or pm.group(3)
+            raw = pm.group(2) if pm.group(2) is not None else pm.group(4)
+            want = ((tool_param_types or {}).get(name) or {}).get(key)
+            args[key] = _coerce_param_value(raw if raw is not None else "", want)
+        clean.append(text[cursor:start])
+        calls.append({"id": None, "name": name, "args": json.dumps(args, ensure_ascii=False)})
+        cursor = end + len("</tool_call>")
+    clean_text = "".join(clean)
+    if calls:
+        _log(f"[vision-proxy] MiMo XML 工具调用已从正文摘出 {len(calls)} 个：{[c['name'] for c in calls]}")
+    return clean_text, calls
+
+
+def mimo_markup_hold_len(text):
+    """流式用：正文尾巴是不是"可能是 <tool_call> 的开头"，是就返回要扣住几个字符。
+
+    例：尾巴 "<tool" → 3；"<tool_call>xx" 里含完整开标签 → 0（那由块扫描处理）。
+    """
+    if not text:
+        return 0
+    max_len = min(len(text), len(MIMO_TOOL_CALL_OPEN) - 1)
+    for n in range(max_len, 0, -1):
+        if MIMO_TOOL_CALL_OPEN.startswith(text[-n:]):
+            return n
+    return 0
+
+
+def find_mimo_block(text):
+    """流式用：找一个**完整**的 `<tool_call>…</tool_call>` 块。
+
+    返回 (start, end, name, args_json) 或 None。
+    """
+    if not isinstance(text, str):
+        return None
+    start = text.find(MIMO_TOOL_CALL_OPEN)
+    if start < 0:
+        return None
+    end = text.find("</tool_call>", start)
+    if end < 0:
+        return None
+    block = text[start + len(MIMO_TOOL_CALL_OPEN):end]
+    m = _MIMO_FUNCTION_RE.search(block)
+    if not m:
+        return None
+    name = m.group(1) or m.group(2)
+    return (start, end + len("</tool_call>"), name, block)

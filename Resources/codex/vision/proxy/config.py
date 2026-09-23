@@ -195,6 +195,22 @@ _RESPONSES_BROKEN_UNTIL = {}      # model -> monotonic deadline to skip probing 
 _RESPONSES_FALLBACK_TTL = 300.0   # seconds a broken probe result stays cached
 
 
+_RESPONSES_FALLBACK_TTL_MAX = 7200.0   # 连续失败时的最长缓存（2 小时）
+_RESPONSES_FAIL_STREAK = {}            # model -> 连续"原生 /responses 不可用"的次数（成功一次清零）
+
+
+def responses_broken_ttl(model):
+    """"这个模型的原生 /responses 坏了"该缓存多久（2026-09-23）。
+
+    以前固定 5 分钟 = 每 5 分钟白试一次原生路径，而失败那一次既多花时间、又可能死在流中间
+    （用户看到的"话说一半失踪"就发生在这个窗口）。改成连续失败指数退避：
+    5min → 15min → 45min → 2h（上限）；原生成功一次立刻清零。
+    """
+    streak = _RESPONSES_FAIL_STREAK.get(model, 0)
+    steps = max(0, min(streak - 1, 3))
+    return min(_RESPONSES_FALLBACK_TTL * (3 ** steps), _RESPONSES_FALLBACK_TTL_MAX)
+
+
 RESPONSES_ALWAYS_BRIDGE = frozenset({"omen-alpha"})
 
 

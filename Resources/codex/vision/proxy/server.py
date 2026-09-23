@@ -47,11 +47,13 @@ from .config import (
     _BRIDGE_NONSTREAM_MAX_BYTES,
     _RESPONSES_BROKEN_UNTIL,
     _RESPONSES_FALLBACK_TTL,
+    _RESPONSES_FAIL_STREAK,
     _UPSTREAM_TRANSIENT_STATUS,
     _clamp_reasoning_effort,
     _log,
     load_env_file,
     normalize_route_model,
+    responses_broken_ttl,
 )
 from .muse import (
     _build_muse_retry_body,
@@ -173,6 +175,36 @@ class _BufferedResponse:
 
 def _header_value(headers, name):
     return next((value for key, value in headers if key.lower() == name.lower()), None)
+
+
+def _tool_param_types(parsed):
+    """从请求的 tools 里抠出 {"工具名": {"参数名": "integer|number|boolean|string"}}。
+
+    用途（2026-09-23）：MiMo 的 XML 工具调用只有文本值（`<parameter=session_id>77397</parameter>`），
+    要变成合法的 function_call 参数就得知道每个参数的类型 —— 类型就在请求的 tools schema 里，
+    拿到就按它转，拿不到就不猜（一律当字符串）。
+    """
+    out = {}
+    tools = parsed.get("tools") if isinstance(parsed, dict) else None
+    if not isinstance(tools, list):
+        return out
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        name = tool.get("name")
+        params = tool.get("parameters")
+        if not isinstance(name, str) or not isinstance(params, dict):
+            continue
+        props = params.get("properties")
+        if not isinstance(props, dict):
+            continue
+        types = {}
+        for key, spec in props.items():
+            if isinstance(spec, dict) and isinstance(spec.get("type"), str):
+                types[key] = spec["type"]
+        if types:
+            out[name] = types
+    return out
 
 
 def _rewrite_model_compat(parsed):
@@ -423,6 +455,9 @@ class Proxy:
             else:
                 response = await self._open_upstream(method, path, bytes(body), headers, upstream)
                 upstream_status = getattr(response, "status", None) or getattr(response, "code", 0) or 0
+                if 200 <= upstream_status < 300:
+                    # 原生路径活了：把"连续失败"计数清零（下次坏了重新从 5 分钟起步）
+                    _RESPONSES_FAIL_STREAK.pop(model, None)
                 # 2026-09-10：网关把「Model X is not supported for format openai」从 500 改成 401
                 # （kimi-k3 实测），已知 chat 适配模型在 /responses 上吃 401 也要切桥；
                 # 未登记模型仍只在 5xx 时切，避免把真正的鉴权失败吞成桥接。
@@ -481,7 +516,12 @@ class Proxy:
                             f"({chat_status}) for {model}: {err_text}",
                         )
                         return
-                    _RESPONSES_BROKEN_UNTIL[model] = time.monotonic() + _RESPONSES_FALLBACK_TTL
+                    # 连续失败就指数退避（2026-09-23）：别每 5 分钟白试一次原生路径
+                    _RESPONSES_FAIL_STREAK[model] = _RESPONSES_FAIL_STREAK.get(model, 0) + 1
+                    ttl = responses_broken_ttl(model)
+                    _RESPONSES_BROKEN_UNTIL[model] = time.monotonic() + ttl
+                    _log(f"[vision-proxy] {model} 原生 /responses 连续失败 "
+                         f"{_RESPONSES_FAIL_STREAK[model]} 次 → 接下来 {int(ttl)}s 直接走 chat 桥")
                     txn["status"], txn["bridge"] = 200, "chat-fallback"
                     _log(f"[vision-proxy] responses->chat fallback engaged model={model} "
                          f"upstream_status={upstream_status} chat_status={chat_status}")
@@ -758,6 +798,8 @@ class Proxy:
             raise RuntimeError(f"Upstream network error: {exc.reason}") from exc
 
     async def _send_chat_bridge(self, writer, chat_resp, original_parsed, model, txn=None):
+        # MiMo 的 XML 工具调用要用到参数类型（见 _tool_param_types）
+        param_types = _tool_param_types(original_parsed)
         """Translate a chat-completions upstream response into Responses wire format.
 
         Streaming path (P3/P4/P5): incremental typewriter translation via
@@ -783,7 +825,7 @@ class Proxy:
             except json.JSONDecodeError:
                 await self._send_error(writer, 502, f"chat fallback returned non-JSON for {model}")
                 return
-            obj = _build_chat_fallback_json(model, obj, effort)
+            obj = _build_chat_fallback_json(model, obj, effort, tool_param_types=param_types)
             # Sidecar for web_search from non-search models via bridge - handle the search and inject results
             if model and not model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
                 has_ws = False
@@ -826,7 +868,7 @@ class Proxy:
             await writer.drain()
             return
 
-        tr = ChatBridgeTranslator(model, effort=effort)
+        tr = ChatBridgeTranslator(model, effort=effort, tool_param_types=param_types)
         sse_headers = [("Content-Type", "text/event-stream; charset=utf-8"), ("Cache-Control", "no-cache")]
         await self._write_head(writer, 200, sse_headers, None)
         writer.write(tr.on_created())

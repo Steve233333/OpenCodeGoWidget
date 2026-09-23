@@ -555,6 +555,97 @@ def t_terminal_frame_still_wins():
     assert st["completed"] is True
 
 
+def t_mimo_markup_is_extracted_from_text():
+    """2026-09-23：MiMo 把工具调用写成 XML 混在正文里（本机 9/22 真漏过）→ 要摘成 function_call"""
+    text = ("好的，我先看看。"
+            "<tool_call><function=write_stdin><parameter=session_id>77397</parameter>"
+            "<parameter=chars>x</parameter></tool_call>然后继续。")
+    clean, calls = vp.parse_mimo_tool_markup(
+        text, {"write_stdin": {"session_id": "integer", "chars": "string"}})
+    assert clean == "好的，我先看看。然后继续。", repr(clean)
+    assert len(calls) == 1 and calls[0]["name"] == "write_stdin", calls
+    args = json.loads(calls[0]["args"])
+    # 类型按请求里的 schema 转：session_id 是整数、chars 保持字符串（"1" 也不能变成 int）
+    assert args == {"session_id": 77397, "chars": "x"}, args
+
+
+def t_mimo_markup_tolerates_missing_closers():
+    """网关经常不补 </function>，还爱多吐孤立的 </parameter>（opencodex #5637 同款）"""
+    text = ("<tool_call><function=exec><parameter=cmd>ls -la</parameter>RAW JS</parameter></tool_call>")
+    clean, calls = vp.parse_mimo_tool_markup(text, {"exec": {"cmd": "string"}})
+    assert clean == "", repr(clean)
+    assert calls and calls[0]["name"] == "exec" and json.loads(calls[0]["args"])["cmd"] == "ls -la", calls
+
+
+def t_mimo_markup_leaves_plain_text_alone():
+    for text in ("普通正文，没有 markup", "<tool_call>但没闭合", "说了一半 <foo> 东西"):
+        clean, calls = vp.parse_mimo_tool_markup(text)
+        assert clean == text and calls == [], (text, clean, calls)
+    assert vp.mimo_markup_hold_len("abc<tool") == 5     # 可能是开标签的前缀 → 要扣住
+    assert vp.mimo_markup_hold_len("abc") == 0
+
+
+def _translate_chat_stream(chunks, tool_param_types=None):
+    tr = vp.ChatBridgeTranslator("mimo-v2.6-flash", tool_param_types=tool_param_types)
+    out = tr.on_created()
+    for piece in chunks:
+        out += tr.on_chat_frame(("data: " + json.dumps({"choices": [{"delta": {"content": piece}}]}) + "\n\n").encode())
+    out += tr.on_finish("stop", None)
+    return out.decode("utf-8", errors="replace")
+
+
+def t_streaming_bridge_converts_markup_to_function_call():
+    """流式：正文分批到达，跨 chunk 的 markup 也要认出来，并且不当正文吐出去"""
+    pieces = ["我先看看。",
+              "<tool_call><function=write_stdin>",
+              "<parameter=session_id>77397</parameter>",
+              "<parameter=chars>x</parameter></tool_call>",
+              "好了。"]
+    out = _translate_chat_stream(pieces, {"write_stdin": {"session_id": "integer", "chars": "string"}})
+    assert '"type": "function_call"' in out, out[-500:]
+    assert '"name": "write_stdin"' in out, out[-500:]
+    assert "session_id" in out and "77397" in out, out[-500:]
+    assert "<tool_call>" not in out, "markup 不该出现在可见正文里"
+    assert "我先看看。" in out and "好了。" in out, "前后的正文要照旧保留"
+    assert '"status": "completed"' in out
+
+
+def t_streaming_bridge_keeps_literal_text():
+    """模型真在说这段字面量（一直不闭合）→ 收尾时按正文放出来，不能吃掉用户内容"""
+    out = _translate_chat_stream(["我说的是这个写法：", "<tool_call>", "<function=xx>"])
+    assert "<tool_call>" in out or "&lt;tool_call&gt;" in out, out[-400:]
+
+
+def t_nonstream_bridge_converts_markup():
+    obj = {"choices": [{"message": {
+        "content": "先看看。<tool_call><function=write_stdin><parameter=session_id>1</parameter></tool_call>",
+        "tool_calls": []}}]}
+    resp = vp._build_chat_fallback_json("mimo-v2.6-flash", obj, None,
+                                        tool_param_types={"write_stdin": {"session_id": "integer"}})
+    kinds = [i["type"] for i in resp["output"]]
+    assert kinds == ["message", "function_call"], kinds
+    assert resp["output"][0]["content"][0]["text"] == "先看看。", resp["output"][0]
+    assert json.loads(resp["output"][1]["arguments"]) == {"session_id": 1}, resp["output"][1]
+
+
+def t_broken_responses_backoff_grows_and_resets():
+    """原生路径连坏几次后缓存要变长（别每 5 分钟白试一次），成功一次立刻回到最短"""
+    import importlib
+    cfg = importlib.import_module("proxy.config")
+    cfg._RESPONSES_FAIL_STREAK.clear()
+    assert cfg.responses_broken_ttl("mimo-v2.5") == 300.0
+    cfg._RESPONSES_FAIL_STREAK["mimo-v2.5"] = 1
+    assert cfg.responses_broken_ttl("mimo-v2.5") == 300.0
+    cfg._RESPONSES_FAIL_STREAK["mimo-v2.5"] = 2
+    assert cfg.responses_broken_ttl("mimo-v2.5") == 900.0
+    cfg._RESPONSES_FAIL_STREAK["mimo-v2.5"] = 3
+    assert cfg.responses_broken_ttl("mimo-v2.5") == 2700.0
+    cfg._RESPONSES_FAIL_STREAK["mimo-v2.5"] = 9
+    assert cfg.responses_broken_ttl("mimo-v2.5") == 7200.0      # 上限 2 小时
+    cfg._RESPONSES_FAIL_STREAK.pop("mimo-v2.5")
+    assert cfg.responses_broken_ttl("mimo-v2.5") == 300.0        # 清零后回到最短
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)

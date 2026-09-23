@@ -10,10 +10,20 @@ import uuid
 from .config import (
     _OC_SESSION_FALLBACK,
     _clamp_reasoning_effort,
+    _log,
 )
 from .toolfix import (
+    MIMO_TOOL_CALL_OPEN,
+    _MIMO_PARAM_RE,
+    _coerce_param_value,
     _sanitize_fc_args,
+    find_mimo_block,
+    mimo_markup_hold_len,
+    parse_mimo_tool_markup,
 )
+
+# 流式里"疑似 markup 开头"最多扣多久（字节）：超过就认定模型是在说字面量，按正文放出去
+MIMO_MARKUP_HOLD_MAX = 8192
 
 
 def _content_parts_to_chat(content):
@@ -187,7 +197,7 @@ def _sse_data_frame(payload):
 _sse_data_frame.seq = 1
 
 
-def _build_chat_fallback_events(model, raw, effort=None):
+def _build_chat_fallback_events(model, raw, effort=None, tool_param_types=None):
     """Turn aggregated chat stream/JSON output into full Responses SSE bytes."""
     base = _bridge_base_response(model)
     frames = [_sse_data_frame({"type": "response.created", "response": base}),
@@ -208,6 +218,9 @@ def _build_chat_fallback_events(model, raw, effort=None):
                       "args": ((tc.get("function") or {}).get("arguments") or "")}
                      for tc in message.get("tool_calls") or []]
         usage = obj.get("usage")
+    # MiMo 会把工具调用写成 XML 混在正文里（2026-09-23）：先摘出来当真正的 function_call
+    text, markup_calls = parse_mimo_tool_markup(text, tool_param_types)
+    call_list = call_list + markup_calls
     if text:
         msg_id = "msg_" + uuid.uuid4().hex[:24]
         added_item = {"id": msg_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}
@@ -246,7 +259,7 @@ def _build_chat_fallback_events(model, raw, effort=None):
     return b"".join(frames)
 
 
-def _build_chat_fallback_json(model, obj, effort=None):
+def _build_chat_fallback_json(model, obj, effort=None, tool_param_types=None):
     """Turn a non-streaming chat completion JSON into a Responses response object."""
     choice = (obj.get("choices") or [{}])[0]
     message = choice.get("message") or {}
@@ -258,6 +271,8 @@ def _build_chat_fallback_json(model, obj, effort=None):
                   "name": ((tc.get("function") or {}).get("name") or ""),
                   "args": ((tc.get("function") or {}).get("arguments") or "")}
                  for tc in message.get("tool_calls") or []]
+    text, markup_calls = parse_mimo_tool_markup(text, tool_param_types)
+    call_list = call_list + markup_calls
     response = _bridge_base_response(model, status="completed")
     items = []
     if text:
@@ -314,7 +329,7 @@ class ChatBridgeTranslator:
     (P4). A byte budget caps accumulated text (P5): exceeding it truncates gracefully.
     """
 
-    def __init__(self, model, effort=None, byte_budget=16 * 1024 * 1024):
+    def __init__(self, model, effort=None, byte_budget=16 * 1024 * 1024, tool_param_types=None):
         self.model = model
         self.effort = effort
         self.byte_budget = byte_budget
@@ -331,6 +346,9 @@ class ChatBridgeTranslator:
         self.finish_reason = None
         self.truncated = False
         self.finished = False
+        # 2026-09-23 MiMo XML：正文里"疑似工具调用"的那段先扣在缓冲里，等块收齐再决定
+        self.tool_param_types = tool_param_types or {}
+        self.textbuf = ""
 
     # -- plumbing ---------------------------------------------------------
     def _frame(self, payload):
@@ -354,6 +372,7 @@ class ChatBridgeTranslator:
 
     def total_len(self):
         n = 0
+        n += len(self.textbuf)
         if self.msg:
             n += len(self.msg["text"])
         if self.reasoning:
@@ -438,24 +457,96 @@ class ChatBridgeTranslator:
 
     # -- upstream deltas -----------------------------------------------------
     def on_content_delta(self, text):
+        """正文增量（2026-09-23）。
+
+        MiMo 会把自己的工具调用写成 XML 混在正文里发出来（本机 9/22 真漏过：
+        `<tool_call><function=write_stdin><parameter=session_id>…`）。这里先把"可能是 markup 开头"
+        的尾巴扣在缓冲里，等块收齐再决定：是工具调用就转成 function_call，不是就当正文吐出去。
+        抄 opencodex #5611/#5637 的思路，实现按我们自己的增量管线写。
+        """
         if not text:
             return b""
         out = self._close_reasoning()
         if self._over_budget(len(text)):
             self.truncated = True
             return (out or b"") + self.on_finish("stop", self.usage)
+        self.textbuf += text
+        while True:
+            block = find_mimo_block(self.textbuf)
+            if block:
+                start, end, name, body = block
+                before = self.textbuf[:start]
+                self.textbuf = self.textbuf[end:]
+                out += self._emit_text(before)
+                out += self._close_message()
+                out += self._emit_markup_call(name, body)
+                continue
+            open_at = self.textbuf.find(MIMO_TOOL_CALL_OPEN)
+            if open_at >= 0:
+                # 开标签出现了但块还没闭合：前面的正文照发，从开标签起扣住等闭合
+                out += self._emit_text(self.textbuf[:open_at])
+                self.textbuf = self.textbuf[open_at:]
+                if len(self.textbuf) > MIMO_MARKUP_HOLD_MAX:
+                    out += self._emit_text(self.textbuf)
+                    self.textbuf = ""
+                break
+            hold = mimo_markup_hold_len(self.textbuf)
+            if hold:
+                emit, self.textbuf = self.textbuf[:-hold], self.textbuf[-hold:]
+            else:
+                emit, self.textbuf = self.textbuf, ""
+            out += self._emit_text(emit)
+            if len(self.textbuf) > MIMO_MARKUP_HOLD_MAX:
+                # 扣太久了：模型多半就是在说这段字面量，别再等，按正文放出去
+                out += self._emit_text(self.textbuf)
+                self.textbuf = ""
+            break
+        return out
+
+    def _emit_text(self, text):
+        """把一段确认是"正文"的文字吐出去（消息项懒创建）。"""
+        if not text:
+            return b""
+        out = b""
         if not self.msg:
             mid = "msg_" + uuid.uuid4().hex[:24]
             self.msg = {"id": mid, "text": "", "index": self.output_index}
-            out = (out or b"") + self._frame({"type": "response.output_item.added", "output_index": self.output_index,
-                                              "item": {"id": mid, "type": "message", "status": "in_progress",
-                                                       "role": "assistant", "content": []}})
+            out = self._frame({"type": "response.output_item.added", "output_index": self.output_index,
+                               "item": {"id": mid, "type": "message", "status": "in_progress",
+                                        "role": "assistant", "content": []}})
             out += self._frame({"type": "response.content_part.added", "item_id": mid,
                                 "output_index": self.msg["index"], "content_index": 0,
                                 "part": {"type": "output_text", "text": "", "annotations": []}})
         self.msg["text"] += text
         out += self._frame({"type": "response.output_text.delta", "item_id": self.msg["id"],
                             "output_index": self.msg["index"], "content_index": 0, "delta": text})
+        return out
+
+    def _emit_markup_call(self, name, body):
+        """MiMo 的 XML 块 → 真正的 function_call 项；参数按请求里的工具 schema 转类型。"""
+        args = {}
+        for pm in _MIMO_PARAM_RE.finditer(body):
+            key = pm.group(1) or pm.group(3)
+            raw = pm.group(2) if pm.group(2) is not None else pm.group(4)
+            want = (self.tool_param_types.get(name) or {}).get(key)
+            args[key] = _coerce_param_value(raw if raw is not None else "", want)
+        arguments = _sanitize_fc_args(json.dumps(args, ensure_ascii=False))
+        call_id = "call_" + uuid.uuid4().hex[:16]
+        fc_id = "fc_" + uuid.uuid4().hex[:24]
+        idx = self.output_index
+        out = (self._frame({"type": "response.output_item.added", "output_index": idx,
+                            "item": {"id": fc_id, "type": "function_call", "status": "in_progress",
+                                     "call_id": call_id, "name": name, "arguments": ""}}) +
+               self._frame({"type": "response.function_call_arguments.delta", "item_id": fc_id,
+                            "output_index": idx, "delta": arguments}) +
+               self._frame({"type": "response.function_call_arguments.done", "item_id": fc_id,
+                            "output_index": idx, "arguments": arguments}))
+        done_item = {"id": fc_id, "type": "function_call", "status": "completed",
+                     "call_id": call_id, "name": name, "arguments": arguments}
+        out += self._frame({"type": "response.output_item.done", "output_index": idx, "item": done_item})
+        self.items_done.append(done_item)
+        self.output_index += 1
+        _log(f"[vision-proxy] MiMo XML 工具调用已转成 function_call：{name}")
         return out
 
     def on_reasoning_delta(self, text):
@@ -542,7 +633,10 @@ class ChatBridgeTranslator:
             self.finish_reason = finish_reason
         if usage:
             self.usage = usage
-        out = (self._close_reasoning() or b"") + (self._close_message() or b"") + self._close_tools()
+        # 收尾前把扣留的尾巴放出来（多半是没等到的半截 markup，当正文更安全）
+        out_pre = self._emit_text(self.textbuf) if self.textbuf else b""
+        self.textbuf = ""
+        out = out_pre + (self._close_reasoning() or b"") + (self._close_message() or b"") + self._close_tools()
         status = "incomplete" if self.truncated else "completed"
         final = self._snapshot(status=status, usage=_chat_usage_to_responses(self.usage))
         final["incomplete_details"] = ({"reason": "max_output_tokens"} if self.truncated else None)
