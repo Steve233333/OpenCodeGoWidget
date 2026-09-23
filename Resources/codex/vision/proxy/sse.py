@@ -445,6 +445,87 @@ def _rewrite_sse_body(body):
     return bytes(out)
 
 
+class _ChatCompatCtx:
+    """chat 适配流的"补帧"上下文（原先挤在 _complete_sse_frame 里的三个闭包）。
+
+    compat 是跨帧状态（state["compat"]）；out 是本帧要吐的帧；seq 是 sequence_number 计数器 ——
+    三者都归这个对象所有，别再散在函数体里各改一份。
+    """
+
+    def __init__(self, compat):
+        self.compat = compat
+        self.out = []
+        self.seq = compat.get("seq", 0)
+
+    def ensure_started(self, response_id, model):
+        if self.compat.get("started"):
+            return
+        self.compat["started"] = True
+        response_obj = {
+            "id": response_id or "gen-self.compat",
+            "object": "response",
+            "status": "in_progress",
+            "model": model or "unknown",
+            "output": [],
+        }
+        self.out.append(_sse_event("response.created", {
+            "type": "response.created", "sequence_number": self.seq,
+            "response": response_obj}))
+        self.out.append(_sse_event("response.in_progress", {
+            "type": "response.in_progress", "sequence_number": self.seq + 1,
+            "response": response_obj}))
+        self.seq += 2
+        self.compat["seq"] = self.seq
+
+    def close_message(self, ):
+        item = self.compat.get("msg_item")
+        if not item or item.get("done"):
+            return
+        item["done"] = True
+        text_acc = item.get("text", "")
+        item_id = item["item_id"]
+        output_index = item["output_index"]
+        self.out.append(_sse_event("response.output_text.done", {
+            "type": "response.output_text.done", "sequence_number": self.seq,
+            "item_id": item_id, "output_index": output_index, "content_index": 0,
+            "text": text_acc, "annotations": []}))
+        self.out.append(_sse_event("response.content_part.done", {
+            "type": "response.content_part.done", "sequence_number": self.seq + 1,
+            "item_id": item_id, "output_index": output_index, "content_index": 0,
+            "part": {"type": "output_text", "text": text_acc, "annotations": []}}))
+        self.out.append(_sse_event("response.output_item.done", {
+            "type": "response.output_item.done", "sequence_number": self.seq + 2,
+            "output_index": output_index,
+            "item": {"id": item_id, "type": "message", "status": "completed",
+                     "role": "assistant",
+                     "content": [{"type": "output_text", "text": text_acc, "annotations": []}]}}))
+        self.seq += 3
+        self.compat["seq"] = self.seq
+
+    def close_function_call(self, ):
+        item = self.compat.get("fc_item")
+        if not item or item.get("done"):
+            return
+        item["done"] = True
+        item_id = item["item_id"]
+        output_index = item["output_index"]
+        repaired = _repair_json_object_args(item.get("args_acc", ""))
+        if repaired != item.get("args_acc", ""):
+            _log(f"[vision-proxy] repaired fc args at stream close item_id={item_id} "
+                 f"model={self.compat.get('model')}")
+        self.out.append(_sse_event("response.function_call_arguments.done", {
+            "type": "response.function_call_arguments.done", "sequence_number": self.seq,
+            "item_id": item_id, "output_index": output_index,
+            "arguments": repaired}))
+        self.out.append(_sse_event("response.output_item.done", {
+            "type": "response.output_item.done", "sequence_number": self.seq + 1,
+            "output_index": output_index,
+            "item": {"id": item_id, "type": "function_call", "status": "completed",
+                     "name": item.get("name") or "tool", "call_id": item.get("call_id") or item_id,
+                     "arguments": repaired}}))
+        self.seq += 2
+        self.compat["seq"] = self.seq
+
 def _complete_sse_frame(frame, state):
     """Repair chat-adapted zen/go streams (mimo/glm/kimi/hy3) that omit the
     standard Responses SSE envelope: no response.created/in_progress, and
@@ -472,103 +553,28 @@ def _complete_sse_frame(frame, state):
         if not etype:
             return [frame]
 
-        out = []
-        seq = compat.get("seq", 0)
 
-        def ensure_started(response_id, model):
-            nonlocal seq
-            if compat.get("started"):
-                return
-            compat["started"] = True
-            response_obj = {
-                "id": response_id or "gen-compat",
-                "object": "response",
-                "status": "in_progress",
-                "model": model or "unknown",
-                "output": [],
-            }
-            out.append(_sse_event("response.created", {
-                "type": "response.created", "sequence_number": seq,
-                "response": response_obj}))
-            out.append(_sse_event("response.in_progress", {
-                "type": "response.in_progress", "sequence_number": seq + 1,
-                "response": response_obj}))
-            seq += 2
-            compat["seq"] = seq
-
-        rid = (payload.get("response") or {}).get("id") or payload.get("id")
-        rmodel = (payload.get("response") or {}).get("model") or payload.get("model")
-
-        def close_message():
-            nonlocal seq
-            item = compat.get("msg_item")
-            if not item or item.get("done"):
-                return
-            item["done"] = True
-            text_acc = item.get("text", "")
-            item_id = item["item_id"]
-            output_index = item["output_index"]
-            out.append(_sse_event("response.output_text.done", {
-                "type": "response.output_text.done", "sequence_number": seq,
-                "item_id": item_id, "output_index": output_index, "content_index": 0,
-                "text": text_acc, "annotations": []}))
-            out.append(_sse_event("response.content_part.done", {
-                "type": "response.content_part.done", "sequence_number": seq + 1,
-                "item_id": item_id, "output_index": output_index, "content_index": 0,
-                "part": {"type": "output_text", "text": text_acc, "annotations": []}}))
-            out.append(_sse_event("response.output_item.done", {
-                "type": "response.output_item.done", "sequence_number": seq + 2,
-                "output_index": output_index,
-                "item": {"id": item_id, "type": "message", "status": "completed",
-                         "role": "assistant",
-                         "content": [{"type": "output_text", "text": text_acc, "annotations": []}]}}))
-            seq += 3
-            compat["seq"] = seq
-
-        def close_function_call():
-            nonlocal seq
-            item = compat.get("fc_item")
-            if not item or item.get("done"):
-                return
-            item["done"] = True
-            item_id = item["item_id"]
-            output_index = item["output_index"]
-            repaired = _repair_json_object_args(item.get("args_acc", ""))
-            if repaired != item.get("args_acc", ""):
-                _log(f"[vision-proxy] repaired fc args at stream close item_id={item_id} "
-                     f"model={compat.get('model')}")
-            out.append(_sse_event("response.function_call_arguments.done", {
-                "type": "response.function_call_arguments.done", "sequence_number": seq,
-                "item_id": item_id, "output_index": output_index,
-                "arguments": repaired}))
-            out.append(_sse_event("response.output_item.done", {
-                "type": "response.output_item.done", "sequence_number": seq + 1,
-                "output_index": output_index,
-                "item": {"id": item_id, "type": "function_call", "status": "completed",
-                         "name": item.get("name") or "tool", "call_id": item.get("call_id") or item_id,
-                         "arguments": repaired}}))
-            seq += 2
-            compat["seq"] = seq
+        ctx = _ChatCompatCtx(compat)
 
         if etype == "response.output_text.delta":
-            ensure_started(rid, rmodel)
+            ctx.ensure_started(rid, rmodel)
             if not compat.get("msg_item"):
-                item_id = f"msg_{compat.get('seq', 0)}"
+                item_id = f"msg_{compat.get('ctx.seq', 0)}"
                 output_index = compat.get("next_index", 0)
                 compat["msg_item"] = {"item_id": item_id, "output_index": output_index,
                                       "text": "", "done": False}
-                out.append(_sse_event("response.output_item.added", {
-                    "type": "response.output_item.added", "sequence_number": seq,
+                ctx.out.append(_sse_event("response.output_item.added", {
+                    "type": "response.output_item.added", "sequence_number": ctx.seq,
                     "output_index": output_index,
                     "item": {"id": item_id, "type": "message", "status": "in_progress",
                              "role": "assistant",
                              "content": [{"type": "output_text", "text": "", "annotations": []}]}}))
-                out.append(_sse_event("response.content_part.added", {
-                    "type": "response.content_part.added", "sequence_number": seq + 1,
+                ctx.out.append(_sse_event("response.content_part.added", {
+                    "type": "response.content_part.added", "sequence_number": ctx.seq + 1,
                     "item_id": item_id, "output_index": output_index, "content_index": 0,
                     "part": {"type": "output_text", "text": "", "annotations": []}}))
-                seq += 2
-                compat["seq"] = seq
+                ctx.seq += 2
+                compat["seq"] = ctx.seq
             item = compat["msg_item"]
             delta = payload.get("delta", "")
             if isinstance(delta, str):
@@ -577,14 +583,14 @@ def _complete_sse_frame(frame, state):
             new_payload["item_id"] = item["item_id"]
             new_payload["output_index"] = item["output_index"]
             new_payload["content_index"] = 0
-            out.append(_sse_event("response.output_text.delta", new_payload))
-            return out
+            ctx.out.append(_sse_event("response.output_text.delta", new_payload))
+            return ctx.out
 
         if etype == "response.output_item.added":
             item = payload.get("item") or {}
             if item.get("type") == "function_call":
-                ensure_started(rid or item.get("id"), rmodel)
-                item_id = item.get("id") or f"fc_{compat.get('seq', 0)}"
+                ctx.ensure_started(rid or item.get("id"), rmodel)
+                item_id = item.get("id") or f"fc_{compat.get('ctx.seq', 0)}"
                 output_index = payload.get("output_index", compat.get("next_index", 0) or 0)
                 compat["fc_item"] = {
                     "item_id": item_id,
@@ -597,30 +603,30 @@ def _complete_sse_frame(frame, state):
             return [frame]
 
         if etype == "response.function_call_arguments.delta":
-            ensure_started(rid, rmodel)
+            ctx.ensure_started(rid, rmodel)
             item = compat.get("fc_item")
             if not item:
-                item_id = f"fc_{compat.get('seq', 0)}"
+                item_id = f"fc_{compat.get('ctx.seq', 0)}"
                 output_index = compat.get("next_index", 1) or 1
                 compat["fc_item"] = {"item_id": item_id, "output_index": output_index,
                                      "name": None, "call_id": None,
                                      "args_acc": "", "done": False}
                 item = compat["fc_item"]
-                out.append(_sse_event("response.output_item.added", {
-                    "type": "response.output_item.added", "sequence_number": seq,
+                ctx.out.append(_sse_event("response.output_item.added", {
+                    "type": "response.output_item.added", "sequence_number": ctx.seq,
                     "output_index": output_index,
                     "item": {"id": item_id, "type": "function_call", "status": "in_progress",
                              "name": "unknown", "call_id": item_id, "arguments": ""}}))
-                seq += 1
-                compat["seq"] = seq
+                ctx.seq += 1
+                compat["seq"] = ctx.seq
             delta = payload.get("delta", "")
             if isinstance(delta, str):
                 item["args_acc"] += delta
             new_payload = dict(payload)
             new_payload["item_id"] = item["item_id"]
             new_payload["output_index"] = item["output_index"]
-            out.append(_sse_event("response.function_call_arguments.delta", new_payload))
-            return out
+            ctx.out.append(_sse_event("response.function_call_arguments.delta", new_payload))
+            return ctx.out
 
         if etype == "response.function_call_arguments.done":
             item = compat.get("fc_item")
@@ -653,10 +659,10 @@ def _complete_sse_frame(frame, state):
 
         if etype in ("response.completed", "response.failed", "response.incomplete"):
             if compat.get("started"):
-                close_message()
-                close_function_call()
-            out.append(frame)
-            return out
+                ctx.close_message()
+                ctx.close_function_call()
+            ctx.out.append(frame)
+            return ctx.out
 
         if etype == "response.output_item.done":
             item = payload.get("item") or {}
@@ -720,14 +726,14 @@ def split_text_delta_frame(frame_bytes, chunk_chars=None):
     limit = chunk_chars or SMOOTH_TEXT_CHARS
     if not isinstance(delta, str) or len(delta) <= limit:
         return [(frame_bytes, 0.0)]
-    out = []
+    ctx.out = []
     for i in range(0, len(delta), limit):
         piece = dict(payload)
         piece["delta"] = delta[i:i + limit]
         # 别忘 SSE 的帧分隔符：少了它客户端会把后面的帧吞掉
-        out.append(((head + leading + json.dumps(piece, ensure_ascii=False) + "\n\n").encode("utf-8"),
+        ctx.out.append(((head + leading + json.dumps(piece, ensure_ascii=False) + "\n\n").encode("utf-8"),
                     SMOOTH_TEXT_INTERVAL))
-    return out
+    return ctx.out
 
 
 def text_delta_chars(frame_bytes):
