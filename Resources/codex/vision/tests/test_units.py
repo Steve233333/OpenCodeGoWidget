@@ -670,6 +670,38 @@ def t_muse_min_output_tokens_floor():
     assert vp._muse_enforce_min_output_tokens(p) == (False, None, None) and p["max_output_tokens"] == 10
 
 
+def t_history_arguments_are_always_valid_json():
+    """2026-09-23：回放历史里的坏 `arguments` 会让上游 400（`arguments` must be valid JSON）。
+
+    实测本线程里就有 4 条坏值（都是某次工具调用没发完整留下的）：
+    `proposed_plan` 空串、`request_user_input` 截断、`write_stdin` 少半截。
+    修法：能救的救（补前缀/去尾逗号/补闭合），救不回来的退化成 `{}` —— 保证合法 JSON。
+    """
+    import json as _json
+    cases = [
+        '{"session_id": 77397, "chars": ',                      # 截断（真实样本）
+        '',                                                     # 空串（真实样本）
+        '{"questions": [{"id": "selfheal", "header": "修复力度"',  # 截断（真实样本）
+        '{"a": 1, ',                                            # 尾逗号
+        'cmd":"pwd"}',                                          # 缺 {" 前缀（老问题）
+        '{"ok": true}',                                         # 合法 → 不许动
+    ]
+    for raw in cases:
+        fixed = vp._repair_history_args(raw)
+        _json.loads(fixed)                                      # 必须能解析，否则抛异常 → 测试失败
+    assert vp._repair_history_args('{"ok": true}') == '{"ok": true}'   # 合法值原样
+    assert vp._repair_history_args('{"a": 1, ') == '{"a": 1}'          # 尾逗号能救
+    assert vp._repair_history_args('') == '{}'                         # 空串退化成 {}
+
+    parsed = {"input": [
+        {"type": "function_call", "name": "write_stdin", "arguments": '{"session_id": 1, '},
+        {"type": "message", "role": "user", "content": "hi"},
+    ]}
+    assert vp._normalize_fc_args_history(parsed) is True
+    import json as _json2
+    _json2.loads(parsed["input"][0]["arguments"])
+
+
 def t_text_delta_smoothing_splits_bursts_only():
     """上游一次性 flush 大段正文时切成小片（显示才像逐字）；本来就小的帧原样放行"""
     big = ("data: " + json.dumps({"type": "response.output_text.delta", "delta": "字" * 60}) + "\n\n").encode()

@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.37.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.38.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.37.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.38.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.37.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.37.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.38.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.38.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,27 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.38 — 修「upstream 400：`arguments` must be valid JSON」
+
+**现象**：用 muse 继续一段老对话时，上游直接 400：
+`Upstream request failed: [invalid_request_error] \`arguments\` must be valid JSON`，整轮发不出去。
+
+**根因（实测定位，不是猜）**：会话历史里有 **4 条 `function_call` 的 `arguments` 本身不是合法 JSON** ——
+`proposed_plan` 是空串、`request_user_input` 被截断、`write_stdin` 少了半截（都是某次工具调用没发完整留下的）。
+我们原样回放，Go/Zen 网关按 function 校验就整轮拒掉。muse 上必现；deepseek 上会先撞另一条校验
+（`reasoning_text`），所以之前没暴露。
+
+**修法**：`proxy/toolfix.py` 新增 `_repair_history_args()`，在回放历史时把 `arguments` 修成合法 JSON ——
+能救的救（补 `{"` 前缀、去尾逗号、补闭合符号），救不回来的退化成 `{}` 并记一行日志；
+`_normalize_fc_args_history()` 现在对每条 function_call 都过一遍（以前只认得"缺 `{"`"那一种形态）。
+
+**复现 + 验证（同一探针）**：
+- 修前：`muse-spark-1.3-contributor-go` + 截断 arguments → **HTTP 400**（与你看到的一字不差）
+- 修后：同一请求 → **HTTP 200** ✓
+新增单测覆盖 6 种形态（含 3 条真实坏样本）。
+
+版本 **1.1.11.38 (78)**。
 
 ### v1.1.11.37 — 转换层收敛收尾：SSE 引擎拆完 + handle 拆完（并加部署护栏）
 
@@ -152,31 +173,6 @@ Phase ① 之后先把**风险最低、收益明确**的第 ④ 阶段做掉（�
 验证：全量 **47 + 3 + 8 + 31 + 14 + 8** 全绿；真机冒烟四个家族全绿（DeepSeek / MiMo / Muse / GLM）。
 
 版本 **1.1.11.36 (76)**。
-
-### v1.1.11.35 — 转换层收敛 ①：模型策略只有一处真源
-
-体检发现（不是整面墙歪，但确实又砌了几块）：`handle()` 483 行、同一句"这个模型自带搜索"写了 4 遍
-+ 1 处同义判断、路由决策散在 3 份名单 + 2 份缓存里。这一版先收**最该收的那块：模型怪癖**。
-
-- **新增 `proxy/policy.py`**：两层结构 —— `MODEL_FAMILIES`（家族默认）+ `MODEL_OVERRIDES`（单模型覆盖），
-  入口 `policy_for(model)`；顺手做名字归一（`-go`/`-zen` 后缀、`opencode-go/` 前缀）。
-  字段：`route`（native / native-or-bridge / bridge / messages）、`native_search`、`terminal_grace`、
-  `min_output_tokens`、`stall_guard`、`smoothing`。
-- **删掉 3 份平行名单 + 2 份学习缓存**：`RESPONSES_FALLBACK_MODELS` / `RESPONSES_ALWAYS_BRIDGE` /
-  `MESSAGES_ALWAYS_BRIDGE` / `_RESPONSES_BROKEN_UNTIL` / `_RESPONSES_FAIL_STREAK` 全部移除；
-  "学坏了就退避"改由 `policy.NativeProbeCache` 单独拥有（逻辑没变：5/15/45 分钟 → 上限 2 小时，成功清零）。
-- **server.py 里 4 处字面重复 + 1 处同义判断全部改成查表**（`has_native_search(model)`）；muse 的预算下限、
-  空转守卫开关、终止宽限、正文平滑也都改由策略字段驱动（默认值与今天逐条相同，**行为不变**）。
-- **新增策略基线测试** `tests/test_model_policy_golden.py`：把重构前对 36 条模型/写法（32 个真实模型 +
-  provider 前缀 + 未知模型）的路由与搜索判定逐条固化 —— 以后谁顺手改行为，这张表立刻变红。
-- **新增 `scripts/smoke-conversion.sh`**（真机冒烟：DeepSeek / MiMo / Muse / GLM 各一条流式请求，
-  断言 200 + 有正文 + 无 markup 泄漏）与 **`scripts/check-shell-cjk-vars.sh`**（进门槛：
-  今天三次踩到 `$VAR` 紧跟中文标点导致 unbound 的坑，写成检查脚本永不复发）。
-
-验证：策略基线 36 条逐条一致；全量测试 **47 + 3 + 8 + 31 + 14 + 8** 全绿；真机冒烟四条全绿
-（DeepSeek 46 字 / MiMo 27 字 / Muse 30 字 / GLM 63 字，markup 均 0）。
-
-版本 **1.1.11.35 (75)**。
 
 ## 本地构建
 

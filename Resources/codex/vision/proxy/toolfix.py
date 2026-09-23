@@ -128,6 +128,42 @@ def _fc_args_broken(args):
         return True
 
 
+def _repair_history_args(args):
+    """把回放历史里的 `arguments` 修成合法 JSON（2026-09-23）。
+
+    上游（Go/Zen 网关）会直接 400：「`arguments` must be valid JSON」。而历史里真的会有坏值 ——
+    实测本线程里就有 4 条：`proposed_plan` 的空串、`request_user_input` 被截断的 JSON、
+    `write_stdin` 少半截的 JSON（都是某次工具调用没发完整留下的）。
+    依次尝试：本来就合法 → 不动；补 `{"` 前缀；逐步补闭合符号；实在救不回来 → `{}`（丢这一条的参数，
+    但比让整轮对话被上游拒掉强），并记一行日志。
+    """
+    if not isinstance(args, str):
+        return args
+    if not args.strip():
+        return "{}"
+    try:
+        json.loads(args)
+        return args
+    except Exception:
+        pass
+    fixed = _repair_json_object_args(args)
+    try:
+        json.loads(fixed)
+        return fixed
+    except Exception:
+        pass
+    stripped = args.rstrip().rstrip(',').rstrip()          # 截断常见的尾逗号/半截冒号
+    for base in (args, stripped):
+        for suffix in ('"', '}', '"}', '"]}', '"}]}', '}]}}', '}}'):
+            try:
+                json.loads(base + suffix)
+                return base + suffix
+            except Exception:
+                continue
+    _log(f"[vision-proxy] unrecoverable history arguments, replaced with {{}}: {args[:60]!r}")
+    return "{}"
+
+
 def _normalize_fc_args_history(parsed):
     """Repair broken assistant function_call arguments in replayed history.
 
@@ -146,8 +182,8 @@ def _normalize_fc_args_history(parsed):
         if not isinstance(item, dict) or item.get("type") != "function_call":
             continue
         args = item.get("arguments")
-        if _fc_args_broken(args):
-            fixed = _repair_json_object_args(args)
+        if isinstance(args, str):
+            fixed = _repair_history_args(args)          # 合法 JSON 是上游硬要求（截断/空串都会 400）
             if fixed != args:
                 item["arguments"] = fixed
                 changed = True

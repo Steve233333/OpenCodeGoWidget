@@ -2,6 +2,27 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.38 — 修「upstream 400：`arguments` must be valid JSON」
+
+**现象**：用 muse 继续一段老对话时，上游直接 400：
+`Upstream request failed: [invalid_request_error] \`arguments\` must be valid JSON`，整轮发不出去。
+
+**根因（实测定位，不是猜）**：会话历史里有 **4 条 `function_call` 的 `arguments` 本身不是合法 JSON** ——
+`proposed_plan` 是空串、`request_user_input` 被截断、`write_stdin` 少了半截（都是某次工具调用没发完整留下的）。
+我们原样回放，Go/Zen 网关按 function 校验就整轮拒掉。muse 上必现；deepseek 上会先撞另一条校验
+（`reasoning_text`），所以之前没暴露。
+
+**修法**：`proxy/toolfix.py` 新增 `_repair_history_args()`，在回放历史时把 `arguments` 修成合法 JSON ——
+能救的救（补 `{"` 前缀、去尾逗号、补闭合符号），救不回来的退化成 `{}` 并记一行日志；
+`_normalize_fc_args_history()` 现在对每条 function_call 都过一遍（以前只认得"缺 `{"`"那一种形态）。
+
+**复现 + 验证（同一探针）**：
+- 修前：`muse-spark-1.3-contributor-go` + 截断 arguments → **HTTP 400**（与你看到的一字不差）
+- 修后：同一请求 → **HTTP 200** ✓
+新增单测覆盖 6 种形态（含 3 条真实坏样本）。
+
+版本 **1.1.11.38 (78)**。
+
 ### v1.1.11.37 — 转换层收敛收尾：SSE 引擎拆完 + handle 拆完（并加部署护栏）
 
 **③ SSE 引擎（完成）**
