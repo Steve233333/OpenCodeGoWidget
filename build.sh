@@ -98,6 +98,14 @@ fi
 
 # 2026-09-23：代理生命周期（挑解释器/起服务/探活）也只有一份实现（ensure-proxy.sh），
 # 单独验它：坏的会被跳过、全坏不写脏文件、真起一次端口要有响应、已在跑时幂等。
+# 2026-09-23：shell 脚本里 `$VAR` 紧跟中文标点会被 bash 当成变量名（非 UTF-8 locale 下 unbound），
+# 今天栽过三次 —— 进门槛，永不复发。
+echo "==> shell 可移植性检查（\$VAR 后面别直接跟中文标点）"
+if [ -x "scripts/check-shell-cjk-vars.sh" ] && ! "scripts/check-shell-cjk-vars.sh"; then
+  echo "!! shell 写法检查没过，先修好再打包"
+  exit 1
+fi
+
 echo "==> 代理生命周期自检（离线；解释器挑选 / 修复 / 幂等）"
 if [ "${SKIP_ENSURE_PROXY_TEST:-0}" != "1" ] && [ -x "scripts/test-ensure-proxy.sh" ]; then
   if ! "scripts/test-ensure-proxy.sh"; then

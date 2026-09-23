@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.34.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.35.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.34.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.35.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.34.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.34.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.35.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.35.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,31 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.35 — 转换层收敛 ①：模型策略只有一处真源
+
+体检发现（不是整面墙歪，但确实又砌了几块）：`handle()` 483 行、同一句"这个模型自带搜索"写了 4 遍
++ 1 处同义判断、路由决策散在 3 份名单 + 2 份缓存里。这一版先收**最该收的那块：模型怪癖**。
+
+- **新增 `proxy/policy.py`**：两层结构 —— `MODEL_FAMILIES`（家族默认）+ `MODEL_OVERRIDES`（单模型覆盖），
+  入口 `policy_for(model)`；顺手做名字归一（`-go`/`-zen` 后缀、`opencode-go/` 前缀）。
+  字段：`route`（native / native-or-bridge / bridge / messages）、`native_search`、`terminal_grace`、
+  `min_output_tokens`、`stall_guard`、`smoothing`。
+- **删掉 3 份平行名单 + 2 份学习缓存**：`RESPONSES_FALLBACK_MODELS` / `RESPONSES_ALWAYS_BRIDGE` /
+  `MESSAGES_ALWAYS_BRIDGE` / `_RESPONSES_BROKEN_UNTIL` / `_RESPONSES_FAIL_STREAK` 全部移除；
+  "学坏了就退避"改由 `policy.NativeProbeCache` 单独拥有（逻辑没变：5/15/45 分钟 → 上限 2 小时，成功清零）。
+- **server.py 里 4 处字面重复 + 1 处同义判断全部改成查表**（`has_native_search(model)`）；muse 的预算下限、
+  空转守卫开关、终止宽限、正文平滑也都改由策略字段驱动（默认值与今天逐条相同，**行为不变**）。
+- **新增策略基线测试** `tests/test_model_policy_golden.py`：把重构前对 36 条模型/写法（32 个真实模型 +
+  provider 前缀 + 未知模型）的路由与搜索判定逐条固化 —— 以后谁顺手改行为，这张表立刻变红。
+- **新增 `scripts/smoke-conversion.sh`**（真机冒烟：DeepSeek / MiMo / Muse / GLM 各一条流式请求，
+  断言 200 + 有正文 + 无 markup 泄漏）与 **`scripts/check-shell-cjk-vars.sh`**（进门槛：
+  今天三次踩到 `$VAR` 紧跟中文标点导致 unbound 的坑，写成检查脚本永不复发）。
+
+验证：策略基线 36 条逐条一致；全量测试 **47 + 3 + 8 + 31 + 14 + 8** 全绿；真机冒烟四条全绿
+（DeepSeek 46 字 / MiMo 27 字 / Muse 30 字 / GLM 63 字，markup 均 0）。
+
+版本 **1.1.11.35 (75)**。
 
 ### v1.1.11.34 — 正文"闪一下全出来" → 按正常逐字滴出去
 
@@ -160,50 +185,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 Python 全量 **45 + 8 + 31 + 14 + 8** 全绿。
 
 版本 **1.1.11.33 (73)**。
-
-### v1.1.11.32 — 抄 opencodex 的作业：MiMo 原生 XML 工具调用 + 失败退避
-
-两件事，都有实测依据（不是"看别人有我们也加"）：
-
-**① MiMo 会把工具调用写成 XML 混在正文里 —— 我们真漏过。**
-扫本机 Codex 会话记录（`~/.codex-deepseek/sessions`，近两周 43 个会话）发现 **3 个文件**命中
-`<tool_call>`，其中 `rollout-2026-09-22T14-55-43` 里有一条 **`role=assistant` 的正文消息**，
-内容就是：
-
-```
-<tool_call><function=write_stdin><parameter=session_id>77397</parameter>
-<parameter=chars>x</parameter></tool_call>
-```
-
-那次的模型列表里就有 `mimo-v2.6-flash-go` —— 也就是 opencodex `#5499/#5611/#5637` 描述的同一现象：
-**MiMo 用自己的语法发工具调用，网关没转成 function_call，就当正文吐出来了**（用户看到"正文里冒出怪语法"，
-而那次工具其实没执行）。
-
-按 opencodex 的思路、用我们自己的增量管线实现：
-- `proxy/toolfix.py`：容错解析器 `parse_mimo_tool_markup()` —— 认 `<tool_call><function=NAME>…</tool_call>`、
-  容忍网关**不补 `</function>`**、孤立 `</parameter>`；解析不出来就把原文当普通文本（宁可漏一次修补，
-  也不能吃掉正文）。还提供流式用的 `find_mimo_block()` / `mimo_markup_hold_len()`。
-- **参数类型按请求里的 tool schema 转**（新增 `_tool_param_types()`）：`session_id` 变整数、`chars` 保持字符串 ——
-  不然发出去的 function_call 参数类型不对，Codex 会直接报参数不合法。拿不到 schema 就不猜，一律当字符串。
-- `proxy/bridges_chat.py`：流式桥 `ChatBridgeTranslator` 里做"扣留 + 切块"——开标签出现就扣住尾巴等闭合，
-  收齐了转成 `function_call`（added/delta/done 三帧齐发），不是 markup 就照旧当正文吐出去；
-  扣超过 8 KB 或收尾还没闭合 → 当正文放出去（模型真在说字面量时不吃字）。非流式两条路径同样处理。
-
-**② 原生 `/responses` 坏了别再每 5 分钟白试一次。**
-本机日志：mimo 系列 **682 次走 chat 桥成功**、只有 9~16 次是"先发原生再失败" —— 说明缓存机制本身有效，
-但 TTL 固定 5 分钟，等于每 5 分钟仍会白试一次（失败那一次可能死在流中间 = "话说一半失踪"）。
-改成**连续失败指数退避**：5min → 15min → 45min → 2h（上限），原生成功一次立刻清零。
-
-验证：
-- 新增 7 条单测（解析/容错/流式转换/字面量不吃字/非流式/退避曲线），Python 全量 **44 + 4 + 31 + 14 + 8** 全绿；
-- 真机：让 MiMo 用 `write_stdin` 发一次调用 → 拿到 `function_call write_stdin`
-  参数 `{"session_id": 77397, "chars": "x"}`（类型正确），输出里 0 处 markup；日志同时出现新的退避行
-  `原生 /responses 连续失败 1 次 → 接下来 300s 直接走 chat 桥`。
-
-（opencodex 的另外半招——"把 grace 做成 per-model 配置"——这次没抄：我们现在的规则是
-"内容不完整就继续等、最多 120 秒"，本来就不会因为某个模型思考慢而误判，per-model 配置暂时没有收益。）
-
-版本 **1.1.11.32 (72)**。
 
 ## 本地构建
 

@@ -485,8 +485,8 @@ def t_messages_nonstream_json():
 
 
 def t_union_alpha_is_messages_only_model():
-    assert "union-alpha" in vp.MESSAGES_ALWAYS_BRIDGE
-    assert "union-alpha" not in vp.RESPONSES_FALLBACK_MODELS
+    assert vp.is_messages_only("union-alpha")
+    assert not vp.is_chat_adapted("union-alpha")
 
 
 def t_provider_prefix_routes_like_suffix():
@@ -629,21 +629,23 @@ def t_nonstream_bridge_converts_markup():
 
 
 def t_broken_responses_backoff_grows_and_resets():
-    """原生路径连坏几次后缓存要变长（别每 5 分钟白试一次），成功一次立刻回到最短"""
+    """原生路径连坏几次后缓存要变长（别每 5 分钟白试一次），成功一次立刻回到最短。
+
+    2026-09-23 起这套状态搬进 proxy/policy.py 的 NativeProbeCache（唯一实现）。
+    """
     import importlib
-    cfg = importlib.import_module("proxy.config")
-    cfg._RESPONSES_FAIL_STREAK.clear()
-    assert cfg.responses_broken_ttl("mimo-v2.5") == 300.0
-    cfg._RESPONSES_FAIL_STREAK["mimo-v2.5"] = 1
-    assert cfg.responses_broken_ttl("mimo-v2.5") == 300.0
-    cfg._RESPONSES_FAIL_STREAK["mimo-v2.5"] = 2
-    assert cfg.responses_broken_ttl("mimo-v2.5") == 900.0
-    cfg._RESPONSES_FAIL_STREAK["mimo-v2.5"] = 3
-    assert cfg.responses_broken_ttl("mimo-v2.5") == 2700.0
-    cfg._RESPONSES_FAIL_STREAK["mimo-v2.5"] = 9
-    assert cfg.responses_broken_ttl("mimo-v2.5") == 7200.0      # 上限 2 小时
-    cfg._RESPONSES_FAIL_STREAK.pop("mimo-v2.5")
-    assert cfg.responses_broken_ttl("mimo-v2.5") == 300.0        # 清零后回到最短
+    policy = importlib.import_module("proxy.policy")
+    cache = policy.NativeProbeCache()
+    assert not cache.is_broken("mimo-v2.5")
+    assert cache.note_failure("mimo-v2.5") == 300.0
+    assert cache.is_broken("mimo-v2.5") and cache.streak("mimo-v2.5") == 1
+    assert cache.note_failure("mimo-v2.5") == 900.0
+    assert cache.note_failure("mimo-v2.5") == 2700.0
+    for _ in range(6):
+        cache.note_failure("mimo-v2.5")
+    assert cache.ttl_for("mimo-v2.5") == 7200.0                 # 上限 2 小时
+    cache.note_success("mimo-v2.5")
+    assert not cache.is_broken("mimo-v2.5") and cache.ttl_for("mimo-v2.5") == 300.0
 
 
 def t_muse_min_output_tokens_floor():

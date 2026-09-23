@@ -7,7 +7,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 tests = [
     ("原有单元 (37)", ["python3", os.path.join(HERE, "test_units.py")]),
-    ("终止事件修补 (4)", ["python3", os.path.join(HERE, "test_terminal_repair_relay.py")]),
+    ("策略基线 (3)", ["python3", os.path.join(HERE, "test_model_policy_golden.py")]),
+    ("终止事件修补 (8)", ["python3", os.path.join(HERE, "test_terminal_repair_relay.py")]),
     ("代理混沌 (31)", ["python3", os.path.join(HERE, "test_robust.py")]),
     ("model_discovery 混沌 (14)", ["python3", os.path.join(HERE, "test_model_discovery_robust.py")]),
     ("installer/patch 混沌 (8)", ["python3", os.path.join(HERE, "test_installer_patch_robust.py")]),

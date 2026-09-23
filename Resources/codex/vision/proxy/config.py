@@ -172,49 +172,8 @@ def normalize_route_model(model):
     return model
 
 
-RESPONSES_FALLBACK_MODELS = frozenset({
-    "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2-pro", "mimo-v2-omni",
-    # 2026-09-22：MiMo 2.6 两个新模型同属 chat 适配家族（/responses 需要走 chat 桥）
-    "mimo-v2.6-flash", "mimo-v2.6-pro",
-    "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
-    "ox-alpha-free", "x-preview-f-free",
-    "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash",
-    "kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code",
-    "minimax-m3", "minimax-m2.7", "minimax-m2.5",
-    "longcat-2.0", "grok-4.5", "grok-4.6",
-    "hy3", "hy3-preview", "hy4-preview",
-    # Zen Free chat
-    "big-pickle", "hy3-free", "ling-3.0-flash-fin-free", "mimo-v2.5-free",
-    "nemotron-3-ultra-free", "nemotron-3.5-lightning-free",
-})
-
-
-_RESPONSES_BROKEN_UNTIL = {}      # model -> monotonic deadline to skip probing /responses
-
-
-_RESPONSES_FALLBACK_TTL = 300.0   # seconds a broken probe result stays cached
-
-
-_RESPONSES_FALLBACK_TTL_MAX = 7200.0   # 连续失败时的最长缓存（2 小时）
-_RESPONSES_FAIL_STREAK = {}            # model -> 连续"原生 /responses 不可用"的次数（成功一次清零）
-
-
-def responses_broken_ttl(model):
-    """"这个模型的原生 /responses 坏了"该缓存多久（2026-09-23）。
-
-    以前固定 5 分钟 = 每 5 分钟白试一次原生路径，而失败那一次既多花时间、又可能死在流中间
-    （用户看到的"话说一半失踪"就发生在这个窗口）。改成连续失败指数退避：
-    5min → 15min → 45min → 2h（上限）；原生成功一次立刻清零。
-    """
-    streak = _RESPONSES_FAIL_STREAK.get(model, 0)
-    steps = max(0, min(streak - 1, 3))
-    return min(_RESPONSES_FALLBACK_TTL * (3 ** steps), _RESPONSES_FALLBACK_TTL_MAX)
-
-
-RESPONSES_ALWAYS_BRIDGE = frozenset({"omen-alpha"})
-
-
-MESSAGES_ALWAYS_BRIDGE = frozenset({"union-alpha"})
+# 路由 / 搜索能力 / 终止宽限 / 输出预算这些"模型怪癖"现在**只有一处真源**：proxy/policy.py。
+# （2026-09-23 收敛：以前这里躺着 3 份平行名单 + 2 份学习缓存，和 server.py 里的判断互相打架。）
 
 
 _UPSTREAM_TRANSIENT_STATUS = frozenset({500, 502, 503, 504})

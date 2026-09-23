@@ -35,38 +35,38 @@ from .config import (
     GO_SUFFIX,
     GO_UPSTREAM,
     HOP_HEADERS,
-    MESSAGES_ALWAYS_BRIDGE,
     MUSE_MAX_STALL_RETRIES,
     MUSE_STALL_HOLD_BYTES,
     MUSE_STALL_HOLD_SECONDS,
     MUSE_STALL_TEXT_LIMIT,
-    RESPONSES_ALWAYS_BRIDGE,
-    RESPONSES_FALLBACK_MODELS,
     TERMINAL_GRACE_SECONDS,
     TERMINAL_IDLE_MAX_ROUNDS,
     ZEN_SUFFIX,
     ZEN_UPSTREAM,
     _ANTHROPIC_VERSION,
     _BRIDGE_NONSTREAM_MAX_BYTES,
-    _RESPONSES_BROKEN_UNTIL,
-    _RESPONSES_FALLBACK_TTL,
-    _RESPONSES_FAIL_STREAK,
     _UPSTREAM_TRANSIENT_STATUS,
     _clamp_reasoning_effort,
     _log,
     load_env_file,
     normalize_route_model,
-    responses_broken_ttl,
 )
 from .muse import (
     _build_muse_retry_body,
     _inject_muse_no_preamble,
     _inject_muse_tool_first,
     _is_muse_model,
-    _muse_enforce_min_output_tokens,
     _muse_flag,
     _muse_retry_allowed,
     _sanitize_muse_tool_schemas,
+)
+from .policy import (
+    NATIVE_PROBES,
+    ROUTE_BRIDGE,
+    ROUTE_MESSAGES,
+    ROUTE_NATIVE_OR_BRIDGE,
+    has_native_search,
+    policy_for,
 )
 from .search_sidecar import (
     _inject_synthetic_web_search,
@@ -361,7 +361,7 @@ class Proxy:
                 # Proactive sidecar: for non-search models that now have synthetic web_search, if user asks to search, pre-fetch
                 proactive_changed = False
                 if go_changed and model:
-                    is_search_capable = isinstance(model, str) and model.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark"))
+                    is_search_capable = has_native_search(model)
                     if not is_search_capable:
                         last_text = ""
                         for it in reversed(parsed.get("input", []) or []):
@@ -416,9 +416,11 @@ class Proxy:
                 muse_first_changed = (zen_changed or go_changed) and _inject_muse_tool_first(parsed)
                 # Muse 的推理也吃 max_output_tokens（实测 80 预算里 reasoning 占 77 → 一个字没吐就 incomplete）。
                 # 只抬高客户端显式给的小值，没给就照上游默认（2026-09-23）。
-                muse_budget_changed, _old_budget, _new_budget = _muse_enforce_min_output_tokens(parsed)
-                if muse_budget_changed:
-                    _log(f"[vision-proxy] muse max_output_tokens {_old_budget} → {_new_budget}"
+                _min_budget = policy_for(model).min_output_tokens
+                _cur_budget = parsed.get("max_output_tokens") if isinstance(parsed, dict) else None
+                if _min_budget and isinstance(_cur_budget, int) and _cur_budget < _min_budget:
+                    parsed["max_output_tokens"] = _min_budget
+                    _log(f"[vision-proxy] {model} max_output_tokens {_cur_budget} → {_min_budget}"
                          f"（推理计入这个预算，太小会只思考不出字）")
                 # reasoning clamp: generic high fallback, hand-written registry, zero probe
                 reasoning_changed = False
@@ -484,9 +486,11 @@ class Proxy:
                 and is_responses_path
             )
             # known chat-adapted models get instant fallback if TTL cached
-            bridge_cached = bridge_eligible and model in RESPONSES_FALLBACK_MODELS and time.monotonic() < _RESPONSES_BROKEN_UNTIL.get(model, 0.0)
-            always_bridge = bridge_eligible and model in RESPONSES_ALWAYS_BRIDGE
-            messages_now = bridge_eligible and model in MESSAGES_ALWAYS_BRIDGE
+            pol = policy_for(model)
+            bridge_cached = (bridge_eligible and pol.route == ROUTE_NATIVE_OR_BRIDGE
+                             and NATIVE_PROBES.is_broken(model))
+            always_bridge = bridge_eligible and pol.route == ROUTE_BRIDGE
+            messages_now = bridge_eligible and pol.route == ROUTE_MESSAGES
             fallback_now = False
             upstream_status = 0
             if messages_now:
@@ -501,15 +505,15 @@ class Proxy:
                 upstream_status = getattr(response, "status", None) or getattr(response, "code", 0) or 0
                 if 200 <= upstream_status < 300:
                     # 原生路径活了：把"连续失败"计数清零（下次坏了重新从 5 分钟起步）
-                    _RESPONSES_FAIL_STREAK.pop(model, None)
+                    NATIVE_PROBES.note_success(model)
                 # 2026-09-10：网关把「Model X is not supported for format openai」从 500 改成 401
                 # （kimi-k3 实测），已知 chat 适配模型在 /responses 上吃 401 也要切桥；
                 # 未登记模型仍只在 5xx 时切，避免把真正的鉴权失败吞成桥接。
                 needs_bridge = upstream_status >= 500 or (
-                    upstream_status == 401 and model in RESPONSES_FALLBACK_MODELS)
+                    upstream_status == 401 and pol.route == ROUTE_NATIVE_OR_BRIDGE)
                 if bridge_eligible and needs_bridge:
-                    if model not in RESPONSES_FALLBACK_MODELS:
-                        _log(f"[vision-proxy] auto-bridge new model {model} on {upstream_status} (not in RESPONSES_FALLBACK_MODELS)")
+                    if pol.route != ROUTE_NATIVE_OR_BRIDGE:
+                        _log(f"[vision-proxy] auto-bridge new model {model} on {upstream_status} (策略表里没登记这个模型)")
                     else:
                         _log(f"[vision-proxy] bridge on {upstream_status} for chat-adapted model {model}")
                     fallback_now = True
@@ -561,11 +565,9 @@ class Proxy:
                         )
                         return
                     # 连续失败就指数退避（2026-09-23）：别每 5 分钟白试一次原生路径
-                    _RESPONSES_FAIL_STREAK[model] = _RESPONSES_FAIL_STREAK.get(model, 0) + 1
-                    ttl = responses_broken_ttl(model)
-                    _RESPONSES_BROKEN_UNTIL[model] = time.monotonic() + ttl
+                    ttl = NATIVE_PROBES.note_failure(model)
                     _log(f"[vision-proxy] {model} 原生 /responses 连续失败 "
-                         f"{_RESPONSES_FAIL_STREAK[model]} 次 → 接下来 {int(ttl)}s 直接走 chat 桥")
+                         f"{NATIVE_PROBES.streak(model)} 次 → 接下来 {int(ttl)}s 直接走 chat 桥")
                     txn["status"], txn["bridge"] = 200, "chat-fallback"
                     _log(f"[vision-proxy] responses->chat fallback engaged model={model} "
                          f"upstream_status={upstream_status} chat_status={chat_status}")
@@ -767,7 +769,7 @@ class Proxy:
             # 2026-09-20：Muse 空转兜底（narration-only turn）。是不是空转要读完整段响应才知道，
             # 所以重发只能在 _send_response 里做；这里把「拿同一份请求体重发一次」的能力传进去。
             stall_retry = None
-            if (not fallback_now) and _is_muse_model(model) and _muse_flag("VISION_PROXY_MUSE_STALL_RETRY"):
+            if (not fallback_now) and pol.stall_guard and _muse_flag("VISION_PROXY_MUSE_STALL_RETRY"):
                 retry_base = bytes(body)
 
                 async def stall_retry(attempt, _base=retry_base, _path=path, _headers=list(headers),
@@ -1209,6 +1211,7 @@ class Proxy:
         parse/transform error forwards the raw frame."""
         if retry is not None:
             response, status, headers = await self._guard_muse_stall(response, status, headers, retry)
+        pol = policy_for(model)                    # 宽限/平滑都查策略表（2026-09-23 收敛）
         await self._write_head(writer, status, headers, None)
         read_chunk = getattr(response, "read1", response.read)
         buffer = bytearray()
@@ -1218,10 +1221,11 @@ class Proxy:
         # 2026-09-23：上游（尤其 muse 网关）常把整段正文在末尾一次性涌出来 —— 客户端看起来
         # 就是"文字闪一下全出来"。漏桶按固定速率滴出去，显示就像正常逐字；本来就是均匀的流
         # （每帧几字）桶是空的、零延迟零改动。
-        pacer = TextDeltaPacer()
+        pacer = TextDeltaPacer() if pol.smoothing else None
 
         async def emit(frame_bytes):
-            for piece, delay in pacer.shape(frame_bytes):
+            shaped = pacer.shape(frame_bytes) if pacer else [(frame_bytes, 0.0)]
+            for piece, delay in shaped:
                 writer.write(piece)
                 await writer.drain()
                 if delay:
@@ -1231,10 +1235,11 @@ class Proxy:
         # 给底层 socket 套一个空闲宽限：空闲到点且这一轮内容已完整 → 收尾补终止帧；
         # 内容还没完整就继续等（长思考不能被掐），但连续空闲超过 TERMINAL_IDLE_MAX_ROUNDS 才算真死。
         idle_rounds = 0
+        grace = pol.terminal_grace or TERMINAL_GRACE_SECONDS
         try:
             sock = response.fp.raw._sock          # urllib 响应的底层 socket
-            sock.settimeout(TERMINAL_GRACE_SECONDS)
-            _log(f"[vision-proxy] SSE 空闲宽限 {TERMINAL_GRACE_SECONDS:.0f}s 已启用")
+            sock.settimeout(grace)
+            _log(f"[vision-proxy] SSE 空闲宽限 {grace:.0f}s 已启用")
         except Exception:
             sock = None
 
@@ -1243,12 +1248,12 @@ class Proxy:
                 chunk = await asyncio.to_thread(read_chunk, 65536)
             except (socket.timeout, TimeoutError):
                 if sse_turn_looks_complete(state):
-                    _log(f"[vision-proxy] 上游空闲 {TERMINAL_GRACE_SECONDS:.0f}s 且内容已完整 → 收尾"
+                    _log(f"[vision-proxy] 上游空闲 {grace:.0f}s 且内容已完整 → 收尾"
                          f"（trigger=idle model={state.get('compat', {}).get('model')}）")
                     break
                 idle_rounds += 1
                 if idle_rounds >= TERMINAL_IDLE_MAX_ROUNDS:
-                    _log(f"[vision-proxy] 上游连续空闲 {idle_rounds}×{TERMINAL_GRACE_SECONDS:.0f}s 且内容不完整 → 收尾")
+                    _log(f"[vision-proxy] 上游连续空闲 {idle_rounds}×{grace:.0f}s 且内容不完整 → 收尾")
                     break
                 continue
             if not chunk:
