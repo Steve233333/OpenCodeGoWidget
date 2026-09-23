@@ -9,6 +9,7 @@ from .apply_patch import (
     _is_apply_patch_name,
 )
 from .config import (
+    MUSE_STALL_TEXT_LIMIT,
     _MUSE_STALL_MARKERS,
     _log,
 )
@@ -95,7 +96,7 @@ def _sse_looks_like_stall(body):
     stripped = text.strip()
     if not stripped:
         return True
-    if len(stripped) > 300:
+    if len(stripped) > MUSE_STALL_TEXT_LIMIT:
         return False
     return any(marker in stripped for marker in _MUSE_STALL_MARKERS)
 

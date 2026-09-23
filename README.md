@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.32.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.33.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.32.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.33.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.32.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.32.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.33.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.33.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,43 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.33 — Muse「没有流式文字」：一半是网关、一半是我们的守卫
+
+**先说结论：这次不是终止修复的锅，主要也不是我们能控制的。** 直连网关（完全绕开我们）实测同一请求：
+
+```
+1.7s   response.created / in_progress / output_item.added（一个 reasoning 项）
+       …… 中间 50 秒一声不响 ……
+56.2s  output_item.done + 正文 delta 开始
+89.2s  response.incomplete
+```
+
+**OpenCode Go 网关对 muse 就是"先静默憋着、最后一次性吐"**：它在 1.7 秒只发了个"开始思考"的帧，
+真正的推理与正文要等模型整轮想完才 flush 出来。所以客户端在那 50 秒里只能是"正在思考"。
+
+我们能控制的两块，这次都修了：
+
+**① 我们的空转守卫以前会把整段读完才转发（放大了这个问题）。**
+`_guard_muse_stall` 原本 `response.read()` 读完整个流再判断 —— muse 于是**永远**不是逐字流式，
+长回合里客户端要等整段结束才看到东西。现在改成**有限扣留**：出现工具调用 / 正文超过 300 字 /
+扣满 32 KB / 扣满 8 秒 → 立刻放行（已读部分先给客户端，剩下的边流边转）；只有"短叙述 + 没工具调用
++ 流已结束"那种经典空转才重发（上限仍 2 次，熔断不变）。重发拿到的新响应走同一个守卫（递归、次数递减），
+所以重发之后也是流式的。
+**踩到的坑**：第一版放行点仍然是 39.8 秒 —— 因为用了 `read(65536)`，它会**阻塞到凑满 64 KB**；
+换成 `read1`（有数据就返回）后扣留窗口才真正生效。
+
+**② Muse 的推理也吃 `max_output_tokens` —— 预算小就会"只思考不出字"。**
+实测：80 预算那一轮 `output_tokens=80` 里 `reasoning_tokens=77`，于是**一个字没吐**、
+直接 `response.incomplete` + `incomplete_details.reason=max_output_tokens`（截图里你用的正是「极高」档）。
+新增下限 `MUSE_MIN_MAX_OUTPUT_TOKENS = 16384`：**只在客户端显式给了、且小于下限时抬高**，
+没给就照上游默认（不擅自设上限）；日志会记 `muse max_output_tokens 80 → 16384`。
+
+验证：同一个"80 预算"请求 —— 修前 `response.incomplete` + 正文 0 字；修后 18.3 秒、正文 45 字、
+末帧 `response.completed`。新增单测（守卫放行/仍会重发/重发次数上限/预算下限），
+Python 全量 **45 + 8 + 31 + 14 + 8** 全绿。
+
+版本 **1.1.11.33 (73)**。
 
 ### v1.1.11.32 — 抄 opencodex 的作业：MiMo 原生 XML 工具调用 + 失败退避
 
@@ -182,22 +219,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
   空转重试真实触发一次 #1/#2 后成功）。
 
 版本 **1.1.11.31 (71)**。
-
-### v1.1.11.30 — 让"系统升级/重启后代理掉线"自己好起来
-
-macOS 27 升级后 Codex 报 "Reconnecting… waiting for network" 的根因链已查实：安装器用 `command -v python3` 挑到了 **Xcode 自带的 Python 3.9**（一时起不来）→ 代理 5 分钟没监听 → 之后 Codex 又发了带前缀的 `opencode-go/...`（路由不认 → 401）。
-
-这次补三个结构性缺口：
-
-- **代理生命周期只有一份实现**（新 `vision/ensure-proxy.sh`）：解释器改成**逐个实测**（python.org 3.x → /usr/local → Homebrew → /usr/bin 兜底），挑完写 plist、起服务、**探活验证**，并记状态文件；安装器和 App 都调它。
-- **App 自己救回来**（新 `ProxyWatchdog`）：启动后 10 秒 / 每 5 分钟 / 唤醒时探活，端口活着就什么都不做；死了才修。救不回来 → 菜单栏红点 + 面板顶部红字 + 设置里「修复本地代理」按钮（不要通知权限、不加常驻 LaunchAgent）。
-- **前缀也能路由**：`opencode-go/<slug>` ≡ `<slug>-go`、`opencode-zen/<slug>` ≡ `<slug>-zen`。
-
-顺带把自检的代理行改成三态（未加载 / 加载了没进程 / 进程在端口不通）+ 显示当前解释器；并修掉全项目 25 处 `$VAR` 紧跟中文标点的 shell 可移植性 bug（bash 在非 UTF-8 locale 下会把它当变量名，`set -u` 直接报 unbound）。
-
-真机实测：bootout 掉代理后 **2.6 秒**自动修好（解释器从 Xcode 3.9 换成 python.org 3.13.1），`opencode-go/deepseek-v4.1-flash` 由 401 变 **200**。
-
-版本 **1.1.11.30 (70)**。
 
 ## 本地构建
 

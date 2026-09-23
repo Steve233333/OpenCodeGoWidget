@@ -235,6 +235,14 @@ _BRIDGE_NONSTREAM_MAX_BYTES = 64 * 1024 * 1024  # P5: cap for buffered non-strea
 TERMINAL_GRACE_SECONDS = 5.0     # 多久没新字节算"空闲"（socket 读超时）
 TERMINAL_IDLE_MAX_ROUNDS = 24    # 内容还没完整时最多容忍多少次空闲（24 × 5s = 120s）才判失败
 
+# Muse 空转守卫的"有限扣留"（2026-09-23）：以前守卫会把整段响应读完再转发 ——
+# muse 于是从来不逐字流式，长回合（实测 63~82s）在客户端就是一直"正在思考"。
+# 现在只扣一小段：出现工具调用 / 正文超过阈值 / 扣满字节或秒数就立刻放行、边流边转；
+# 只有"短叙述 + 没工具调用 + 已结束"那种经典空转才重发。
+MUSE_STALL_TEXT_LIMIT = 300            # 正文超过这么多字符就不算空转（与 _sse_looks_like_stall 同一口径）
+MUSE_STALL_HOLD_BYTES = 32 * 1024      # 扣留上限：超过就放行
+MUSE_STALL_HOLD_SECONDS = 8.0         # 扣留上限：超过就放行（再长客户端就一直"正在思考"）
+
 
 _SEARCH_TRUE_PREFIXES = ("deepseek-", "gpt-5.6-luna", "muse-spark", "grok-")
 

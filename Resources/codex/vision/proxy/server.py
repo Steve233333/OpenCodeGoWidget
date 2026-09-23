@@ -37,6 +37,9 @@ from .config import (
     HOP_HEADERS,
     MESSAGES_ALWAYS_BRIDGE,
     MUSE_MAX_STALL_RETRIES,
+    MUSE_STALL_HOLD_BYTES,
+    MUSE_STALL_HOLD_SECONDS,
+    MUSE_STALL_TEXT_LIMIT,
     RESPONSES_ALWAYS_BRIDGE,
     RESPONSES_FALLBACK_MODELS,
     TERMINAL_GRACE_SECONDS,
@@ -60,6 +63,7 @@ from .muse import (
     _inject_muse_no_preamble,
     _inject_muse_tool_first,
     _is_muse_model,
+    _muse_enforce_min_output_tokens,
     _muse_flag,
     _muse_retry_allowed,
     _sanitize_muse_tool_schemas,
@@ -76,6 +80,7 @@ from .sse import (
     _rewrite_sse_body,
     _rewrite_sse_frame,
     _split_sse_frame,
+    _sse_output_signals,
     _sse_looks_like_stall,
     sse_turn_looks_complete,
 )
@@ -171,6 +176,38 @@ class _BufferedResponse:
 
     def close(self):
         pass
+
+
+class _PrefixedResponse:
+    """先吐已经扣留的字节，然后继续从上游实时读（2026-09-23）。
+
+    用途：Muse 空转守卫只扣一小段；一旦判定"不是在空转"，就把已读到的部分交给客户端，
+    剩下的边流边转 —— 这样 muse 也能逐字出现，而不是等整段读完才一次性蹦出来。
+    """
+
+    def __init__(self, prefix, upstream, status, headers):
+        self.status = status
+        self.headers = headers
+        self._prefix = bytes(prefix)
+        self._upstream = upstream
+
+    def read(self, n=-1):
+        if self._prefix:
+            if n is None or n < 0:
+                chunk, self._prefix = self._prefix, b""
+                return chunk
+            chunk, self._prefix = self._prefix[:n], self._prefix[n:]
+            return chunk
+        return self._upstream.read(n)
+
+    def read1(self, n=None):
+        return self.read(65536 if n is None else n)
+
+    def close(self):
+        try:
+            self._upstream.close()
+        except Exception:
+            pass
 
 
 def _header_value(headers, name):
@@ -376,6 +413,12 @@ class Proxy:
                 muse_schema_changed = (zen_changed or go_changed) and _sanitize_muse_tool_schemas(parsed)
                 muse_preamble_changed = (zen_changed or go_changed) and _inject_muse_no_preamble(parsed)
                 muse_first_changed = (zen_changed or go_changed) and _inject_muse_tool_first(parsed)
+                # Muse 的推理也吃 max_output_tokens（实测 80 预算里 reasoning 占 77 → 一个字没吐就 incomplete）。
+                # 只抬高客户端显式给的小值，没给就照上游默认（2026-09-23）。
+                muse_budget_changed, _old_budget, _new_budget = _muse_enforce_min_output_tokens(parsed)
+                if muse_budget_changed:
+                    _log(f"[vision-proxy] muse max_output_tokens {_old_budget} → {_new_budget}"
+                         f"（推理计入这个预算，太小会只思考不出字）")
                 # reasoning clamp: generic high fallback, hand-written registry, zero probe
                 reasoning_changed = False
                 if isinstance(parsed, dict) and isinstance(parsed.get("reasoning"), dict):
@@ -1091,45 +1134,72 @@ class Proxy:
             writer.write(chunk)
             await writer.drain()
 
-    async def _guard_muse_stall(self, response, status, headers, retry):
-        """把 Muse 的流式响应先读完，确认不是「只叙述不调用工具」的空转再交给客户端。
+    async def _guard_muse_stall(self, response, status, headers, retry, attempts_left=None):
+        """Muse 的「只叙述不调用工具」空转守卫 —— 有限扣留版（2026-09-23）。
 
-        空转（没有 function_call + 短计划文字）时用同一份请求体重发，最多两次；两次都空转就把
-        最后一次的内容照样发给客户端，绝不让调用方悬着。熔断由 _muse_retry_allowed 兜。
+        以前是**把整段响应读完**再判断：muse 于是从来不逐字流式（实测长回合 63~82 秒里
+        客户端一直"正在思考"）。现在只扣一小段：
+          * 看到 function_call / 正文超过阈值 / 扣满字节或秒数 → 立刻放行（已读部分先给客户端，
+            剩下的边流边转，不重发）；
+          * 流结束时还扣着（典型的"短叙述 + 没工具调用"）→ 照旧判定空转并重发，最多两次。
+        重发拿到的新响应走同一个守卫（递归、次数递减）—— 所以"重发之后"也是流式的。
+        熔断仍由 _muse_retry_allowed 兜。
         """
-        try:
-            body = await asyncio.to_thread(response.read)
-        except Exception as exc:
-            _log(f"[vision-proxy] muse stall probe read failed: {exc!r}")
-            return response, status, headers
-        attempts = 0
-        while attempts < MUSE_MAX_STALL_RETRIES and _sse_looks_like_stall(body):
-            attempts += 1
+        if attempts_left is None:
+            attempts_left = MUSE_MAX_STALL_RETRIES
+        hold = attempts_left > 0          # 没有重发机会了就不用扣留，直接边流边转
+        started = time.monotonic()
+        body = b""
+        # 关键：必须用 read1（有数据就返回）。HTTPResponse.read(n) 会**阻塞到凑满 n 字节**，
+        # 实测那样第一次拿到 64 KB 已经是 39.8 秒之后，"有限扣留"就完全失效了。
+        read_chunk = getattr(response, "read1", None) or response.read
+        while True:
+            try:
+                chunk = await asyncio.to_thread(read_chunk, 65536)
+            except Exception as exc:
+                _log(f"[vision-proxy] muse stall probe read failed: {exc!r}")
+                break
+            if not chunk:
+                break
+            body += chunk
+            if hold:
+                has_tool_call, text = _sse_output_signals(body)
+                long_text = len(text.strip()) > MUSE_STALL_TEXT_LIMIT
+                over_hold = (len(body) >= MUSE_STALL_HOLD_BYTES
+                             or time.monotonic() - started >= MUSE_STALL_HOLD_SECONDS)
+                if has_tool_call or long_text or over_hold:
+                    reason = ("工具调用" if has_tool_call
+                              else "正文够长" if long_text else "扣留到上限")
+                    _log(f"[vision-proxy] muse 放行实时转发（{reason}，已扣 {len(body)} 字节 "
+                         f"{time.monotonic() - started:.1f}s）")
+                    return _PrefixedResponse(body, response, status, headers), status, headers
+        if not hold:
+            # 已经没有重发机会：整段照原样交给客户端
+            final_status = getattr(response, "status", None) or status
+            return _BufferedResponse(final_status, headers, bytes(body)), status, headers
+        # 流结束了还扣着：这时候才做空转判定（短叙述 + 没工具调用 + 有终态）
+        if _sse_looks_like_stall(body):
+            attempt_no = MUSE_MAX_STALL_RETRIES - attempts_left + 1
             if not _muse_retry_allowed(bytes(body)):
-                _log(f"[vision-proxy] muse stall detected but circuit breaker open (#{attempts}); forwarding as-is")
-                break
-            _log(f"[vision-proxy] muse narration-only stall detected (retry #{attempts})")
-            try:
-                response.close()
-            except Exception:
-                pass
-            try:
-                nxt = await retry(attempts)
-            except Exception as exc:
-                _log(f"[vision-proxy] muse stall retry failed: {exc!r}")
-                break
-            if nxt is None:
-                break
-            nxt_status = getattr(nxt, "status", None) or getattr(nxt, "code", 0) or status
-            nxt_headers = list(nxt.headers.items()) if hasattr(nxt, "headers") else headers
-            try:
-                nxt_body = await asyncio.to_thread(nxt.read)
-            except Exception as exc:
-                _log(f"[vision-proxy] muse stall retry read failed: {exc!r}")
-                break
-            response, status, headers, body = nxt, nxt_status, nxt_headers, nxt_body
+                _log(f"[vision-proxy] muse stall detected but circuit breaker open (#{attempt_no}); forwarding as-is")
+            else:
+                _log(f"[vision-proxy] muse narration-only stall detected (retry #{attempt_no})")
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                nxt = None
+                try:
+                    nxt = await retry(attempt_no)
+                except Exception as exc:
+                    _log(f"[vision-proxy] muse stall retry failed: {exc!r}")
+                if nxt is not None:
+                    nxt_status = getattr(nxt, "status", None) or getattr(nxt, "code", 0) or status
+                    nxt_headers = list(nxt.headers.items()) if hasattr(nxt, "headers") else headers
+                    return await self._guard_muse_stall(
+                        nxt, nxt_status, nxt_headers, retry, attempts_left - 1)
         final_status = getattr(response, "status", None) or status
-        return _BufferedResponse(final_status, {k: v for k, v in headers}, bytes(body)), status, headers
+        return _BufferedResponse(final_status, headers, bytes(body)), status, headers
 
     async def _send_response_sse(self, writer, response, status, headers, retry=None, model=None):
         """Stream the upstream SSE response. Fail-safe apply_patch bridge:

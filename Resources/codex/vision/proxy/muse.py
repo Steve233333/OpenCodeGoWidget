@@ -317,3 +317,27 @@ def _build_muse_retry_body(body, attempt):
     else:
         parsed["input"] = [item]
     return json.dumps(parsed, ensure_ascii=False).encode()
+
+
+# ---------------------------------------------------------------------------
+# Muse 的 max_output_tokens 下限（2026-09-23）
+#
+# 实测：这个网关把**推理 token 也算进 max_output_tokens**（80 预算的一轮里 reasoning_tokens=77，
+# 于是一个字都没吐、直接 response.incomplete + incomplete_details.reason=max_output_tokens）。
+# 截图里用户用的是「极高」档推理，budget 小的时候就是"只思考、不出字"。
+# 对策：**只在客户端显式给了、且小于下限时抬高**；没给就照上游默认，绝不擅自设上限。
+# ---------------------------------------------------------------------------
+MUSE_MIN_MAX_OUTPUT_TOKENS = 16384
+
+
+def _muse_enforce_min_output_tokens(parsed):
+    """返回 (是否改过, 原值, 新值)；解析不了就原样返回。"""
+    if not isinstance(parsed, dict):
+        return False, None, None
+    if not _is_muse_model(parsed.get("model")):
+        return False, None, None
+    current = parsed.get("max_output_tokens")
+    if not isinstance(current, int) or current >= MUSE_MIN_MAX_OUTPUT_TOKENS:
+        return False, current, current
+    parsed["max_output_tokens"] = MUSE_MIN_MAX_OUTPUT_TOKENS
+    return True, current, MUSE_MIN_MAX_OUTPUT_TOKENS

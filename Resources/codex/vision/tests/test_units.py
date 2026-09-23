@@ -646,6 +646,22 @@ def t_broken_responses_backoff_grows_and_resets():
     assert cfg.responses_broken_ttl("mimo-v2.5") == 300.0        # 清零后回到最短
 
 
+def t_muse_min_output_tokens_floor():
+    """muse 的推理也算进 max_output_tokens —— 太小会"只思考不出字"（实测 80 预算里 reasoning 占 77）"""
+    p = {"model": "muse-spark-1.3-contributor-go", "max_output_tokens": 80}
+    changed, before, after = vp._muse_enforce_min_output_tokens(p)
+    assert changed and before == 80 and after == 16384 and p["max_output_tokens"] == 16384
+    # 够大就别动
+    p = {"model": "muse-spark-1.3-contributor", "max_output_tokens": 64000}
+    assert vp._muse_enforce_min_output_tokens(p) == (False, 64000, 64000)
+    # 没给就照上游默认，绝不擅自设上限
+    p = {"model": "muse-spark-1.3-contributor"}
+    assert vp._muse_enforce_min_output_tokens(p) == (False, None, None) and "max_output_tokens" not in p
+    # 别的模型不碰
+    p = {"model": "deepseek-v4.1-flash-go", "max_output_tokens": 10}
+    assert vp._muse_enforce_min_output_tokens(p) == (False, None, None) and p["max_output_tokens"] == 10
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)

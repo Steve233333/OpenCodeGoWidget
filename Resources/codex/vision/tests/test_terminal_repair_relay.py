@@ -22,6 +22,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from proxy.server import Proxy  # noqa: E402
+from proxy.config import MUSE_MAX_STALL_RETRIES  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -123,6 +124,101 @@ def t_real_terminal_is_forwarded_untouched():
     out = asyncio.run(run_relay("close", frames))
     assert out.count("response.completed") >= 1
     assert "response.failed" not in out
+
+
+class SlowMuseUpstream:
+    """模拟 muse：先发 reasoning，再发正文；每次 read 只给一块（用来验证"边流边转"）。"""
+
+    def __init__(self, blocks):
+        self.blocks = list(blocks)
+        self.status = 200
+        self.headers = {"Content-Type": "text/event-stream"}
+        self.reads = 0
+
+    def read(self, _n=-1):
+        self.reads += 1
+        return self.blocks.pop(0) if self.blocks else b""
+
+    def close(self):
+        pass
+
+
+def _muse_frames(text, with_terminal=True):
+    frames = [frame({"type": "response.created", "response": {"id": "r1"}}),
+              frame({"type": "response.output_item.added", "output_index": 0,
+                     "item": {"id": "msg_1", "type": "message", "status": "in_progress"}}),
+              frame({"type": "response.output_text.delta", "item_id": "msg_1",
+                     "output_index": 0, "delta": text})]
+    if with_terminal:
+        frames.append(frame({"type": "response.output_item.done", "output_index": 0,
+                             "item": {"id": "msg_1", "type": "message", "status": "completed"}}))
+        frames.append(frame({"type": "response.completed",
+                             "response": {"id": "r1", "status": "completed"}}))
+    return b"".join(frames)
+
+
+def t_muse_long_answer_streams_without_waiting_for_the_whole_stream():
+    """2026-09-23：muse 长回合以前要等整段读完才显示（客户端一直"正在思考"）。
+    现在正文够长就立刻放行 —— 第一个 chunk 之后就应该有内容可读。"""
+    long_text = "先说明一下：" + "这是正文。" * 60      # > 300 字
+    up = SlowMuseUpstream([_muse_frames(long_text, with_terminal=False), b""])
+    proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+    out = asyncio.run(proxy._guard_muse_stall(up, 200, [("Content-Type", "text/event-stream")], retry=None))
+    resp, status, _headers = out
+    first = resp.read(65536)
+    assert b"response.output_text.delta" in first, "放行后第一个 read 就该拿到内容"
+    assert b"response.created" in first
+
+
+def t_muse_short_narration_still_gets_retried():
+    """短叙述 + 没工具调用 + 已结束 = 经典空转 → 仍然要重发（别把老功能改没了）"""
+    calls = {"n": 0}
+    good = "这次真的干活了：" + "正文。" * 80      # 重发后拿到正常长回答
+
+    async def retry(_attempt):
+        calls["n"] += 1
+        return SlowMuseUpstream([_muse_frames(good)])
+
+    up = SlowMuseUpstream([_muse_frames("我先看看情况，然后马上开始。")])
+    proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+    out = asyncio.run(proxy._guard_muse_stall(up, 200, [("Content-Type", "text/event-stream")], retry))
+    assert calls["n"] == 1, f"重发一次就该拿到正常回答，实际重发 {calls['n']} 次"
+    assert b"response.completed" in out[0].read(65536)
+
+
+def t_muse_retry_gives_up_after_max_attempts():
+    """一直空转也不能无限重发（上限 2 次），最后照样把内容交给客户端"""
+    calls = {"n": 0}
+
+    async def retry(_attempt):
+        calls["n"] += 1
+        return SlowMuseUpstream([_muse_frames("我马上开始，先说说计划。")])   # 带空转标记词
+
+    up = SlowMuseUpstream([_muse_frames("我先看看情况，然后马上开始。")])
+    proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+    out = asyncio.run(proxy._guard_muse_stall(up, 200, [("Content-Type", "text/event-stream")], retry))
+    assert calls["n"] == MUSE_MAX_STALL_RETRIES, f"最多重发 {MUSE_MAX_STALL_RETRIES} 次，实际 {calls['n']}"
+    assert b"response.output_text.delta" in out[0].read(1 << 20)
+
+
+def t_muse_tool_call_releases_immediately():
+    """一出现工具调用就放行（这才是正常干活的回合）"""
+    frames = [frame({"type": "response.created", "response": {"id": "r1"}}),
+              frame({"type": "response.output_item.added", "output_index": 0,
+                     "item": {"id": "fc_1", "type": "function_call", "name": "shell",
+                              "call_id": "c1", "arguments": ""}}),
+              frame({"type": "response.output_item.done", "output_index": 0,
+                     "item": {"id": "fc_1", "type": "function_call", "name": "shell",
+                              "call_id": "c1", "arguments": "{}"}})]
+    up = SlowMuseUpstream([b"".join(frames), b""])
+    proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+
+    async def retry(_attempt):
+        raise AssertionError("有工具调用就不该重发")
+
+    resp, _status, _h = asyncio.run(
+        proxy._guard_muse_stall(up, 200, [("Content-Type", "text/event-stream")], retry))
+    assert b"function_call" in resp.read(65536)
 
 
 if __name__ == "__main__":
