@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from .apply_patch import (
     _extract_apply_patch_input,
@@ -645,3 +646,109 @@ def _complete_sse_frame(frame, state):
     except Exception as exc:
         _log(f"[vision-proxy] sse envelope completion failed, forwarding raw: {exc!r}")
         return [frame]
+
+
+# ---------------------------------------------------------------------------
+# 正文"平滑"（2026-09-23）
+#
+# 上游（尤其 OpenCode Go 网关给 muse）常常把整段正文**一次性 flush** 出来 —— 实测直连时
+# 56.2s 那一刻涌进来 397 帧，客户端渲染出来就是"文字闪一下全出来"，而不是逐字。
+# 这里只做呈现层的事：一帧里正文超过阈值就切成小片、片间按间隔分发；本来逐字来的流
+# （每帧几字）不受影响。解析失败一律原样返回 —— 绝不改内容。
+# ---------------------------------------------------------------------------
+SMOOTH_TEXT_CHARS = 24         # 单帧正文超过这么多字符才切片
+SMOOTH_TEXT_INTERVAL = 0.02    # 每片之间的间隔（秒）
+
+
+def split_text_delta_frame(frame_bytes, chunk_chars=None):
+    """返回 [(frame_bytes, delay_after_seconds), ...]。
+
+    只有"一大段 output_text.delta"会被切开；其它帧原样返回、delay=0（fail-safe）。
+    """
+    if b"output_text.delta" not in frame_bytes:
+        return [(frame_bytes, 0.0)]
+    text = frame_bytes.decode("utf-8", errors="replace")
+    data_start = text.find("data:")
+    if data_start < 0:
+        return [(frame_bytes, 0.0)]
+    head = text[:data_start + 5]      # 含字面量 "data:"（别丢前缀，否则客户端认不出这帧）
+    payload_text = text[data_start + 5:]
+    stripped = payload_text.lstrip()
+    leading = payload_text[:len(payload_text) - len(stripped)]
+    try:
+        payload = json.loads(stripped)
+    except (json.JSONDecodeError, TypeError):
+        return [(frame_bytes, 0.0)]
+    if not isinstance(payload, dict) or payload.get("type") != "response.output_text.delta":
+        return [(frame_bytes, 0.0)]
+    delta = payload.get("delta")
+    limit = chunk_chars or SMOOTH_TEXT_CHARS
+    if not isinstance(delta, str) or len(delta) <= limit:
+        return [(frame_bytes, 0.0)]
+    out = []
+    for i in range(0, len(delta), limit):
+        piece = dict(payload)
+        piece["delta"] = delta[i:i + limit]
+        # 别忘 SSE 的帧分隔符：少了它客户端会把后面的帧吞掉
+        out.append(((head + leading + json.dumps(piece, ensure_ascii=False) + "\n\n").encode("utf-8"),
+                    SMOOTH_TEXT_INTERVAL))
+    return out
+
+
+def text_delta_chars(frame_bytes):
+    """这一帧里正文有多少字符（非正文帧返回 0）—— 给漏桶算积压用。"""
+    if b"output_text.delta" not in frame_bytes:
+        return 0
+    text = frame_bytes.decode("utf-8", errors="replace")
+    idx = text.find("data:")
+    if idx < 0:
+        return 0
+    try:
+        payload = json.loads(text[idx + 5:].strip())
+    except (json.JSONDecodeError, TypeError):
+        return 0
+    if not isinstance(payload, dict) or payload.get("type") != "response.output_text.delta":
+        return 0
+    delta = payload.get("delta")
+    return len(delta) if isinstance(delta, str) else 0
+
+
+class TextDeltaPacer:
+    """把"上游憋完一次性涌出来"的正文按固定速率滴出去（显示起来像正常逐字）。
+
+    2026-09-23：muse 那条上游会在末尾把几百个小 delta 一次性推过来，客户端渲染就是"啪一下全出来"。
+    这里是个漏桶：
+      * 上游本来就均匀（deepseek 那种每帧几字）→ 桶是空的，零延迟、零改动；
+      * 上游猛推 → 按 rate 滴，最多容忍 max_lag 秒的积压，超了就直接放行（别让显示落后太久）。
+    """
+
+    def __init__(self, chars_per_second=300.0, max_lag_seconds=4.0, max_chars_per_second=1500.0):
+        self.rate = float(chars_per_second)
+        self.max_rate = float(max_chars_per_second)
+        self.max_lag = float(max_lag_seconds)
+        self.max_backlog = self.rate * self.max_lag
+        self.chunk_chars = max(2, int(self.rate * 0.04))     # 每片 ~40ms
+        self.backlog = 0.0
+        self.last = time.monotonic()
+
+    def shape(self, frame_bytes):
+        """返回 [(帧字节, 发下一片前要等多少秒)]。"""
+        now = time.monotonic()
+        self.backlog = max(0.0, self.backlog - (now - self.last) * self.rate)
+        self.last = now
+        chars = text_delta_chars(frame_bytes)
+        if chars <= 0:
+            return [(frame_bytes, 0.0)]
+        if self.backlog + chars > self.max_backlog:
+            # 积压太深：**加速**而不是"啪一下全放" —— 直接放会让大答案的结尾又闪一下。
+            if self.rate < self.max_rate:
+                self.rate = min(self.max_rate, self.rate * 1.6)
+                self.chunk_chars = max(2, int(self.rate * 0.04))
+                self.max_backlog = self.rate * self.max_lag
+            else:
+                self.backlog = 0.0
+                return [(frame_bytes, 0.0)]
+        self.backlog += chars
+        piece_delay = self.chunk_chars / self.rate
+        return [(piece, piece_delay) for piece, _ in
+                split_text_delta_frame(frame_bytes, self.chunk_chars)]

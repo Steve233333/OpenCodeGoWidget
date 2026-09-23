@@ -82,6 +82,7 @@ from .sse import (
     _split_sse_frame,
     _sse_output_signals,
     _sse_looks_like_stall,
+    TextDeltaPacer,
     sse_turn_looks_complete,
 )
 from .toolfix import (
@@ -1214,9 +1215,17 @@ class Proxy:
         state = {"pending": {}, "completed": False,
                  "compat": {"model": model if model is not None else getattr(self, "_last_model", None)}}
 
+        # 2026-09-23：上游（尤其 muse 网关）常把整段正文在末尾一次性涌出来 —— 客户端看起来
+        # 就是"文字闪一下全出来"。漏桶按固定速率滴出去，显示就像正常逐字；本来就是均匀的流
+        # （每帧几字）桶是空的、零延迟零改动。
+        pacer = TextDeltaPacer()
+
         async def emit(frame_bytes):
-            writer.write(frame_bytes)
-            await writer.drain()
+            for piece, delay in pacer.shape(frame_bytes):
+                writer.write(piece)
+                await writer.drain()
+                if delay:
+                    await asyncio.sleep(delay)
 
         # 2026-09-23：上游"挂着不发字节"时别让 Codex 一直转圈（muse 空转的另一半）。
         # 给底层 socket 套一个空闲宽限：空闲到点且这一轮内容已完整 → 收尾补终止帧；

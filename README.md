@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.33.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.34.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.33.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.34.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.33.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.33.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.34.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.34.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,23 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.34 — 正文"闪一下全出来" → 按正常逐字滴出去
+
+**原因**：上游（尤其 Go 网关给 muse）是在末尾把几百个小 delta **一次性涌过来**的（直连实测：
+56.2 秒那一刻 397 帧一起到）——不是我们丢帧，是真的没有"字"可以一个个发。
+
+**做法（漏桶 / TextDeltaPacer）**：转发时按固定速率把正文滴出去，看起来就是正常逐字：
+
+- 上游本来就均匀的流（deepseek 那种每帧几字）→ 桶是空的，**零延迟、零改动**；
+- 上游猛推 → 按 300 字/秒滴，片长 ~40ms；积压超过 4 秒的量就**自动加速**（上限 1500 字/秒），
+  这样长答案不会滴太久、也不会在结尾"啪一下补完"；
+- **只碰 `response.output_text.delta`**：工具调用参数帧（`function_call_arguments.delta`，apply_patch 靠它）
+  和其它帧一律零延迟原样转发 —— 这条我专门写了断言，免得把工具调用也拖慢。
+
+真机实测：同一条 muse 回答（137 字）以前同一毫秒全出来，现在分成 16 帧、0.6 秒内逐步显示。
+
+版本 **1.1.11.34 (74)**。
 
 ### v1.1.11.33 — Muse「没有流式文字」：一半是网关、一半是我们的守卫
 
@@ -187,38 +204,6 @@ Python 全量 **45 + 8 + 31 + 14 + 8** 全绿。
 "内容不完整就继续等、最多 120 秒"，本来就不会因为某个模型思考慢而误判，per-model 配置暂时没有收益。）
 
 版本 **1.1.11.32 (72)**。
-
-### v1.1.11.31 — Muse 终止事件修补（对齐 opencodex 的 modelResponsesTerminalRepair）
-
-现象：muse-spark 在 OpenCode Go/Zen 的 Responses 模式下「做任务弄着弄着空转」。翻 opencodex 的
-`#5240`（今天刚合并）看到根因和我们一致但修法更好：
-
-- **上游发完内容却不发终止帧**（省略 `response.completed` 与 usage）。我们原来的处理是**立刻**补一个
-  `response.failed` —— 这一轮被判「中断」，内容其实已经完整；
-- opencodex 的做法是 `modelResponsesTerminalRepair`（`graceMs: 5s`）：**等一个宽限窗口，如果开过的每个
-  输出项都收到过 `response.output_item.done`（内容完整），就补 `response.completed`**，只有内容确实不完整
-  才判失败。
-
-这一版把同一套契约搬过来（不是照抄实现，是按我们的流式管线重写）：
-
-- `proxy/sse.py`：状态机新增"开过几个输出项 / 关掉几个 / 完成的项留一份"的追踪，并导出
-  `sse_turn_looks_complete(state)`（开过的项都 done 且至少一个）；
-- `proxy/server.py`：① 收尾时先按上面判定 —— 内容完整就补 `response.completed`（带上已经发过的 output 项），
-  不完整才保持原来的 `response.failed`（老行为不丢）；② 新增**空闲宽限**：给上游 socket 套 5 秒读超时，
-  "挂着不发字节"且内容已完整时立刻收尾（这是"空转"的另一半 —— 以前会一直等）；连续空闲 24×5s=120s
-  仍不完整才判失败；有数据就重置计数，慢但活着的流不会被误掐。
-
-验证：
-- 新增 `tests/test_terminal_repair_relay.py`（中继层，4 条）：上游关连接不发终止帧 → 补 completed 且
-  带上 output 项 / 上游挂着不发字节 → 空闲宽限补 completed / 内容不完整 → 仍判 failed / 真终止帧原样转发。
-  已接进 `build.sh --test` 门槛（Python 全量 37+4+31+18+8 全绿）。
-- 顺带修一个我刚引入的坑：ensure-proxy 变"幂等不重启"后，**「配置」同步了新代理代码却不会重启它**
-  （新代码永远不生效）→ 加 `--force-restart`，安装器这一步强制换新进程；`scripts/test-ensure-proxy.sh`
-  第 ⑥ 条断言"跑着的旧进程会被换掉"（pid 变化）。
-- 真机：deepseek 流式 200 且日志出现 `SSE 空闲宽限 5s 已启用`；muse 冒烟 200（顺带看到 narration-only
-  空转重试真实触发一次 #1/#2 后成功）。
-
-版本 **1.1.11.31 (71)**。
 
 ## 本地构建
 

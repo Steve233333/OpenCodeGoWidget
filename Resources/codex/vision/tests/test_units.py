@@ -662,6 +662,43 @@ def t_muse_min_output_tokens_floor():
     assert vp._muse_enforce_min_output_tokens(p) == (False, None, None) and p["max_output_tokens"] == 10
 
 
+def t_text_delta_smoothing_splits_bursts_only():
+    """上游一次性 flush 大段正文时切成小片（显示才像逐字）；本来就小的帧原样放行"""
+    big = ("data: " + json.dumps({"type": "response.output_text.delta", "delta": "字" * 60}) + "\n\n").encode()
+    pieces = vp.split_text_delta_frame(big)
+    assert len(pieces) == 3, pieces
+    assert all(piece.startswith(b"data:") and piece.endswith(b"\n\n") for piece, _ in pieces), "每片都要是完整 SSE 帧"
+    assert all(delay > 0 for _, delay in pieces)
+    rejoined = "".join(json.loads(piece.decode()[6:].strip())["delta"] for piece, _ in pieces)
+    assert rejoined == "字" * 60, "切完拼回来必须一字不差"
+
+    small = ("data: " + json.dumps({"type": "response.output_text.delta", "delta": "短"}) + "\n\n").encode()
+    assert vp.split_text_delta_frame(small) == [(small, 0.0)], "小帧不该被改（逐字来的流零影响）"
+    other = b'data: {"type":"response.completed"}\n\n'
+    assert vp.split_text_delta_frame(other) == [(other, 0.0)], "非正文帧一律原样"
+
+
+def t_text_delta_pacer_drips_bursts_and_keeps_gradual_streams():
+    """漏桶：上游猛推时按速率滴（显示像逐字），本来就均匀的流零延迟；积压深了会加速"""
+    def frame(n):
+        return ("data: " + json.dumps({"type": "response.output_text.delta", "delta": "字" * n}) + "\n\n").encode()
+
+    pacer = vp.TextDeltaPacer()
+    shaped = pacer.shape(frame(30))
+    assert len(shaped) > 1 and all(d > 0 for _, d in shaped), "大帧要切片并带间隔"
+    assert "".join(json.loads(p.decode()[6:].strip())["delta"] for p, _ in shaped) == "字" * 30, "内容一字不差"
+    assert pacer.shape(frame(2))[0][1] > 0, "小帧按速率滴（有延迟但很小）"
+    # 工具参数帧绝不能被节流（apply_patch 的上传要靠它）
+    args = ("data: " + json.dumps({"type": "response.function_call_arguments.delta",
+                                   "delta": "x" * 500}) + "\n\n").encode()
+    assert pacer.shape(args) == [(args, 0.0)], "非正文帧必须零延迟"
+    # 猛推 200 帧 × 20 字 → 速率要涨上去，别让长答案滴太久
+    start_rate = pacer.rate
+    for _ in range(200):
+        pacer.shape(frame(20))
+    assert pacer.rate > start_rate * 2, f"积压后应该加速（{start_rate} → {pacer.rate}）"
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)
