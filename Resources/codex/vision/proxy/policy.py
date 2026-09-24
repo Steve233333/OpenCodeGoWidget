@@ -59,6 +59,11 @@ MODEL_FAMILIES: dict[str, ModelPolicy] = {
     "longcat": ModelPolicy(route=ROUTE_NATIVE_OR_BRIDGE),
     "hy": ModelPolicy(route=ROUTE_NATIVE_OR_BRIDGE),
     "grok": ModelPolicy(route=ROUTE_NATIVE_OR_BRIDGE),
+    # 2026-09-24 实测（Go 网关）：space-bunny-free 的 /responses 恒 503
+    # "Upstream request failed: Endpoint is unavailable."，/chat/completions 200
+    # （官方文档也把它标成 @ai-sdk/openai-compatible）。所以直接走 chat 桥，
+    # 不学"先试原生、坏了再桥"，省掉每次上线后那一次注定失败的探测。
+    "space-bunny": ModelPolicy(route=ROUTE_BRIDGE),
     # Zen 免费家族（同样是 chat 适配）
     "ox-alpha": ModelPolicy(route=ROUTE_NATIVE_OR_BRIDGE),
     "x-preview": ModelPolicy(route=ROUTE_NATIVE_OR_BRIDGE),

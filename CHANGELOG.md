@@ -2,6 +2,36 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.41 — Space-Bunny Free：上下文 / 推理档位 / 路由 一次对齐（实测，不是抄默认值）
+
+**现象**：`Space-Bunny-Free (Go)` 今天被自动发现时用的是兜底值 —— 上下文 1000000、
+只声明一档 `high`、模态抄了 mimo 模板的 `text/image/audio`，代理侧还会先拿 `/responses`
+去撞一次（每次都要白等一个失败）。
+
+**核对（三源交叉 + 真机探针）**：
+- **上下文**：models.dev 的 `opencode-go/space-bunny-free` = **1048576**。
+  同一份数据的准确性先用 5 个已知模型校准过 —— mimo-v2.6-flash / kimi-k3（1048576）、
+  glm-5.3 / deepseek-v4.1-flash / longcat-2.0（1000000）**五个全与本地一致**，所以可信。
+- **模态**：models.dev = text/image/**video**，Codex 的 schema 不认 video（写进去会整个
+  models.json 被拒），所以取 **text/image**；原来那份 `audio` 是从 mimo 模板抄来的，模型并不支持。
+- **推理档位**：`probe-new-model.sh` + 手工探针实测（同一道题，看 `reasoning_tokens`）——
+  `minimal` 6 / `low` 21 / `medium` 17 / `high` 28 / `xhigh` 72 / `max` 156、不传参 114。
+  六档全被网关接受且**思考深度真的随档位变化**，因此声明 `low / medium / high / xhigh / max`
+  （跳过 `minimal`：其它模型都没用这档；`none` 实测返回空正文，不能用）。
+- **协议**：`/responses` 恒 **503 "Endpoint is unavailable."**、`/chat/completions` **200**
+  （官方文档也标它 `@ai-sdk/openai-compatible`）→ 加 `space-bunny` 家族 `route=bridge`，
+  直接走 chat 桥，不再每个 TTL 周期白试一次原生。
+
+**改了哪几处**：`reasoning_overrides.json`（钉住实测档位，唯一权威手工来源）→ 跑
+`model_discovery.py --sync --force` 自动回写 `models.json` / `reasoning_registry.json`；
+`proxy/policy.py` 加家族；仓库模板 `templates/models.json` 补上 `space-bunny-free-go`
+（顺手把同样漏在模板外的 `gpt-6-luna-go` 一起补进，两台机器装完就是同一份 44 个模型）。
+
+**验证**：`--sync` 后目录/代理/桌面三层档位一致；`space-bunny-free-go` 经 `127.0.0.1:19100`
+真机请求 200；策略基线（golden）与全量门槛全绿。
+
+版本 **1.1.11.41 (81)**。
+
 ### v1.1.11.40 — 密钥列表跟得上控制台（新建的 Key 不再"查无此钥"）
 
 **现象**：控制台里 9/23 17:04 新建的那把 Active「临时」，小组件下拉框里一直没有 ——

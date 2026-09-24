@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.40.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.41.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.40.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.41.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.40.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.40.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.41.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.41.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,18 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.41 — Space-Bunny Free 一次对齐（上下文 / 档位 / 路由）
+
+自动发现时它用的是兜底值：上下文 1000000、单档 `high`、模态抄了 mimo 的 audio，代理还会先撞一次
+必失败的 `/responses`。这次按实测改齐：
+
+- 上下文 **1048576**（models.dev 的 `opencode-go` 数据，先用 5 个已知模型校准过）；
+- 模态 text/image（models.dev 写的 video，Codex schema 不认，写进去会炸整个 models.json）；
+- 推理档位 **low / medium / high / xhigh / max** —— 真机探针实测思考深度随档位变化（6/21/17/28/72/156 reasoning tokens）；
+- 协议：`/responses` 恒 503、`/chat` 200 → 家族路由直接走 chat 桥。
+
+版本 **1.1.11.41 (81)**。
 
 ### v1.1.11.40 — 密钥列表跟得上控制台
 
@@ -136,27 +148,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 冒烟脚本新增「跨模型搜索历史」用例；全量 121 用例全绿。
 
 版本 **1.1.11.39 (79)**。
-
-### v1.1.11.38 — 修「upstream 400：`arguments` must be valid JSON」
-
-**现象**：用 muse 继续一段老对话时，上游直接 400：
-`Upstream request failed: [invalid_request_error] \`arguments\` must be valid JSON`，整轮发不出去。
-
-**根因（实测定位，不是猜）**：会话历史里有 **4 条 `function_call` 的 `arguments` 本身不是合法 JSON** ——
-`proposed_plan` 是空串、`request_user_input` 被截断、`write_stdin` 少了半截（都是某次工具调用没发完整留下的）。
-我们原样回放，Go/Zen 网关按 function 校验就整轮拒掉。muse 上必现；deepseek 上会先撞另一条校验
-（`reasoning_text`），所以之前没暴露。
-
-**修法**：`proxy/toolfix.py` 新增 `_repair_history_args()`，在回放历史时把 `arguments` 修成合法 JSON ——
-能救的救（补 `{"` 前缀、去尾逗号、补闭合符号），救不回来的退化成 `{}` 并记一行日志；
-`_normalize_fc_args_history()` 现在对每条 function_call 都过一遍（以前只认得"缺 `{"`"那一种形态）。
-
-**复现 + 验证（同一探针）**：
-- 修前：`muse-spark-1.3-contributor-go` + 截断 arguments → **HTTP 400**（与你看到的一字不差）
-- 修后：同一请求 → **HTTP 200** ✓
-新增单测覆盖 6 种形态（含 3 条真实坏样本）。
-
-版本 **1.1.11.38 (78)**。
 
 ## 本地构建
 

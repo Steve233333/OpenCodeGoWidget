@@ -329,10 +329,16 @@ class RequestPipelineMixin:
                             f"({chat_status}) for {model}: {err_text}",
                         )
                         return
-                    # 连续失败就指数退避（2026-09-23）：别每 5 分钟白试一次原生路径
-                    ttl = NATIVE_PROBES.note_failure(model)
-                    _log(f"[vision-proxy] {model} 原生 /responses 连续失败 "
-                         f"{NATIVE_PROBES.streak(model)} 次 → 接下来 {int(ttl)}s 直接走 chat 桥")
+                    # 连续失败就指数退避（2026-09-23）：别每 5 分钟白试一次原生路径。
+                    # 2026-09-24 修：策略=bridge 的模型（如 space-bunny、omen-alpha）根本没试原生
+                    # （upstream_status=0），以前照样记一次"原生连续失败"并打日志 —— 数字一路涨、
+                    # 日志误导排查。现在只有真试过原生才记账/打那行。
+                    if upstream_status:
+                        ttl = NATIVE_PROBES.note_failure(model)
+                        _log(f"[vision-proxy] {model} 原生 /responses 连续失败 "
+                             f"{NATIVE_PROBES.streak(model)} 次 → 接下来 {int(ttl)}s 直接走 chat 桥")
+                    else:
+                        _log(f"[vision-proxy] {model} 策略=bridge：直接走 chat 桥（不试原生，省一次注定失败的探测）")
                     txn["status"], txn["bridge"] = 200, "chat-fallback"
                     _log(f"[vision-proxy] responses->chat fallback engaged model={model} "
                          f"upstream_status={upstream_status} chat_status={chat_status}")
