@@ -349,7 +349,9 @@ struct DashboardView: View {
         async let zenRefresh: [String] = ModelRegistry.refreshZenIfNeeded(force: true)
         async let quotaRefresh: [GoQuota] = GoQuotaRegistry.refreshIfNeeded(force: true)
         do {
-            let snap = try await WidgetSnapshotRefresher.fetch()
+            // 用户主动刷新（含每 5 分钟自动那轮）连带重拉一次密钥列表：
+            // 控制台新建的 Key 应该立刻出现在下拉框里，而不是等缓存空掉（2026-09-24）
+            let snap = try await WidgetSnapshotRefresher.fetch(forceKeys: true)
             let models = await modelRefresh
             _ = await zenRefresh
             let q = await quotaRefresh

@@ -167,7 +167,9 @@ enum WidgetDataStore {
             }
         }
         if let d = defaults {
-            for key in [snapshotKey, "historyBackfillDone", "historyBackfillCursor",
+            // 2026-09-24：availableKeys（密钥列表）也一起清 —— 提示文案一直写着"会删掉…密钥列表"，
+            // 但代码里只删用量快照，于是"清完缓存还是看不到新 Key"。换账号那条路径也靠这里复位。
+            for key in [snapshotKey, "availableKeys", "historyBackfillDone", "historyBackfillCursor",
                         "historyBackfillLastCount", "historyBackfillFailedWindows",
                         "historyRepairLast", "historyBackfillRunning", "historyBackfillRunningAt"] {
                 d.removeObject(forKey: key)
@@ -263,9 +265,13 @@ enum WidgetConstants {
 }
 
 enum WidgetSnapshotRefresher {
-    static func fetch() async throws -> WidgetSnapshot {
+    /// `forceKeys: true` = App 主动刷新那一轮：密钥列表跟用量一起重拉
+    /// （2026-09-24：新建的 Key 立刻出现在下拉框；拉失败退回缓存，不拖慢刷新、不清空下拉框）。
+    static func fetch(forceKeys: Bool = false) async throws -> WidgetSnapshot {
         // 日界口径换过一次（北京→UTC），旧口径的数据整体作废，避免新旧混着显示
         WidgetDataStore.migrateDayConventionIfNeeded()
+        // 密钥列表跟后面的用量抓取并发跑，刷新总耗时不变
+        async let keysTask = CostCrawler.shared.cachedOrFetchedKeys(force: forceKeys)
         let manager = NetworkManager()
         let usage = try await manager.fetchUsage()
         // 账期模式：按月重置日对齐并跨月合并，避免月中开套餐被自然月切断
@@ -358,7 +364,7 @@ enum WidgetSnapshotRefresher {
         // availableKeys：只用控制台密钥列表里的 Key（2026-09-19 修：以前会把"明细里出现过的 Key"
         // 也并进来，导致**已删除的 Key**以裸 id 形式出现在下拉框里 —— 用户明明只有 2 把却看到 3 个。
         // 已删除 Key 的历史用量仍保留在"所有密钥"里（和控制台一致：它算在 Legacy 服务账号名下）。
-        let keys = await CostCrawler.shared.cachedOrFetchedKeys()
+        let keys = await keysTask
         // dailyByKey 从 CostCrawler 的 MonthlyCost 中获得
         let dailyByKey = byKeyFinal
 

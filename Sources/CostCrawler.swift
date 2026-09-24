@@ -136,13 +136,14 @@ final class CostCrawler: @unchecked Sendable {
         return arr
     }
 
-    /// 密钥列表：缓存优先，缓存空才现拉一次控制台接口（2026-09-23 Phase 1 新增）。
-    /// 老实现是去抓 `/workspace/<ws>/keys` 的 HTML，那条路随控制台改版已经失效（现在返回 SPA 空壳），
-    /// 所以下拉框一直是靠旧缓存撑着。现在改成新接口 `GET /console/api/service-accounts`，
-    /// 顺带能过滤掉已吊销的 Key。
-    func cachedOrFetchedKeys() async -> [ApiKeyInfo] {
+    /// 密钥列表：默认缓存优先；`force: true`（App 每次刷新都会传）先重拉一次控制台。
+    ///
+    /// 2026-09-24 修：以前是"有缓存就永远不刷新"，于是新建的 Key 永远进不了下拉框 ——
+    /// 而「清除用量缓存」又没删密钥列表，用户怎么点都看不到新钥匙。
+    /// 现在：拉到就用新的并写缓存；拉失败 / 结果为空一律退回缓存，下拉框绝不清空。
+    func cachedOrFetchedKeys(force: Bool = false) async -> [ApiKeyInfo] {
         let cached = loadCachedKeys()
-        if !cached.isEmpty { return cached }
+        if !force, !cached.isEmpty { return cached }
         if let fresh = await fetchConsoleKeys(), !fresh.isEmpty {
             cacheAvailableKeys(fresh)
             return fresh
@@ -150,7 +151,9 @@ final class CostCrawler: @unchecked Sendable {
         return cached
     }
 
-    /// 拉控制台的服务账号密钥列表：items[].keys[] 里每个 key 有 id / name / status / revokedAt
+    /// 拉控制台的服务账号密钥列表：items[].keys[] 里每个 key 有 id / name / status / revokedAt / expiresAt。
+    /// 过滤规则（吊销 / 非 active / 已过期 / 账号名去 `Legacy: ` 前缀）全在
+    /// `ApiKeyInfo.parseConsoleKeys()` 里 —— 那边是纯函数，离线可测（Tests/KeyListParseTests.swift）。
     func fetchConsoleKeys() async -> [ApiKeyInfo]? {
         let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
         let ws = suite?.string(forKey: "workspaceID") ?? ""
@@ -159,25 +162,12 @@ final class CostCrawler: @unchecked Sendable {
         guard !ws.isEmpty, !session.isEmpty else { return nil }
         let cookie = Self.consoleCookieHeader(auth: auth, session: session)
         guard let data = await consoleFetch(path: "service-accounts", query: "", cookie: cookie, ws: ws),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let items = obj["items"] as? [[String: Any]] else { return nil }
-        var out: [ApiKeyInfo] = []
-        for item in items {
-            let account = item["account"] as? [String: Any]
-            let accountName = ((account?["name"] as? String) ?? "")
-                .replacingOccurrences(of: "Legacy: ", with: "")
-            guard let keys = item["keys"] as? [[String: Any]] else { continue }
-            for key in keys {
-                guard let id = key["id"] as? String, !id.isEmpty else { continue }
-                // 已吊销/已删除的不进下拉框
-                if (key["revokedAt"] as? String)?.isEmpty == false { continue }
-                if let status = key["status"] as? String, status != "active" { continue }
-                let name = (key["name"] as? String) ?? id
-                let display = accountName.isEmpty ? name : "\(accountName) - \(name)"
-                out.append(ApiKeyInfo(id: id, displayName: display))
-            }
+              let list = ApiKeyInfo.parseConsoleKeys(data) else {
+            logger.warning("CostCrawler: 密钥列表拉取失败 → 沿用缓存（下拉框不清空）")
+            return nil
         }
-        return out.isEmpty ? nil : out
+        logger.info("密钥列表刷新：\(list.keys.count) 把有效（跳过 \(list.skipped) 把已吊销/已过期）")
+        return list.keys.isEmpty ? nil : list.keys
     }
 
 }

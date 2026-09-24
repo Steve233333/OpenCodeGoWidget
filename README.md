@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.39.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.40.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.39.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.40.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.39.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.39.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.40.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.40.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,20 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.40 — 密钥列表跟得上控制台
+
+**现象**：控制台里新建的 Active Key，下拉框里一直没有；点「清除用量缓存」也不出现。
+
+**根因**：密钥列表是"有缓存就永不刷新"，而「清除用量缓存」的提示写着会删密钥列表、代码里却没删。
+
+**修法**：每次「刷新」连带并发重拉一次密钥列表（失败退回缓存，绝不清空下拉框）；
+过滤规则抽成纯函数 `ApiKeyInfo.parseConsoleKeys()`（跳过已吊销 / 非 active / 已过期）；
+`wipeUsageCache()` 真的把密钥列表一起清掉；刷新时日志记一行"N 把有效（跳过 M 把）"。
+
+**实测**：本机缓存从 2 把 → 刷新后 3 把（丁雁 / 方泽恩 / 临时）；新增离线 fixture 测试锁住解析规则。
+
+版本 **1.1.11.40 (80)**。
 
 ### v1.1.11.39 — 跨模型切换不再拦 400：把 web_search 历史翻成工具调用
 
@@ -143,35 +157,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 新增单测覆盖 6 种形态（含 3 条真实坏样本）。
 
 版本 **1.1.11.38 (78)**。
-
-### v1.1.11.37 — 转换层收敛收尾：SSE 引擎拆完 + handle 拆完（并加部署护栏）
-
-**③ SSE 引擎（完成）**
-- `_rewrite_sse_frame` 159 → **22 行**：解析 → 记账 → 按帧类型查表分派 → 没认领就原样字节转发；
-  5 个 handler（`_rf_terminal` / `_rf_output_item_added` / `_rf_fc_args_delta` / `_rf_fc_args_done` /
-  `_rf_output_item_done`）。
-- `_complete_sse_frame` 247 → **39 行**：三个共享 `seq/out/compat` 的闭包抽成 `_ChatCompatCtx` 类，
-  7 个帧分支变成类方法 + `_COMPAT_HANDLERS` 分派表。
-- 护栏：`tests/test_sse_golden.py` + `tests/fixtures/sse_golden.json` —— 用**重构前**的逐帧输出当规格
-  （deepseek 原生流 / muse 命名空间工具 / apply_patch 参数流 / 无终止帧 / 垃圾帧 / 重复 item_id），
-  改完**逐字节一致**；另有一条专门钉"没登记的帧必须原样字节转发"。
-
-**② 请求管线（完成）**
-- `handle()` 485 → **31 行**（只剩：建 txn → `_turn_begin` → `_turn_execute` → 异常映射 → 收尾日志）。
-- `_turn_begin`（52 行）：读请求体 → 准备 → 回传 `turn`；`_prepare_parsed_request`（89 行）负责模型名兼容 /
-  apply_patch 改写 / 合成搜索 / 工具历史修补 / muse 注入 / 预算与推理档位；`_turn_execute`（341 行）承接
-  上游与路由执行（这一块内部还能再按 route/bridge/native 细分，但不影响本阶段目标）。
-- server.py 1398 → 849 行；pipeline.py 独立成文件（`RequestPipelineMixin` 组合进 `Proxy`）。
-
-**新增部署护栏（今天的教训）**
-`scripts/deploy-proxy.sh`：备份运行目录 → 同步 → 强制重启 → **跑四家族冒烟** → 失败自动回滚并重启。
-起因：这次我把 `pipeline.py` 的重构**先部署再冒烟**，漏传一个变量（`incoming_headers`）导致四家族全 502，
-你的 Codex 先踩到了；补传后已恢复。以后统一走这个脚本，坏的代码上不了线。
-
-验证：全量 **47 + 3 + 8 + 31 + 14 + 8** 全绿；SSE 基线逐字节一致；真机冒烟四家族全绿
-（DeepSeek 47 / MiMo 44 / Muse 24 / GLM 70 字，markup 均 0）。
-
-版本 **1.1.11.37 (77)**。
 
 ## 本地构建
 
