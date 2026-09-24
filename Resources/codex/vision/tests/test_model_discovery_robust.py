@@ -504,6 +504,27 @@ def t_sync_heals_stale_levels():
         assert reg["glm-5.3"] == ["low", "medium", "high"], reg.get("glm-5.3")
 
 
+# ---------- 显示名：GPT 前缀（2026-09-24）----------
+
+def t_display_name_gpt_prefix_safe():
+    """Codex 选择器会吃掉开头的 "GPT-"（"GPT-6-Luna (Go)" 显示成 "6 Luna (Go)"）——
+    所以显示名里不许出现 GPT- 前缀，任何 GPT 模型都必须是 "GPT 6 Luna" 这种空格写法。
+    这条是规则，不是单模型补丁：以后新增 gpt-7 / gpt-9 自动生效。
+    """
+    assert md._display_name_for("gpt-6-luna", "Go", "GPT 6 Luna") == "GPT 6 Luna (Go)"
+    assert md._display_name_for("gpt-6-luna", "Go", None) == "GPT 6 Luna (Go)"
+    assert md._display_name_for("gpt-7-ultra", "Go", "GPT 7 Ultra") == "GPT 7 Ultra (Go)"
+    assert md._display_name_for("gpt-9-turbo-free", "Zen", "GPT 9 Turbo Free") == "GPT 9 Turbo Free (Zen)"
+    # 别的模型不许被顺手改掉（MiMo/DeepSeek 的连字符是刻意保留的）
+    assert md._display_name_for("mimo-v2.6-flash", "Go", "MiMo-V2.6-Flash") == "MiMo-V2.6-Flash (Go)"
+    assert md._display_name_for("deepseek-v4.1-flash", "Go", "DeepSeek V4.1 Flash") == "DeepSeek-V4.1-Flash (Go)"
+    # 兜底（没有官方名、只能拿 id 拼）也要守规矩
+    assert md._display_name_for("gpt-8-mini", "Go", None) == "GPT 8 Mini (Go)"
+    for rid, sfx in [("gpt-6-luna", "Go"), ("gpt-7-ultra", "Go"), ("gpt-9-turbo-free", "Zen")]:
+        name = md._display_name_for(rid, sfx, None)
+        assert not name.startswith("GPT-"), f"{rid} 还是 GPT- 开头：{name}"
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
         check(name, fn)

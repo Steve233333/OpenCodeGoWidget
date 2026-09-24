@@ -2,6 +2,31 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.42 — 「GPT 去哪了」根治：显示名前缀从补丁变规则
+
+**现象**：模型选择器里 `GPT 5.6 Luna (Go)` 正常，但新来的 `GPT-6 Luna` 显示成 **`6 Luna (Go)`** ——
+"GPT" 又被吃了。9/22 已经修过一次（当时给 5.6 单独加了一条显示名 override），这次 6 Luna 又犯。
+
+**根因（两段都查清了）**：
+1. **Codex 桌面端**的模型选择器会把显示名开头的 `GPT-` 吃掉，并把剩下的连字符拍成空格：
+   `GPT-6-Luna (Go)` → `6 Luna (Go)`；纯空格写法 `GPT 5.6 Luna (Go)` 则原样显示。
+2. **我们的命名规则**在 Go 家族里统一"把官方名的空格换成连字符"（对 MiMo/DeepSeek 是刻意的，见
+   `MiMo-V2.6-Flash`），于是任何新的 GPT 模型一进来就带着 `GPT-` → 必然被吃。上次的修法只钉了一个模型，
+   规则没动，所以必然复发。
+
+**修法（根治）**：`model_discovery.py` 里加一条**统一规则** —— 任何以 `GPT-` 开头的显示名一律转成
+`GPT ` + 去连字符（`_gpt_safe()`，在 `_display_name_for()` 出口统一过一遍）。效果：
+`GPT-6-Luna (Go)` → `GPT 6 Luna (Go)`、`GPT-7-Ultra` → `GPT 7 Ultra`，**以后新增的 GPT 模型自动生效**；
+MiMo / DeepSeek / GLM 的连字符写法一个没动。顺手把仓库模板里 5.6 那行也补成空格写法（模板一直是旧值）。
+
+**验证**：`--sync --force` 后 `models.json` 只有 `gpt-6-luna-go` 这一个字段变化
+（`GPT-6-Luna (Go)` → `GPT 6 Luna (Go)`，其余 33 个模型零变动）；新增回归测试
+`t_display_name_gpt_prefix_safe`（含 `gpt-7`/`gpt-9` 假想模型，断言非 GPT 模型不被误改）。
+
+> 注意：Codex 桌面端只在启动时读一次 `models.json`，改完要**重启 Codex** 才会看到 `GPT 6 Luna (Go)`。
+
+版本 **1.1.11.42 (82)**。
+
 ### v1.1.11.41 — Space-Bunny Free：上下文 / 推理档位 / 路由 一次对齐（实测，不是抄默认值）
 
 **现象**：`Space-Bunny-Free (Go)` 今天被自动发现时用的是兜底值 —— 上下文 1000000、

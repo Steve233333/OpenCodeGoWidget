@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.41.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.42.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.41.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.42.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.41.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.41.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.42.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.42.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,17 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.42 — 「GPT 去哪了」根治
+
+模型选择器里 `GPT-6 Luna` 显示成 `6 Luna (Go)`：Codex 桌面端会把显示名开头的 `GPT-` 吃掉，
+而我们的命名规则给 Go 家族统一加连字符 —— 上次只给 5.6 单独打了补丁，所以 6 Luna 又犯。
+
+这次改成**规则**：任何 `GPT-` 开头的显示名一律转成 `GPT ` + 去连字符（`GPT 6 Luna (Go)`），
+以后新增的 GPT 模型自动生效，MiMo / DeepSeek 的连字符写法不受影响；顺手把模板里 5.6 那行补正。
+改完要重启 Codex 才会刷新选择器。
+
+版本 **1.1.11.42 (82)**。
 
 ### v1.1.11.41 — Space-Bunny Free 一次对齐（上下文 / 档位 / 路由）
 
@@ -132,22 +143,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 **实测**：本机缓存从 2 把 → 刷新后 3 把（丁雁 / 方泽恩 / 临时）；新增离线 fixture 测试锁住解析规则。
 
 版本 **1.1.11.40 (80)**。
-
-### v1.1.11.39 — 跨模型切换不再拦 400：把 web_search 历史翻成工具调用
-
-**现象**：从 DeepSeek / Muse 的会话切到 mimo / GLM，整轮 400「Cross-model history blocked … Please start a new session」。
-
-**根因**：这条 400 是我们自己拦的 —— 历史里的 `web_search_call` 在桥接层被静默丢掉，于是用"换会话"挡了。
-上游其实收得下这种历史（实测 200）。
-
-**修法**：两个桥各加一层翻译 —— `web_search_call` → `web_search` 工具调用 + 一条诚实占位结果
-（"当时搜过、结果未保留、要就重新搜"，不编造事实），并自动补上合成工具声明；**400 拦截整段删除**，
-4 处手写的前缀名单统一成 `has_native_search()`。reasoning 仍不回放，但不再静默（日志记条数）。
-
-**实测**：修前同一探针 400（一字不差）→ 修后 MiMo 2.6、GLM 5.3、流式/非流式、DeepSeek 带同历史全部 200；
-冒烟脚本新增「跨模型搜索历史」用例；全量 121 用例全绿。
-
-版本 **1.1.11.39 (79)**。
 
 ## 本地构建
 

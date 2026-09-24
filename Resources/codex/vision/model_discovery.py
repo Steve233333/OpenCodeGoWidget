@@ -669,7 +669,20 @@ def _display_base_from_official(official_name, remote_id):
         return None
     return base
 
-def _display_name_for(remote_id, suffix, official_name=None):
+def _gpt_safe(name):
+    """Codex 桌面端的选择器会把开头的 "GPT-" 吃掉（并把剩下的连字符拍成空格）：
+    models.json 里写 "GPT-6-Luna (Go)"，列表里显示成 "6 Luna (Go)"。
+
+    2026-09-22 第一次遇到（5.6）时是给那一个模型加 override；2026-09-24 6 Luna 又犯了一次
+    （用户第二次问"GPT 去哪了"）。所以改成**规则**：任何以 `GPT-` 开头的显示名一律换成
+    "GPT " + 去连字符 的写法（和官方文档 "GPT 6 Luna" 一致），以后新增 GPT 模型不会再犯。
+    """
+    if isinstance(name, str) and name.startswith("GPT-"):
+        return "GPT " + name[4:].replace("-", " ")
+    return name
+
+
+def _display_name_base(remote_id, suffix, official_name=None):
     # suffix = "Go" or "Zen"
     # 优先级：手工 override > models.dev 官方 name > 由 id 拼（老逻辑，兜底）
     # Zen: keep spaces e.g. "Muse Spark 1.2 Free (Zen)" to match screenshot
@@ -710,6 +723,12 @@ def _display_name_for(remote_id, suffix, official_name=None):
             base = remote_id.replace("-", " ").title().replace(" ", "-")
             base = base.replace("Gpt-", "GPT-").replace("Muse-", "Muse ").replace("Mimo-", "MiMo-").replace("Glm-", "GLM-")
         return f"{base} ({suffix})"
+
+
+def _display_name_for(remote_id, suffix, official_name=None):
+    """对外入口：基名 + GPT 前缀安全化（5.6/6 Luna 的教训写死在 _gpt_safe 里）。"""
+    return _gpt_safe(_display_name_base(remote_id, suffix, official_name))
+
 
 def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=None, is_zen=None):
     e = copy.deepcopy(template)
