@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.44.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.45.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.44.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.45.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.44.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.44.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.45.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.45.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,14 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.45 — 上游 400 修复 + LongCat 2.5 Preview Free
+
+上游把 chat-only 模型的 `/responses` 从 5xx 改成 **400 ModelProtocolUnsupported**，导致 mimo/GLM 直接 400。
+代理现在会认出这种"协议不支持"的 400 并切 chat 桥（真正的请求错误仍透传）。同时接入今晚新上的
+**LongCat 2.5 Preview Free**（限时免费、无限额度）：自动发现已捡到，策略表里直接走 chat 桥，实测 200。
+
+版本 **1.1.11.45 (85)**。
 
 ### v1.1.11.44 — 缺口每天重试一次
 
@@ -127,17 +135,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 App 日志 `今日对账一致（官方 0.904193 ≈ 日志 0.900583）`、进度 25/34 → 28/30。
 
 版本 **1.1.11.43 (83)**。
-
-### v1.1.11.42 — 「GPT 去哪了」根治
-
-模型选择器里 `GPT-6 Luna` 显示成 `6 Luna (Go)`：Codex 桌面端会把显示名开头的 `GPT-` 吃掉，
-而我们的命名规则给 Go 家族统一加连字符 —— 上次只给 5.6 单独打了补丁，所以 6 Luna 又犯。
-
-这次改成**规则**：任何 `GPT-` 开头的显示名一律转成 `GPT ` + 去连字符（`GPT 6 Luna (Go)`），
-以后新增的 GPT 模型自动生效，MiMo / DeepSeek 的连字符写法不受影响；顺手把模板里 5.6 那行补正。
-改完要重启 Codex 才会刷新选择器。
-
-版本 **1.1.11.42 (82)**。
 
 ## 本地构建
 

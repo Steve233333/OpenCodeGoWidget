@@ -205,13 +205,6 @@
  "hy3": [
   "high"
  ],
- "space-bunny-free": [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max"
- ],
  "grok-4.7": [
   "low",
   "medium",
@@ -223,6 +216,20 @@
   "high",
   "max"
  ],
+ "gpt-5.6-luna": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
+ "space-bunny-free": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
  "gpt-6-luna": [
   "none",
   "low",
@@ -231,11 +238,7 @@
   "xhigh",
   "max"
  ],
- "gpt-5.6-luna": [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max"
+ "longcat-2.5-preview-free": [
+  "high"
  ]
 }

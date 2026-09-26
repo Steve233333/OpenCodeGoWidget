@@ -21,7 +21,7 @@ from .config import (GO_SUFFIX, GO_UPSTREAM, IO_CHUNK_BYTES, WEB_SEARCH_INLINE_L
 from .muse import (_build_muse_retry_body, _inject_muse_no_preamble, _inject_muse_tool_first,
                    _muse_flag, _sanitize_muse_tool_schemas)
 from .policy import (NATIVE_PROBES, ROUTE_BRIDGE, ROUTE_MESSAGES, ROUTE_NATIVE_OR_BRIDGE,
-                     has_native_search, policy_for)
+                     has_native_search, policy_for, protocol_unsupported_error)
 from .search_sidecar import (_inject_synthetic_web_search, _is_web_search_tool_call,
                              _normalize_web_search_call, _perform_web_search)
 from .toolfix import (_fix_tool_required, _normalize_fc_args_history, _sanitize_input_ids)
@@ -276,6 +276,19 @@ class RequestPipelineMixin:
                 # 未登记模型仍只在 5xx 时切，避免把真正的鉴权失败吞成桥接。
                 needs_bridge = upstream_status >= 500 or (
                     upstream_status == 401 and pol.route == ROUTE_NATIVE_OR_BRIDGE)
+                # 2026-09-27：网关把 chat-only 模型的 /responses 从 5xx 改成
+                # 400 ModelProtocolUnsupported（mimo/GLM 实测），落在 "<500" 里就不会桥接，
+                # 用户直接吃 400。这种 400 是"协议不对"，看一眼响应体就切桥；真正的请求错误仍透传。
+                if (not needs_bridge and upstream_status == 400 and bridge_eligible
+                        and pol.route in (ROUTE_NATIVE_OR_BRIDGE, ROUTE_BRIDGE)):
+                    try:
+                        peek = await asyncio.to_thread(response.read)
+                    except Exception:
+                        peek = b""
+                    if protocol_unsupported_error(peek):
+                        _log("[vision-proxy] 上游 400 协议不支持 → 切 chat 桥："
+                             + peek[:160].decode(errors="replace"))
+                        needs_bridge = True
                 if bridge_eligible and needs_bridge:
                     if pol.route != ROUTE_NATIVE_OR_BRIDGE:
                         _log(f"[vision-proxy] auto-bridge new model {model} on {upstream_status} (策略表里没登记这个模型)")

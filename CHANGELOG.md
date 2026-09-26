@@ -2,6 +2,34 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.45 — 紧急修：上游把「协议不支持」从 5xx 改成 400（mimo/GLM 直接挂）+ 接入 LongCat 2.5 Preview Free
+
+**现象（2026-09-27 00:50 实测）**：`mimo-v2.6-flash-go`、`glm-5.3-go` 全部 **HTTP 400**
+`{"type":"ModelProtocolUnsupported","message":"Model does not support this protocol."}` ——
+四家族冒烟里 deepseek/muse 正常、mimo/GLM 挂；**回滚到上一版照样挂**，所以不是我们的改动引起的。
+
+**根因**：这些 chat-only 模型的 `/responses` 本来就跑不了（以前网关回 503/500），我们靠
+`needs_bridge = status >= 500` 接住并切 chat 桥；今晚网关把错误码改成 **400**，掉进"<500"里，
+于是不再切桥，400 直接透传给用户。
+
+**修法**：`policy.protocol_unsupported_error(body)` 认出三类上游文案
+（`ModelProtocolUnsupported` / `does not support this protocol` / `Endpoint is unavailable`），
+在 `pipeline` 里对 400 也看一眼响应体：是"协议不支持"就切 chat 桥，真正的请求错误（其它 400）保持原样透传。
+新增单测 `t_protocol_unsupported_error_detect`（正/负样本各两条）。
+
+**同时接入新模型 `LongCat 2.5 Preview Free`**（官方限时免费、无限制额度，今晚刚上线）：
+- 自动发现已捡到（Go 列表 33 个 id → 模型数 34→35），显示名 `LongCat-2.5-Preview-Free (Go)`；
+- 它和 Space Bunny 一样只挂 `chat/completions`（官方标 `@ai-sdk/openai-compatible`），
+  所以策略表里直接标 `route=bridge`（`/responses` 实测恒 400，别浪费一次注定失败的探测）；
+- 上下文 1000000、模态 text+image（与 models.dev `opencode-go` 一致，已用已知模型校准过该数据源）；
+- 推理档位实测：minimal/low/medium/high/xhigh/max **都被接受、但推理量没有区分度**
+  （同题 reasoning_tokens 227/63/189/86/220/40 乱跳）→ 保守只声明 `high` 一档，不做假旋钮。
+
+**实测**：经 `127.0.0.1:19100` 打 `longcat-2.5-preview-free-go` → **200**（默认 / high / 流式三条全过，
+4~5 秒，答案是"我是由美团开发的人工智能语言模型 LongCat"）；四家族 + 跨模型历史冒烟**全绿**（修前 3 条 400）。
+
+版本 **1.1.11.45 (85)**。
+
 ### v1.1.11.44 — 缺口每天重试一次（官方回填日志就自动补上）
 
 **背景**：官方 `request-logs` 只保留 30 天，而实测**最早只有 9/19 有数据**（9/17、9/18 查回来 0 条，

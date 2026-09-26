@@ -80,6 +80,11 @@ MODEL_OVERRIDES: dict[str, dict] = {
     "union-alpha": {"route": ROUTE_MESSAGES},
     # 明确"必须走 chat 桥"的：不试探原生
     "omen-alpha": {"route": ROUTE_BRIDGE},
+    # 2026-09-27：Go 的免费预览模型（限时免费）都只挂 chat/completions
+    #（官方文档标 @ai-sdk/openai-compatible）。实测 space-bunny-free 的 /responses 恒 503、
+    # longcat-2.5-preview-free 的 /responses 恒 400 "ModelProtocolUnsupported"，
+    # 而 chat 都是 200 —— 所以直接走桥，不浪费那一次注定失败的探测。
+    "longcat-2.5-preview-free": {"route": ROUTE_BRIDGE},
 }
 
 _DEFAULT_POLICY = ModelPolicy()          # 表里没有的模型：按原生处理（今天的行为）
@@ -196,3 +201,24 @@ def is_messages_only(model) -> bool:
 def has_native_search(model) -> bool:
     """模型自带 web_search（否则由 search_sidecar 合成）。"""
     return policy_for(model).native_search
+
+
+# ---- 上游"协议不支持"错误（2026-09-27）----
+#
+# 背景：chat-only 的模型（mimo/glm/kimi… 以及新的免费预览模型）在 `/responses` 上本来就跑不了，
+# 以前网关回 5xx（503 Endpoint is unavailable / 500），我们靠 `needs_bridge = status >= 500` 接住；
+# 2026-09-27 网关把 mimo/GLM 的 /responses 改成 **400 ModelProtocolUnsupported**，
+# 落在"<500"里 → 桥接不触发 → 用户直接看到 400。这种 400 只是"协议不对"，不是请求写错了，
+# 所以要把响应体看一眼再决定切不切桥（真正的 400 仍然原样透传）。
+_PROTOCOL_UNSUPPORTED_MARKERS = (
+    b"ModelProtocolUnsupported",
+    b"does not support this protocol",
+    b"Endpoint is unavailable",
+)
+
+
+def protocol_unsupported_error(body: bytes) -> bool:
+    """响应体是不是"这个模型不支持该协议"（用来决定该不该切 chat 桥）。"""
+    if not body:
+        return False
+    return any(marker in body for marker in _PROTOCOL_UNSUPPORTED_MARKERS)

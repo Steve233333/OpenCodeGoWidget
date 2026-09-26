@@ -461,6 +461,18 @@ def t_web_search_history_fuzz():
         assert stats["web_search_replayed"] == stats2["web_search_replayed"]
         assert stats["dropped_reasoning"] == stats2["dropped_reasoning"]
 
+def t_protocol_unsupported_error_detect():
+    """2026-09-27：网关把 chat-only 模型的 /responses 从 5xx 改成 400 ModelProtocolUnsupported，
+    这种 400 必须被认出来并切 chat 桥（否则 mimo/GLM 会直接把 400 透传给用户）。"""
+    assert vp.protocol_unsupported_error(
+        b'{"type":"error","error":{"type":"ModelProtocolUnsupported","message":"Model does not support this protocol."}}')
+    assert vp.protocol_unsupported_error(
+        b'{"error":{"type":"server_error","message":"Upstream request failed: Endpoint is unavailable."}}')
+    assert not vp.protocol_unsupported_error(b'{"error":{"message":"invalid request: model is required"}}')
+    assert not vp.protocol_unsupported_error(b'{"error":{"type":"authentication_error"}}')
+    assert not vp.protocol_unsupported_error(b"")
+
+
 def t_history_interception_removed():
     # 回归锁：旧的 400「换会话」拦截已删（历史里有 web_search_call 不再被拦）
     assert not hasattr(vp, "_intercept_unsupported_history")
