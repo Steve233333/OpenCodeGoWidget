@@ -37,7 +37,12 @@ extension CostCrawler {
         let memoLogic = "request-logs-v1"
         let lastMemo = suite?.dictionary(forKey: "historyRepairLast")
         let lastMissing = Set((lastMemo?["missing"] as? [String]) ?? [])
-        guard !missing.isEmpty, (missing != lastMissing || (lastMemo?["logic"] as? String) != memoLogic) else { return false }
+        // 2026-09-26：缺口没变也**每天重试一次** —— 官方日志库现在只有 9/19 之后的数据，
+        // 哪天他们把更早的补回来，我们下一轮就自动填上（不然得手动清缓存）。
+        let lastAt = (lastMemo?["at"] as? Date) ?? .distantPast
+        let retryDue = Date().timeIntervalSince(lastAt) > 24 * 3600
+        guard !missing.isEmpty,
+              (missing != lastMissing || (lastMemo?["logic"] as? String) != memoLogic || retryDue) else { return false }
         logger.info("CostCrawler: 历史明细缺失 \(missing.count) 天 → 触发回填")
         let ws = suite?.string(forKey: "workspaceID") ?? ""
         let auth = suite?.string(forKey: "authCookie") ?? ""

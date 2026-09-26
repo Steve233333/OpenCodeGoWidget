@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.43.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.44.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.43.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.44.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.43.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.43.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.44.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.44.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,14 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.44 — 缺口每天重试一次
+
+官方日志库最早只有 9/19 的数据（9/17、9/18 实测 0 条，console 的 Request Log 页也显示 "No requests"）。
+上一版把这类缺口标记后不再重试；这一版加了"**每天重试一次**"——官方哪天把更早的日志补回来，
+我们下一轮刷新就自动填上，不用手动清缓存。
+
+版本 **1.1.11.44 (84)**。
 
 ### v1.1.11.43 — 用量数据源换成新接口（修好卡住的进度条与 305%）
 
@@ -130,20 +138,6 @@ App 日志 `今日对账一致（官方 0.904193 ≈ 日志 0.900583）`、进�
 改完要重启 Codex 才会刷新选择器。
 
 版本 **1.1.11.42 (82)**。
-
-### v1.1.11.40 — 密钥列表跟得上控制台
-
-**现象**：控制台里新建的 Active Key，下拉框里一直没有；点「清除用量缓存」也不出现。
-
-**根因**：密钥列表是"有缓存就永不刷新"，而「清除用量缓存」的提示写着会删密钥列表、代码里却没删。
-
-**修法**：每次「刷新」连带并发重拉一次密钥列表（失败退回缓存，绝不清空下拉框）；
-过滤规则抽成纯函数 `ApiKeyInfo.parseConsoleKeys()`（跳过已吊销 / 非 active / 已过期）；
-`wipeUsageCache()` 真的把密钥列表一起清掉；刷新时日志记一行"N 把有效（跳过 M 把）"。
-
-**实测**：本机缓存从 2 把 → 刷新后 3 把（丁雁 / 方泽恩 / 临时）；新增离线 fixture 测试锁住解析规则。
-
-版本 **1.1.11.40 (80)**。
 
 ## 本地构建
 
