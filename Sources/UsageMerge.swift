@@ -118,6 +118,17 @@ enum UsageMerge {
         return out
     }
 
+    /// 今日合计与明细之和是否"对不上"（2026-09-26「305%」事故的护栏）。
+    ///
+    /// 事故经过：`costTotal` 来自这次抓取、`costEntries` 来自合并后的缓存，两个来源在上游撤掉
+    /// `usage/rows` 之后各走各的（$0.112 vs $0.346）→ 界面按"模型 / 合计"画出 305%。
+    /// 现在合计一律取明细之和；这个函数只用来**发现**不一致并记日志（不参与显示）。
+    static func totalMismatch(entries: [String: Double], total: Double) -> Bool {
+        let sum = entries.values.reduce(0, +)
+        guard sum > 0 else { return total > 0.01 }
+        return abs(sum - total) > max(0.01, sum * 0.01)
+    }
+
     /// 快照缓存的口径策略（2026-09-23 Phase 1 收敛）：口径变了就**整体作废**一次，
     /// 不许在旧口径的数据上做增量合并（合并是"保留旧天"的，旧数字会永远追不上新口径）。
     /// 放在纯数据层是为了能离线回归测试（见 Tests/UsagePipelineTests.swift ⑤）。

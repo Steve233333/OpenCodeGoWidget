@@ -41,65 +41,82 @@ final class CostCrawler: @unchecked Sendable {
             .string(forKey: "consoleSession") ?? ""
         let cookie = Self.consoleCookieHeader(auth: authCookie, session: session)
 
-        guard let days = await consoleFetch(path: "usage/cost-by-day", query: "range=30d",
-                                            cookie: cookie, ws: workspaceID),
-              let json = try? JSONSerialization.jsonObject(with: days) else {
+        // 2026-09-26：`cost-by-day` 改用**小时桶**（`&bucket=hour`）再按北京时间归日 ——
+        // 老接口给的是 UTC 日，和我们的日界（北京 0 点）差 8 小时；小时桶能精确重分桶
+        // （实测 9/25 日志合计 $0.278950 ↔ 重分桶 $0.2790）。它只当"那天没有明细"时的兜底。
+        guard let hoursData = await consoleFetch(path: "usage/cost-by-day", query: "range=30d&bucket=hour",
+                                                 cookie: cookie, ws: workspaceID),
+              let hoursJSON = try? JSONSerialization.jsonObject(with: hoursData) else {
             return nil
         }
-        var daily = Self.parseCostByDay(json)
+        var daily = UsageRows.dailyFromHourlyCost(hoursJSON)
+        if daily.isEmpty {   // 小时桶解析不出来就退回按日（防御式，别让整轮白跑）
+            daily = Self.parseCostByDay(hoursJSON)
+        }
         guard !daily.isEmpty else {
-            logger.warning("CostCrawler: cost-by-day 解析出 0 天：\(String(data: days, encoding: .utf8)?.prefix(200) ?? "")")
+            logger.warning("CostCrawler: cost-by-day(hour) 解析出 0 天：\(String(data: hoursData, encoding: .utf8)?.prefix(200) ?? "")")
             return nil
         }
-        // 2026-09-23 起**不再拿 cost-by-day 做逐日对账**：官网那份是 UTC 日口径，而我们的日界
-        // 已改成北京时间 0 点，拿它去"缩放/降级"会把本地日的金额改回 UTC 日（用户要求 0 点刷新）。
-        // cost-by-day 现在只当"哪些天有数据"的兜底（见下面的 merged 填充），金额以逐条 rows 为准。
-        // 明细：`usage/rows` 每条带 costMicroCents + model + serviceApiKeyId（pageSize 上限 100）。
-        // 24h 约 500 条 → 6 次请求，拿到「按模型」+「按 Key」的当日拆分。
-        // 30 天全量要 169 次请求，太重 → 采用增量累积：每天刷新把当日明细并进快照，
-        // 历史逐日堆起来（老快照里的旧天原样保留）。
-        // 2026-09-22：优先用官方 `since=<ISO>` 做**增量**（实测到边界即停：since=05:00 只回 108 条，
-        // 不加 since 时同一游标会一路退回前一天）。没有同步记录/间隔太久才退回「24h 切片并行」。
+        // 明细：`request-logs`（2026-09-26 起替代已下线的 `usage/rows`）每条带
+        // serviceAPIKeyID + model + cost(美元) + startedAt(ms)。增量优先、今天整天窗口保完整。
         let syncSuite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
         let lastSyncAt = syncSuite?.double(forKey: "lastRowSyncAt") ?? 0
         let syncNow = Date()
         let usableIncremental = lastSyncAt > 0 && syncNow.timeIntervalSince1970 - lastSyncAt < 24 * 3600
-        var rows: [[String: Any]] = []
+        var logs: [[String: Any]] = []
         if usableIncremental {
-            // 往前多要 2 小时重叠：上游是批量入库的，偶尔会有"迟到"的行
+            // 往前多要 2 小时重叠：上游是批量入库的，偶尔会有"迟到"的记录
             let since = Date(timeIntervalSince1970: lastSyncAt - 2 * 3600)
-            rows = await consoleRowsSince(cookie: cookie, ws: workspaceID, since: since)
-            logger.info("CostCrawler: 增量同步 since=\(ISO8601DateFormatter().string(from: since)) 拿到 \(rows.count) 行")
-            // 2026-09-22 修「按 Key 用量对不上」：增量拿到的是**片段**，而按 Key / 按模型的当日拆分
-            // 必须用整天的数据。片段金额比累计值小，会被"只增不减"护栏挡掉 → 按 Key 卡在某个小数不动。
-            // 所以今天（UTC 日）再整段拉一次，按行 id 去重后一起合并。
-            let dayStart = BillingCycle.calendar.startOfDay(for: Date())
-            let todayWindow = await consoleRowsInWindow(cookie: cookie, ws: workspaceID, start: dayStart, end: Date())
-            if !todayWindow.rows.isEmpty {
-                var seen = Set<String>()
-                var deduped: [[String: Any]] = []
-                for r in todayWindow.rows + rows {
-                    let raw = r["id"]
-                    let key = (raw as? String) ?? (raw.map { String(describing: $0) } ?? UUID().uuidString)
-                    if seen.insert(key).inserted { deduped.append(r) }
-                }
-                rows = deduped
-                logger.info("CostCrawler: 今天整天窗口 \(todayWindow.rows.count) 行，去重后合计 \(rows.count) 行")
-            }
+            // 增量窗口通常只有几十条 → 用分页（100/页）比 export 便宜得多
+            let inc = await requestLogsSince(cookie: cookie, ws: workspaceID, since: since)
+            logs = inc.logs
+            logger.info("CostCrawler: 增量同步 since=\(ISO8601DateFormatter().string(from: since)) 拿到 \(logs.count) 条日志（ok=\(inc.ok)）")
         }
-        if rows.isEmpty {
-            // 2026-09-19：24h 也切片并行（4 × 6 小时）—— 串行翻 10 页 ×6s ≈ 1 分钟，并行后约 20 秒
+        // 今天整天窗口必抓：增量的片段会让"按 Key / 按模型"停在某个小数（2026-09-22 踩过）。
+        let dayStart = BillingCycle.calendar.startOfDay(for: Date())
+        let todayWindow = await requestLogsInWindow(cookie: cookie, ws: workspaceID, start: dayStart, end: Date())
+        if !todayWindow.logs.isEmpty {
+            var seen = Set<String>()
+            var deduped: [[String: Any]] = []
+            for log in todayWindow.logs + logs {
+                let key = (log["id"] as? String) ?? UUID().uuidString
+                if seen.insert(key).inserted { deduped.append(log) }
+            }
+            logs = deduped
+            logger.info("CostCrawler: 今天整天窗口 \(todayWindow.logs.count) 条，去重后合计 \(logs.count) 条")
+        }
+        if logs.isEmpty {
+            // 增量拿不到（首次运行 / 间隔太久）：最近 24h 切 4 段并发补
             let now24 = Date()
             let windows24: [(start: Date, end: Date)] = (0..<4).map { i in
                 let end = now24.addingTimeInterval(-Double(i) * 6 * 3600)
                 return (start: end.addingTimeInterval(-6 * 3600), end: end)
             }
-            await consoleRowsInWindows(windows24, cookie: cookie, ws: workspaceID, concurrency: 4) { batch, _ in
-                rows += batch
+            await requestLogsInWindows(windows24, cookie: cookie, ws: workspaceID, concurrency: 4) { batch, _ in
+                logs += batch
             }
         }
-        if !rows.isEmpty { syncSuite?.set(syncNow.timeIntervalSince1970, forKey: "lastRowSyncAt") }
+        if !logs.isEmpty { syncSuite?.set(syncNow.timeIntervalSince1970, forKey: "lastRowSyncAt") }
+        let rows = UsageRows.rowsFromLogs(logs)
         let (rowDaily, rowByKey) = UsageRows.aggregate(rows)
+        // 对账（1 次请求）：今天的日志明细合计 vs 官方 `usage/models?since=今天0点` 的按模型汇总。
+        // 差 >1% 就记一行 warning —— 上游再换口径时，日志里能立刻看到，而不是等用户发现数字不对。
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let md = await consoleFetch(path: "usage/models",
+                                       queryItems: [URLQueryItem(name: "range", value: "30d"),
+                                                    URLQueryItem(name: "since", value: iso.string(from: dayStart))],
+                                       cookie: cookie, ws: workspaceID),
+           let json = try? JSONSerialization.jsonObject(with: md) {
+            let official = Self.parseModelCosts(json).values.reduce(0, +)
+            let todayStr = ChartFormatters.day.string(from: Date())
+            let fromLogs = rowDaily[todayStr]?.values.reduce(0, +) ?? 0
+            if official > 0.01, abs(official - fromLogs) > max(0.01, official * 0.01) {
+                logger.warning("CostCrawler: 今日对账不一致 —— 官方按模型 \(official) vs 日志明细 \(fromLogs)")
+            } else if official > 0.01 {
+                logger.info("CostCrawler: 今日对账一致（官方 \(official) ≈ 日志 \(fromLogs)）")
+            }
+        }
         if !rowDaily.isEmpty {
             let previous = WidgetDataStore.load()
             var merged: [String: DailyCost] = [:]

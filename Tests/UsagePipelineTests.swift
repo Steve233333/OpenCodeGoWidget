@@ -193,6 +193,105 @@ func testViewsAddUp() {
     check(near(union[todayStr, default: [:]].values.reduce(0, +), all), "并集口径同样等于总额")
 }
 
+// MARK: - ⑨~⑬ request-logs（2026-09-26 数据源迁移：usage/rows 已被官方撤掉）
+
+/// 造一条 `request-logs` 记录（cost 是**美元**、startedAt 是 **epoch 毫秒**）
+func logItem(model: String?, requested: String? = nil, cost: Double,
+             startedAt: Double, key: String? = nil, id: String = UUID().uuidString) -> [String: Any] {
+    var it: [String: Any] = ["cost": cost, "startedAt": startedAt, "id": id]
+    if let model { it["model"] = model }
+    if let requested { it["requestedModel"] = requested }
+    if let key { it["serviceAPIKeyID"] = key }
+    return it
+}
+
+func isoMs(_ s: String) -> Double {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return (f.date(from: s)?.timeIntervalSince1970 ?? 0) * 1000
+}
+
+func dayOfRow(_ row: [String: Any]?) -> String? {
+    guard let s = row?["createdAt"] as? String else { return nil }
+    return UsageRows.dayString(createdAt: s)
+}
+
+func testLogRowMapping() {
+    print("⑨ request-logs → 行映射")
+    let late = UsageRows.rowFromLog(logItem(model: "glm-5.3", cost: 1.5,
+                                            startedAt: isoMs("2026-09-22T15:59:00.000Z"), key: "k1"))
+    let early = UsageRows.rowFromLog(logItem(model: "glm-5.3", cost: 0.25,
+                                             startedAt: isoMs("2026-09-22T16:00:00.000Z"), key: "k1"))
+    check(dayOfRow(late) == "2026-09-22", "北京 23:59 的日志算前一天")
+    check(dayOfRow(early) == "2026-09-23", "北京 00:00 的日志算新一天")
+    check(late?["costMicroCents"] as? String == "150000000", "$1.5 → 150,000,000 微美分")
+    check(UsageRows.rowFromLog(logItem(model: nil, requested: "deepseek-v4.1-flash-go", cost: 0.1,
+                                       startedAt: isoMs("2026-09-25T03:00:00.000Z")))?["model"] as? String
+          == "deepseek-v4.1-flash-go", "model 缺失时回退 requestedModel")
+    check(UsageRows.rowFromLog(logItem(model: "x", cost: 0.1, startedAt: 0)) == nil, "没有 startedAt → 丢掉")
+    check(UsageRows.rowFromLog(["cost": 1, "startedAt": isoMs("2026-09-25T03:00:00.000Z")]) == nil,
+          "model / requestedModel 都没有 → 丢掉")
+    check(UsageRows.rowFromLog(logItem(model: "x", cost: 0.05,
+                                       startedAt: isoMs("2026-09-25T03:00:00.000Z")))?["serviceApiKeyId"] == nil,
+          "没有 key 也不崩（只是不进按 Key 拆分）")
+    check(UsageRows.rowsFromLogs([["bad": 1], logItem(model: "y", cost: 0.01,
+                                                      startedAt: isoMs("2026-09-25T03:00:00.000Z"))]).count == 1,
+          "一批里坏的丢掉、好的留下")
+}
+
+func testHourlyCostToBeijingDay() {
+    print("⑩ 小时桶 → 北京时间归日")
+    let json: [[String: Any]] = [
+        ["date": "2026-09-22T15:00:00Z", "totalCostMicroCents": "30000000"],   // 北京 23:00 → 9/22
+        ["date": "2026-09-22T16:00:00Z", "totalCostMicroCents": "20000000"],   // 北京 00:00 → 9/23
+        ["date": "2026-09-22T17:00:00Z", "totalCostMicroCents": "10000000"],   // 北京 01:00 → 9/23
+    ]
+    let daily = UsageRows.dailyFromHourlyCost(json)
+    let map = Dictionary(uniqueKeysWithValues: daily.map { ($0.date, $0) })
+    check(near(map["2026-09-22"]?.total ?? 0, 0.30), "16:00Z 之前的桶算 9/22（$0.30）")
+    check(near(map["2026-09-23"]?.total ?? 0, 0.30), "16:00Z 之后算 9/23（$0.20+$0.10）")
+    check(map["2026-09-22"]?.entries.keys.first == UsageRows.totalOnlyKey, "兜底天用 (total) 占位")
+    check(UsageRows.dailyFromHourlyCost("不是数组").isEmpty, "畸形输入返回空")
+}
+
+func testWindowSplitDecision() {
+    print("⑪ 超 1000 条时的二分判据")
+    let start = Date(timeIntervalSince1970: 1_790_000_000)
+    let mid = UsageRows.windowMidpoint(start: start, end: start.addingTimeInterval(86400))
+    check(mid != nil && abs((mid?.timeIntervalSince(start) ?? 0) - 43200) < 1, "一天窗口切成两半")
+    check(UsageRows.windowMidpoint(start: start, end: start.addingTimeInterval(60)) == nil,
+          "窗口 <120s 不再切（避免病态递归）")
+}
+
+func testTotalMismatchGuard() {
+    print("⑫ 合计 vs 明细同源护栏（305% 事故）")
+    check(UsageMerge.totalMismatch(entries: entries([("deepseek-v4.1-flash", 0.3421),
+                                                     ("deepseek-v4-flash", 0.0041)]), total: 0.11196),
+          "明细 $0.346 / 合计 $0.112 → 判定对不上（记日志）")
+    check(!UsageMerge.totalMismatch(entries: entries([("a", 0.30), ("b", 0.20)]), total: 0.50),
+          "同源 → 正常")
+    check(!UsageMerge.totalMismatch(entries: entries([("a", 0.30)]), total: 0.302), "1% 内的零头不算不一致")
+    check(UsageMerge.totalMismatch(entries: [:], total: 1.0), "没有明细却报有金额 → 也算对不上")
+}
+
+func testLogsEndToEnd() {
+    print("⑬ 日志 → 行 → 聚合 → 缺明细判定（端到端）")
+    let logs: [[String: Any]] = [
+        logItem(model: "deepseek-v4.1-flash", cost: 0.20, startedAt: isoMs("2026-09-25T02:00:00.000Z"), key: "key_A"),
+        logItem(model: "deepseek-v4.1-flash", cost: 0.05, startedAt: isoMs("2026-09-25T03:00:00.000Z"), key: "key_B"),
+        logItem(model: "glm-5.3", cost: 0.03, startedAt: isoMs("2026-09-25T04:00:00.000Z"), key: "key_A"),
+    ]
+    let rows = UsageRows.rowsFromLogs(logs)
+    check(rows.count == 3, "3 条日志都映射成行")
+    let (daily, byKey) = UsageRows.aggregate(rows)
+    check(near(daily["2026-09-25"]?["deepseek-v4.1-flash"] ?? 0, 0.25), "按模型聚合 $0.25")
+    check(near(byKey["key_A"]?["2026-09-25"]?["glm-5.3"] ?? 0, 0.03), "按 Key 聚合跟得上")
+    let dailyList = daily.map { DailyCost(date: $0.key, entries: $0.value) }
+    let byKeyList = byKey.mapValues { $0.map { DailyCost(date: $0.key, entries: $0.value) } }
+    check(UsageMerge.daysMissingDetail(daily: dailyList, dailyByKey: byKeyList).isEmpty,
+          "日志明细齐全 → 这天不再算'缺明细'")
+}
+
 @main
 struct UsagePipelineTestRunner {
     static func main() {
@@ -204,6 +303,11 @@ struct UsagePipelineTestRunner {
         testPerKeySumsMatchDaily()
         testUnionDetailSelfHeal()
         testViewsAddUp()
+        testLogRowMapping()
+        testHourlyCostToBeijingDay()
+        testWindowSplitDecision()
+        testTotalMismatchGuard()
+        testLogsEndToEnd()
 
         if failures.isEmpty {
             print("\n全部通过 ✅")

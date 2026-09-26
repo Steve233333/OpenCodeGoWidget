@@ -189,19 +189,30 @@ struct DashboardView: View {
                                     // 判断依据是"实际还差几天明细"，不看那个一次性闩锁 ——
                                     // 历史被粗数据冲掉时也要能提示、能补回来。
                                     let withDetail = filteredDaily.filter { $0.entries.contains { $0.key != "(total)" && $0.value > 0 } }.count
-                                    if withDetail < filteredDaily.count {
-                                        let frac = filteredDaily.isEmpty ? 0 : Double(withDetail) / Double(filteredDaily.count)
+                                    // 2026-09-26：官方日志只保留 30 天 —— 更早的天**永远补不了**，
+                                    // 不能拿它们把进度条永远卡住。可补天数 = 窗口内天数 − 超出保留的天数。
+                                    let skippedDays = Set((UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
+                                        .dictionary(forKey: "historyRepairLast")?["skipped"] as? [String]) ?? [])
+                                    let skippedInWindow = filteredDaily.filter { skippedDays.contains($0.date) }.count
+                                    let fillable = max(0, filteredDaily.count - skippedInWindow)
+                                    if withDetail < fillable {
+                                        let frac = fillable == 0 ? 0 : Double(withDetail) / Double(fillable)
                                         VStack(alignment: .leading, spacing: 4) {
                                             HStack(spacing: 6) {
                                                 Text(backfillRunning ? "历史明细补齐中（后台，可关窗口）" : "历史明细待补齐（下次刷新自动补）")
                                                     .font(.system(size: 8, weight: .medium))
                                                 Spacer()
-                                                Text("\(withDetail)/\(filteredDaily.count) 天")
+                                                Text("\(withDetail)/\(fillable) 天")
                                                     .font(.system(size: 8).monospacedDigit())
                                             }
                                             .foregroundStyle(.orange)
                                             MiniProgressBar(fraction: frac, tint: .orange)
                                         }
+                                    } else if skippedInWindow > 0 {
+                                        // 补不回来的那几天：明说原因，不再假装"下次刷新就好"
+                                        Text("明细已补齐；\(skippedInWindow) 天官方没有请求日志（保留期外/未记录），只能看总额")
+                                            .font(.system(size: 8))
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
                                 // 今日模型：跟随 Key 筛选

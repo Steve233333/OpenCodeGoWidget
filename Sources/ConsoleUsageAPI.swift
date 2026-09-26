@@ -3,138 +3,122 @@ import os
 
 /// 控制台用量 API 的**网络 / 游标 / 解析**层（2026-09-23 Phase 1 从 CostCrawler.swift 拆出）。
 ///
-/// 这里只负责"怎么把数据从 opencode.ai 拿下来、切成 [模型]/[Key] 的美元金额"：
-///   * `usage/rows` 的分页游标（官方 100 条/页、TTFB 4~6s，靠**自造 keyset 游标**按时间窗并行提速）；
-///   * 官方增量参数 `since=<ISO8601>`；
-///   * 防御式解析（`cost-by-day` 的微美分、rows 的 model/serviceApiKeyId 聚合）。
-/// 合并规则不在这里 —— 全部在 `UsageMerge`（唯一真源）。
+/// 这里只负责"怎么把数据从 opencode.ai 拿下来"；合并规则在 `UsageMerge`，
+/// 行级归日/拆分在 `UsageRows`（都是唯一真源）。
+///
+/// 2026-09-26 数据源迁移：上游把 `usage/rows` 撤了（任何参数都 404），明细改用 `/logs` 页面的
+/// `request-logs`：
+///   * `GET /console/api/request-logs?since=<ms>&until=<ms>&cursor=&limit=≤100` → `{items, nextCursor, retentionDays}`
+///   * `GET /console/api/request-logs/export?format=json&since=<ms>&until=<ms>`
+///     → `{content:"{\"items\":[…]}", count, truncated, until}`，**单次最多 1000 条**
+///   一条记录带 `serviceAPIKeyID / model / cost(美元) / startedAt(ms)` —— 正是我们要的维度；
+///   保留 `retentionDays = 30`（实测）。
 extension CostCrawler {
 
-    // MARK: - 2026-09-19 提速：合成游标 + 按时间窗并行
-    //
-    // 新控制台只有 `usage/rows` 带 per-row 费用，而它 **100 条/页封顶**、每次请求服务端要
-    // 4–6s 才吐第一个字节（实测 TTFB）。30 天 ≈ 1.7 万条 = 170 页，串行翻要 17 分钟以上
-    // —— 这就是"官网改版后慢得要命"的直接原因（老接口 /_server 一次请求给整月）。
-    //
-    // 但游标不是服务端会话，它只是 base64({"createdAt":"…","id":N}) 的 keyset 游标，
-    // 所以可以**自己造游标直接跳到任意时刻**，按天/按小时切片并行抓。
+    // MARK: - request-logs（新数据源）
 
-    /// 造一个 keyset 游标：`{"createdAt": ISO8601, "id": N}`（取 id 上限即可定位到该时刻之前）
-    static func syntheticCursor(date: Date, id: Int = 9_000_000_000) -> String {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let payload = "{\"createdAt\":\"\(f.string(from: date))\",\"id\":\(id)}"
-        return Data(payload.utf8).base64EncodedString()
-    }
-
-    /// rows 里的 createdAt（带毫秒的 ISO8601）→ Date
-    static func rowDate(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        let f2 = ISO8601DateFormatter()
-        return f2.date(from: s)
-    }
-
-    /// 抓 [start, end) 这个时间窗的 rows：用合成游标跳到 end，再往前翻直到跨过 start。
-    func consoleRowsInWindow(cookie: String, ws: String, start: Date, end: Date,
-                                     maxPages: Int = 120) async -> (rows: [[String: Any]], ok: Bool) {
-        var out: [[String: Any]] = []
-        var ok = true
-        var cursor: String? = Self.syntheticCursor(date: end)
-        for _ in 0..<maxPages {
-            var page: (items: [[String: Any]], next: String?, status: Int)?
-            for attempt in 0..<3 {
-                page = await consoleRowsPage(cookie: cookie, ws: ws, range: "30d", cursor: cursor)
-                if page?.status == 200 { break }
-                page = nil
-                if attempt < 2 { try? await Task.sleep(nanoseconds: UInt64(1_200_000_000) * UInt64(attempt + 1)) }
-            }
-            guard let p = page else { ok = false; break }   // 这一窗拉不动就算了，别拖垮整轮
-            var sawOlder = false
-            for it in p.items {
-                guard let s = it["createdAt"] as? String, let d = Self.rowDate(s) else { continue }
-                if d >= start && d < end { out.append(it) } else if d < start { sawOlder = true }
-            }
-            guard let n = p.next, !n.isEmpty, !sawOlder else { break }
-            cursor = n
-            try? await Task.sleep(nanoseconds: 120_000_000)
+    /// 一页 request-logs（100 条/页）。增量的小窗口用这个就够，省一次 export 的 JSON 解包。
+    func requestLogsPage(cookie: String, ws: String, since: Date?, until: Date?,
+                                 cursor: String? = nil, limit: Int = 100) async
+        -> (items: [[String: Any]], next: String?, ok: Bool) {
+        var query: [URLQueryItem] = [URLQueryItem(name: "limit", value: String(min(100, max(1, limit))))]
+        if let since { query.append(URLQueryItem(name: "since", value: String(Int(since.timeIntervalSince1970 * 1000)))) }
+        if let until { query.append(URLQueryItem(name: "until", value: String(Int(until.timeIntervalSince1970 * 1000)))) }
+        if let cursor, !cursor.isEmpty { query.append(URLQueryItem(name: "cursor", value: cursor)) }
+        guard let data = await consoleFetch(path: "request-logs", queryItems: query, cookie: cookie, ws: ws),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ([], nil, false)
         }
-        return (out, ok)
+        return (obj["items"] as? [[String: Any]] ?? [], obj["nextCursor"] as? String, true)
     }
 
-    /// 官方支持的**增量**抓取：`rows?range=all&since=<ISO8601>`（实测到 since 边界就停）。
-    /// 比"最近 24h 窗口"便宜得多：正常情况下一次刷新只要 1~2 页。
-    func consoleRowsSince(cookie: String, ws: String, since: Date) async -> [[String: Any]] {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let sinceStr = f.string(from: since)
+    /// 一次 export（≤1000 条；`truncated=true` 说明窗口里还有更老的，要二分）。
+    /// 实测大窗口单次要 7~20s，偶发读超时 → 单次重试（再失败就交给下一轮刷新）。
+    func requestLogsExport(cookie: String, ws: String, start: Date, end: Date) async
+        -> (items: [[String: Any]], truncated: Bool, ok: Bool) {
+        let query = [
+            URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "since", value: String(Int(start.timeIntervalSince1970 * 1000))),
+            URLQueryItem(name: "until", value: String(Int(end.timeIntervalSince1970 * 1000))),
+        ]
+        var obj: [String: Any]?
+        for attempt in 0..<2 {
+            if let data = await consoleFetch(path: "request-logs/export", queryItems: query,
+                                             cookie: cookie, ws: ws, timeout: 60),
+               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                obj = parsed
+                break
+            }
+            if attempt == 0 { try? await Task.sleep(nanoseconds: 1_500_000_000) }
+        }
+        guard let obj else { return ([], false, false) }
+        // content 是一段 JSON 字符串：{"items":[…],"truncated":…,"until":…}
+        var items: [[String: Any]] = []
+        if let text = obj["content"] as? String, let inner = text.data(using: .utf8),
+           let wrapper = try? JSONSerialization.jsonObject(with: inner) as? [String: Any] {
+            items = wrapper["items"] as? [[String: Any]] ?? []
+        } else if let direct = obj["items"] as? [[String: Any]] {
+            items = direct     // 万一以后官方直接返回数组
+        }
+        return (items, obj["truncated"] as? Bool ?? false, true)
+    }
+
+    /// 从 `since` 起分页抓（每页 100 条，最多 maxPages 页）——增量刷新用这个，比 export 便宜
+    func requestLogsSince(cookie: String, ws: String, since: Date, maxPages: Int = 8) async
+        -> (logs: [[String: Any]], ok: Bool) {
         var out: [[String: Any]] = []
         var cursor: String?
-        for _ in 0..<200 {              // 200 页 = 2 万条，正常远小于此
-            var page: (items: [[String: Any]], next: String?, status: Int)?
-            for attempt in 0..<3 {
-                page = await consoleRowsPage(cookie: cookie, ws: ws, range: "all", cursor: cursor, since: sinceStr)
-                if page?.status == 200 { break }
-                page = nil
-                if attempt < 2 { try? await Task.sleep(nanoseconds: UInt64(1_200_000_000) * UInt64(attempt + 1)) }
-            }
-            guard let p = page else { break }
-            out += p.items
-            guard let n = p.next, !n.isEmpty else { break }
-            cursor = n
+        for _ in 0..<maxPages {
+            let page = await requestLogsPage(cookie: cookie, ws: ws, since: since, until: nil, cursor: cursor)
+            guard page.ok else { return (out, false) }
+            out += page.items
+            guard let next = page.next, !next.isEmpty else { return (out, true) }
+            cursor = next
             try? await Task.sleep(nanoseconds: 120_000_000)
         }
-        return out
+        return (out, true)
     }
 
-    /// 多个时间窗并行抓（窗口内部顺序翻页，窗口之间并发 4 个）。
+    /// 抓 [start, end) 这个时间窗的**全部**日志：超过 1000 条就按时间中点二分递归。
+    /// 实测：9/25 一整天 639 条（一次 export 拿完，7s）；半天 427 + 212 也正好等于 639，说明
+    /// 窗口两端是半开区间、不会重复也不会漏。
+    func requestLogsInWindow(cookie: String, ws: String, start: Date, end: Date,
+                                     depth: Int = 0) async -> (logs: [[String: Any]], ok: Bool) {
+        let page = await requestLogsExport(cookie: cookie, ws: ws, start: start, end: end)
+        guard page.ok else { return ([], false) }
+        guard page.truncated else { return (page.items, true) }
+        guard let mid = UsageRows.windowMidpoint(start: start, end: end), depth < 8 else {
+            logger.warning("CostCrawler: request-logs 窗口 \(Int(end.timeIntervalSince(start)))s 仍超 1000 条，先用已有 \(page.items.count) 条")
+            return (page.items, true)
+        }
+        async let left = requestLogsInWindow(cookie: cookie, ws: ws, start: start, end: mid, depth: depth + 1)
+        async let right = requestLogsInWindow(cookie: cookie, ws: ws, start: mid, end: end, depth: depth + 1)
+        let (l, r) = await (left, right)
+        return (l.logs + r.logs, l.ok && r.ok)
+    }
+
+    /// 多个时间窗并行抓（窗口之间并发 N 个；每个窗口内部若超 1000 条会自己二分）。
     /// 每个窗口抓完就把结果交给 onBatch，方便边抓边落盘（进度条能看到）。
-    func consoleRowsInWindows(_ windows: [(start: Date, end: Date)], cookie: String, ws: String,
+    func requestLogsInWindows(_ windows: [(start: Date, end: Date)], cookie: String, ws: String,
                                       concurrency: Int = 4,
                                       onBatch: ([[String: Any]], Bool) -> Void) async {
         var idx = 0
         while idx < windows.count {
             let slice = Array(windows[idx..<min(idx + concurrency, windows.count)])
             idx += slice.count
-            await withTaskGroup(of: (rows: [[String: Any]], ok: Bool).self) { group in
+            await withTaskGroup(of: (logs: [[String: Any]], ok: Bool).self) { group in
                 for w in slice {
-                    group.addTask { await self.consoleRowsInWindow(cookie: cookie, ws: ws, start: w.start, end: w.end) }
+                    group.addTask { await self.requestLogsInWindow(cookie: cookie, ws: ws, start: w.start, end: w.end) }
                 }
-                var rows: [[String: Any]] = []
+                var logs: [[String: Any]] = []
                 var allOK = true
                 for await r in group {
-                    rows += r.rows
+                    logs += r.logs
                     if !r.ok { allOK = false }
                 }
-                onBatch(rows, allOK)
+                onBatch(logs, allOK)
             }
         }
-    }
-
-    /// 单页 usage/rows（返回 items + nextCursor + HTTP 状态；status=0 表示传输层失败/超时）
-    func consoleRowsPage(cookie: String, ws: String, range: String,
-                                 cursor: String?, since: String? = nil) async -> (items: [[String: Any]], next: String?, status: Int) {
-        var comps = URLComponents(string: "https://opencode.ai/console/api/usage/rows")!
-        var query = [URLQueryItem(name: "range", value: range), URLQueryItem(name: "pageSize", value: "100")]
-        if let c = cursor, !c.isEmpty { query.append(URLQueryItem(name: "cursor", value: c)) }
-        // 2026-09-22：官方支持 since=<ISO8601>，到边界就停（实测 since=05:00 → 108 条即止）
-        if let s = since, !s.isEmpty { query.append(URLQueryItem(name: "since", value: s)) }
-        comps.queryItems = query
-        var req = URLRequest(url: comps.url!)
-        req.timeoutInterval = 25
-        req.setValue(cookie, forHTTPHeaderField: "Cookie")
-        req.setValue(ws, forHTTPHeaderField: "x-org-id")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
-        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-                     forHTTPHeaderField: "User-Agent")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse else { return ([], nil, 0) }
-        guard (200...299).contains(http.statusCode) else { return ([], nil, http.statusCode) }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let arr = obj["items"] as? [[String: Any]] else { return ([], nil, http.statusCode) }
-        return (arr, obj["nextCursor"] as? String, http.statusCode)
     }
 
     /// 新控制台的 cookie 头
@@ -145,12 +129,29 @@ extension CostCrawler {
         return parts.joined(separator: "; ")
     }
 
-    /// 调一个新控制台接口，返回响应体（非 2xx 返回 nil 并把样本存下来）
+    /// 调一个新控制台接口（query 已经是拼好的字符串），返回响应体（非 2xx 返回 nil 并把样本存下来）
     func consoleFetch(path: String, query: String, cookie: String, ws: String) async -> Data? {
         var comps = URLComponents(string: "https://opencode.ai/console/api/\(path)")!
         comps.query = query
-        var req = URLRequest(url: comps.url!)
-        req.timeoutInterval = 20
+        return await consoleFetch(url: comps.url, path: path, cookie: cookie, ws: ws)
+    }
+
+    /// 同上，但用 URLQueryItem 拼参数（request-logs 的 cursor/毫秒时间戳里带特殊字符，必须走这里）
+    func consoleFetch(path: String, queryItems: [URLQueryItem], cookie: String, ws: String,
+                      timeout: TimeInterval = 20) async -> Data? {
+        var comps = URLComponents(string: "https://opencode.ai/console/api/\(path)")!
+        comps.queryItems = queryItems
+        return await consoleFetch(url: comps.url, path: path, cookie: cookie, ws: ws, timeout: timeout)
+    }
+
+    private func consoleFetch(url: URL?, path: String, cookie: String, ws: String,
+                              timeout: TimeInterval = 20) async -> Data? {
+        guard let url else {
+            logger.error("CostCrawler: 新控制台 \(path) 的 URL 拼不出来")
+            return nil
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = timeout
         req.setValue(cookie, forHTTPHeaderField: "Cookie")
         req.setValue(ws, forHTTPHeaderField: "x-org-id")
         req.setValue("application/json", forHTTPHeaderField: "Accept")

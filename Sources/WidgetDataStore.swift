@@ -367,6 +367,14 @@ enum WidgetSnapshotRefresher {
         let keys = await keysTask
         // dailyByKey 从 CostCrawler 的 MonthlyCost 中获得
         let dailyByKey = byKeyFinal
+        // 2026-09-26 修「今日模型 305%」：卡片上的"今日合计"必须和"今日每个模型的明细"**同源**。
+        // 以前 `costTotal: cost.total` 来自这次抓取、`costEntries: entries` 来自合并后的缓存，
+        // 两个来源在 rows 接口挂掉后各走各的 → 明细 $0.346 / 合计 $0.112 = 305%。
+        // 现在合计直接取明细之和，天然满足"相加 == 合计"。
+        let entriesTotal = entries.values.reduce(0, +)
+        if UsageMerge.totalMismatch(entries: entries, total: cost.total) {
+            CostCrawler.shared.logger.warning("WidgetSnapshot: 今日合计与明细对不上（合计 \(cost.total) vs 明细之和 \(entriesTotal)）→ 以明细之和为准")
+        }
 
         return WidgetSnapshot(
             rolling: usage.rolling.percent,
@@ -375,7 +383,7 @@ enum WidgetSnapshotRefresher {
             rollingReset: usage.rolling.resetsAt,
             weeklyReset: usage.weekly.resetsAt,
             monthlyReset: usage.monthly.resetsAt,
-            costTotal: cost.total,
+            costTotal: entriesTotal,
             costEntries: entries,
             dailyCosts: dailyFinal,
             availableKeys: keys,

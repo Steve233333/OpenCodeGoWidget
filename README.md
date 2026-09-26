@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.42.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.43.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.42.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.43.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.42.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.42.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.43.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.43.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,19 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.43 — 用量数据源换成新接口（修好卡住的进度条与 305%）
+
+上游把 `usage/rows` 撤了（实测任何参数都 404），于是历史明细永远卡在 25/34、今日模型出现 305%。
+这次整体换到 `/logs` 页面用的 `request-logs`：一条记录带 `serviceAPIKeyID / model / cost / 时间`，
+抓取走 `export`（超 1000 条按时间二分）+ 增量分页；每日总额改用小时桶按北京时间重分桶；
+每次刷新与官方 `usage/models` 对账一次；30 天保留期外、以及官方没有日志的天记为"只能看总额"，不再重试。
+另外把"今日合计"改成与"今日每模型明细"同源 —— 305% 从结构上不可能再出现。
+
+实测：9/25 两算对齐（$0.278950 ↔ $0.2790）、按 Key 恢复（临时 $0.2278 + 方泽恩 $0.0512）、
+App 日志 `今日对账一致（官方 0.904193 ≈ 日志 0.900583）`、进度 25/34 → 28/30。
+
+版本 **1.1.11.43 (83)**。
 
 ### v1.1.11.42 — 「GPT 去哪了」根治
 
@@ -117,18 +130,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 改完要重启 Codex 才会刷新选择器。
 
 版本 **1.1.11.42 (82)**。
-
-### v1.1.11.41 — Space-Bunny Free 一次对齐（上下文 / 档位 / 路由）
-
-自动发现时它用的是兜底值：上下文 1000000、单档 `high`、模态抄了 mimo 的 audio，代理还会先撞一次
-必失败的 `/responses`。这次按实测改齐：
-
-- 上下文 **1048576**（models.dev 的 `opencode-go` 数据，先用 5 个已知模型校准过）；
-- 模态 text/image（models.dev 写的 video，Codex schema 不认，写进去会炸整个 models.json）；
-- 推理档位 **low / medium / high / xhigh / max** —— 真机探针实测思考深度随档位变化（6/21/17/28/72/156 reasoning tokens）；
-- 协议：`/responses` 恒 503、`/chat` 200 → 家族路由直接走 chat 桥。
-
-版本 **1.1.11.41 (81)**。
 
 ### v1.1.11.40 — 密钥列表跟得上控制台
 

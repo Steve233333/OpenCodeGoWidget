@@ -17,7 +17,10 @@ struct CostBar: View {
             GeometryReader { geo in
                 HStack(spacing: 2) {
                     ForEach(sorted, id: \.0) { (k,v) in
-                        let w = total > 0 ? CGFloat(v/total) * geo.size.width : 0
+                        // 2026-09-26：百分比钳到 0…100 —— 合计与明细万一打架（上游换口径时出现过
+                        // 305%），宁可画满也不能画出界。源头已改成"合计 = 明细之和"。
+                        let frac = total > 0 ? min(1, max(0, v/total)) : 0
+                        let w = CGFloat(frac) * geo.size.width
                         Rectangle().fill(colorFor(k)).frame(width: max(0,w))
                     }
                 }.clipShape(Capsule())
@@ -26,7 +29,7 @@ struct CostBar: View {
                 ForEach(sorted.prefix(3), id: \.0) { (k,v) in
                     HStack(spacing: 4) {
                         Circle().fill(colorFor(k)).frame(width: 6, height: 6)
-                        Text("\(short(k)) \(total > 0 ? Int(v / total * 100) : 0)%").font(.caption2).lineLimit(1)
+                        Text("\(short(k)) \(total > 0 ? Int(min(1, max(0, v / total)) * 100) : 0)%").font(.caption2).lineLimit(1)
                     }
                 }
                 Spacer()
