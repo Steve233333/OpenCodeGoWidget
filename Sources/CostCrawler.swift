@@ -64,17 +64,22 @@ final class CostCrawler: @unchecked Sendable {
         let syncNow = Date()
         let usableIncremental = lastSyncAt > 0 && syncNow.timeIntervalSince1970 - lastSyncAt < 24 * 3600
         var logs: [[String: Any]] = []
+        // 2026-09-28：上游日志接口会整段时间不可用（超时/503），这时**不要再往下砸请求** ——
+        // 以前会接着跑"最近 24h 切 4 窗并发"，每个窗口 60s 超时，一轮刷新能拖好几分钟。
+        var logsApiFailed = false
         if usableIncremental {
             // 往前多要 2 小时重叠：上游是批量入库的，偶尔会有"迟到"的记录
             let since = Date(timeIntervalSince1970: lastSyncAt - 2 * 3600)
             // 增量窗口通常只有几十条 → 用分页（100/页）比 export 便宜得多
             let inc = await requestLogsSince(cookie: cookie, ws: workspaceID, since: since)
             logs = inc.logs
+            if !inc.ok { logsApiFailed = true }
             logger.info("CostCrawler: 增量同步 since=\(ISO8601DateFormatter().string(from: since)) 拿到 \(logs.count) 条日志（ok=\(inc.ok)）")
         }
         // 今天整天窗口必抓：增量的片段会让"按 Key / 按模型"停在某个小数（2026-09-22 踩过）。
         let dayStart = BillingCycle.calendar.startOfDay(for: Date())
         let todayWindow = await requestLogsInWindow(cookie: cookie, ws: workspaceID, start: dayStart, end: Date())
+        if !todayWindow.ok { logsApiFailed = true }
         if !todayWindow.logs.isEmpty {
             var seen = Set<String>()
             var deduped: [[String: Any]] = []
@@ -85,7 +90,7 @@ final class CostCrawler: @unchecked Sendable {
             logs = deduped
             logger.info("CostCrawler: 今天整天窗口 \(todayWindow.logs.count) 条，去重后合计 \(logs.count) 条")
         }
-        if logs.isEmpty {
+        if logs.isEmpty && !logsApiFailed {
             // 增量拿不到（首次运行 / 间隔太久）：最近 24h 切 4 段并发补
             let now24 = Date()
             let windows24: [(start: Date, end: Date)] = (0..<4).map { i in
@@ -95,12 +100,19 @@ final class CostCrawler: @unchecked Sendable {
             await requestLogsInWindows(windows24, cookie: cookie, ws: workspaceID, concurrency: 4) { batch, _ in
                 logs += batch
             }
+        } else if logs.isEmpty {
+            logger.warning("CostCrawler: 日志接口本轮不可用（超时/503）→ 跳过 24h 补抓，等下一轮；今日逐模型走 usage/models 兜底")
         }
         if !logs.isEmpty { syncSuite?.set(syncNow.timeIntervalSince1970, forKey: "lastRowSyncAt") }
         let rows = UsageRows.rowsFromLogs(logs)
-        let (rowDaily, rowByKey) = UsageRows.aggregate(rows)
-        // 对账（1 次请求）：今天的日志明细合计 vs 官方 `usage/models?since=今天0点` 的按模型汇总。
-        // 差 >1% 就记一行 warning —— 上游再换口径时，日志里能立刻看到，而不是等用户发现数字不对。
+        var (rowDaily, rowByKey) = UsageRows.aggregate(rows)
+        let todayStr = ChartFormatters.day.string(from: Date())
+        // 一次请求干两件事：① 对账 ② 日志接口退化时的"今日逐模型"兜底。
+        //
+        // 2026-09-28：上游 `request-logs` 被拖垮（实测 5 条要 24s、20 条直接超时、cost-by-day 也开始 reset），
+        // 于是"今日模型"会退化成没有名字的 (total) 条 —— 用户看到就像"小组件挂了"。
+        // `usage/models?since=今天0点`（实测 1 秒）本来就是按模型的汇总，正好够这一条用；
+        // 按 Key 的那份仍以日志为准（拿不到就保留旧值，不冲掉）。
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let md = await consoleFetch(path: "usage/models",
@@ -108,13 +120,17 @@ final class CostCrawler: @unchecked Sendable {
                                                     URLQueryItem(name: "since", value: iso.string(from: dayStart))],
                                        cookie: cookie, ws: workspaceID),
            let json = try? JSONSerialization.jsonObject(with: md) {
-            let official = Self.parseModelCosts(json).values.reduce(0, +)
-            let todayStr = ChartFormatters.day.string(from: Date())
+            let officialModels = Self.parseModelCosts(json)
+            let official = officialModels.values.reduce(0, +)
             let fromLogs = rowDaily[todayStr]?.values.reduce(0, +) ?? 0
             if official > 0.01, abs(official - fromLogs) > max(0.01, official * 0.01) {
-                logger.warning("CostCrawler: 今日对账不一致 —— 官方按模型 \(official) vs 日志明细 \(fromLogs)")
+                logger.warning("CostCrawler: 今日对账不一致 —— 官方按模型 \(official) vs 日志明细 \(fromLogs)（日志接口退化时属正常）")
             } else if official > 0.01 {
                 logger.info("CostCrawler: 今日对账一致（官方 \(official) ≈ 日志 \(fromLogs)）")
+            }
+            if !officialModels.isEmpty, fromLogs == 0 {
+                rowDaily[todayStr] = officialModels
+                logger.info("CostCrawler: 今日逐模型走 usage/models 快速路径（\(officialModels.count) 个模型，日志接口不可用时的兜底）")
             }
         }
         if !rowDaily.isEmpty {

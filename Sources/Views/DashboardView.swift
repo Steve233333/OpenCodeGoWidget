@@ -233,6 +233,17 @@ struct DashboardView: View {
                                             .fill(Color.primary.opacity(0.08))
                                             .frame(height: 8)
                                             .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 0.5))
+                                    } else if filteredCostEntries.count == 1, filteredCostEntries["(total)"] != nil {
+                                        // 2026-09-28：上游日志接口超时/503 时，今天只剩"总额"没有逐模型明细 ——
+                                        // 以前这里画一条没有名字的纯色条，看着像"小组件挂了"。现在把话说清楚。
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Capsule()
+                                                .fill(Color.primary.opacity(0.10))
+                                                .frame(height: 8)
+                                            Text("逐模型明细暂缺：上游日志接口超时/503（额度与总额不受影响，下一轮刷新自动重试）")
+                                                .font(.system(size: 8))
+                                                .foregroundStyle(.orange)
+                                        }
                                     } else {
                                         // 同样折叠成「配额表模型 + 其他」，和图例/柱子口径一致
                                         CostBar(entries: ModelPalette.foldedEntries(filteredCostEntries),

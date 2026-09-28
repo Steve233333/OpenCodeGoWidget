@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.45.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.46.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.45.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.46.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.45.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.45.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.46.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.46.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,14 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.46 — 上游日志接口挂了也不像"坏了"
+
+今天 `request-logs`（逐条明细）整段时间超时（连 `limit=5` 都不响应），而 `usage/*` 全部正常 ——
+于是「今日模型」只剩一条无名纯色条。现在：① 当日逐模型改用 `usage/models`（1 秒）快速兜底；
+② 坏接口不再硬重试（以前一轮能拖几分钟）；③ 界面直接写明"明细暂缺、自动重试"。
+
+版本 **1.1.11.46 (86)**。
 
 ### v1.1.11.45 — 上游 400 修复 + LongCat 2.5 Preview Free
 
@@ -122,19 +130,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 我们下一轮刷新就自动填上，不用手动清缓存。
 
 版本 **1.1.11.44 (84)**。
-
-### v1.1.11.43 — 用量数据源换成新接口（修好卡住的进度条与 305%）
-
-上游把 `usage/rows` 撤了（实测任何参数都 404），于是历史明细永远卡在 25/34、今日模型出现 305%。
-这次整体换到 `/logs` 页面用的 `request-logs`：一条记录带 `serviceAPIKeyID / model / cost / 时间`，
-抓取走 `export`（超 1000 条按时间二分）+ 增量分页；每日总额改用小时桶按北京时间重分桶；
-每次刷新与官方 `usage/models` 对账一次；30 天保留期外、以及官方没有日志的天记为"只能看总额"，不再重试。
-另外把"今日合计"改成与"今日每模型明细"同源 —— 305% 从结构上不可能再出现。
-
-实测：9/25 两算对齐（$0.278950 ↔ $0.2790）、按 Key 恢复（临时 $0.2278 + 方泽恩 $0.0512）、
-App 日志 `今日对账一致（官方 0.904193 ≈ 日志 0.900583）`、进度 25/34 → 28/30。
-
-版本 **1.1.11.43 (83)**。
 
 ## 本地构建
 
