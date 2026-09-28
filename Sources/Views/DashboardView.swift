@@ -214,6 +214,22 @@ struct DashboardView: View {
                                             .font(.system(size: 8))
                                             .foregroundStyle(.secondary)
                                     }
+                                    // 2026-09-28：只在"所有密钥"视图提示一次口径差异 ——
+                                    // 缺"按 Key"明细的天（官方没存 / 接口不可用）会让各 Key 相加 < 总额，
+                                    // 以前没人解释，用户会以为是坏了。
+                                    if selectedKeyId == nil, !snap.dailyByKey.isEmpty {
+                                        let dailyMap = Dictionary(uniqueKeysWithValues: filteredDaily.map { ($0.date, $0) })
+                                        let byKeySum = snap.dailyByKey.values.reduce(0.0) { acc, arr in
+                                            acc + arr.filter { dailyMap[$0.date] != nil }.reduce(0.0) { $0 + $1.total }
+                                        }
+                                        let allSum = filteredDaily.reduce(0.0) { $0 + $1.total }
+                                        let gap = allSum - byKeySum
+                                        if gap > 0.02 {
+                                            Text(String(format: "各 Key 相加之和不等于总额：有几天缺少「按 Key」明细（官方未记录 / 日志接口不可用），差额 $%.2f", gap))
+                                                .font(.system(size: 8))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
                                 }
                                 // 今日模型：跟随 Key 筛选
                                 let filteredCostEntries = snap.filteredCostEntries(for: selectedKeyId)

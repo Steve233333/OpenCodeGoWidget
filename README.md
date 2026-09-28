@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.46.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.47.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.46.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.47.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.46.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.46.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.47.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.47.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,13 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.47 — 说明「所有密钥 ≠ 各 Key 相加」的差额
+
+1.1.11.46 修好「今日模型」后剩下的对不上，是**按 Key 明细缺失**：14 天（9/19 前）官方没存按 Key 日志，
+加上今天 `request-logs` 超时/503。总额本身是准的 —— 现在这句话直接写在「所有密钥」视图里（含差额金额）。
+
+版本 **1.1.11.47 (87)**。
 
 ### v1.1.11.46 — 上游日志接口挂了也不像"坏了"
 
@@ -122,14 +129,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 **LongCat 2.5 Preview Free**（限时免费、无限额度）：自动发现已捡到，策略表里直接走 chat 桥，实测 200。
 
 版本 **1.1.11.45 (85)**。
-
-### v1.1.11.44 — 缺口每天重试一次
-
-官方日志库最早只有 9/19 的数据（9/17、9/18 实测 0 条，console 的 Request Log 页也显示 "No requests"）。
-上一版把这类缺口标记后不再重试；这一版加了"**每天重试一次**"——官方哪天把更早的日志补回来，
-我们下一轮刷新就自动填上，不用手动清缓存。
-
-版本 **1.1.11.44 (84)**。
 
 ## 本地构建
 
