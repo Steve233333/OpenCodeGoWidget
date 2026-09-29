@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from proxy import (  # noqa: E402
     apply_patch as _apply_patch,
+    bodylimit as _bodylimit,
     bridges_chat as _bridges_chat,
     bridges_messages as _bridges_messages,
     config as _config,
@@ -46,7 +47,7 @@ from proxy.server import main  # noqa: E402
 # test_muse_compat.py 都是 spec_from_file_location("vp", "vision_proxy.py") 然后取
 # `vp.<符号>`（如 vp._sanitize_muse_tool_schemas、vp.ChatBridgeTranslator）。
 # 拆包后这些符号住在子模块里，这里把它们的顶层名字重新导出一遍 —— 纯转发，不改行为。
-for _module in (_config, _bridges_chat, _bridges_messages, _toolfix, _search_sidecar,
+for _module in (_config, _bodylimit, _bridges_chat, _bridges_messages, _toolfix, _search_sidecar,
                 _muse, _apply_patch, _sse, _server, _policy, _pipeline):
     for _name in dir(_module):
         if not _name.startswith("__") and _name not in globals():

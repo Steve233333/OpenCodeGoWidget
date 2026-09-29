@@ -14,6 +14,7 @@ import time
 import uuid
 
 from .apply_patch import _rewrite_apply_patch_tool
+from .bodylimit import shed_oversized_history
 from .bridges_chat import _oc_session_id, _responses_request_to_chat
 from .config import (GO_SUFFIX, GO_UPSTREAM, IO_CHUNK_BYTES, WEB_SEARCH_INLINE_LIMIT,
                      ZEN_SUFFIX, ZEN_UPSTREAM, _clamp_reasoning_effort, _log,
@@ -205,6 +206,12 @@ class RequestPipelineMixin:
                         reasoning_changed = True
             if model_changed or zen_changed or go_changed or tools_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or reasoning_changed or muse_schema_changed or muse_preamble_changed or muse_first_changed:
                 body = bytearray(json.dumps(parsed).encode())
+            # 2026-09-30：请求体减肥 —— 历史里累积的 base64（截图/工具输出）会把 body 顶到
+            # ~48MB，上游随机 413；超 45MB 时按"从旧到新"丢弃（图片优先），只改发出去这一份。
+            if zen_changed or go_changed:
+                shed = shed_oversized_history(parsed, len(body), model)
+                if shed is not None:
+                    body = shed
         return body, zen_changed, go_changed
 
     """Proxy 的请求管线（作为 mixin 与 Proxy 组合；方法依赖 Proxy 上的网络/工具方法）。"""

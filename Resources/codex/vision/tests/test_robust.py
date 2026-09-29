@@ -461,6 +461,122 @@ def t_web_search_history_fuzz():
         assert stats["web_search_replayed"] == stats2["web_search_replayed"]
         assert stats["dropped_reasoning"] == stats2["dropped_reasoning"]
 
+def t_bodylimit_under_limit_untouched():
+    """2026-09-30：没超限就一个字都不许改。"""
+    os.environ["VISION_MAX_BODY_MB"] = "10"
+    try:
+        parsed = {"input": [{"type": "message", "role": "user",
+                             "content": [{"type": "input_text", "text": "hi"}]}]}
+        assert vp.shed_oversized_history(parsed, 100, "m") is None
+        assert vp.shed_oversized_history(parsed, 10 * 1024 * 1024, "m") is None  # 正好等于上限
+    finally:
+        os.environ.pop("VISION_MAX_BODY_MB", None)
+
+
+def t_bodylimit_sheds_oldest_images():
+    """超限时按时间丢最老的图片，保住最新的几张（上游 ~48MB 会随机 413）。"""
+    os.environ["VISION_MAX_BODY_MB"] = "1"
+    try:
+        big = "data:image/png;base64," + "A" * 400_000      # 每张约 0.4MB
+        items = []
+        for i in range(6):
+            items.append({"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": f"看图 {i}"},
+                {"type": "input_image", "image_url": big},
+            ]})
+        parsed = {"model": "deepseek-v4.1-flash-go", "input": items}
+        body = len(json.dumps(parsed).encode())
+        out = vp.shed_oversized_history(parsed, body, "deepseek-v4.1-flash-go")
+        assert out is not None, "超限必须动手"
+        assert len(out) <= 1024 * 1024, f"减完还超：{len(out)} > 1MB"
+        kept = [p for it in items for p in it["content"]
+                if isinstance(p, dict) and p.get("type") in ("input_image", "image_url", "output_image")]
+        # 「最近 2 条的图留到最后」只是偏好：还不够就继续丢，但最新那张永远保留
+        assert 1 <= len(kept) < 6, f"应丢掉了若干旧图，实际留下 {len(kept)} 张"
+        assert items[-1]["content"][1].get("type") == "input_image", "最新一张被误丢"
+        # 被丢的位置留下占位文字
+        texts = [p.get("text", "") for it in items for p in it["content"]
+                 if isinstance(p, dict) and p.get("type") == "input_text"]
+        assert any("省略" in t for t in texts), "丢弃处应留占位说明"
+    finally:
+        os.environ.pop("VISION_MAX_BODY_MB", None)
+
+
+def t_bodylimit_keeps_recent_two_items_images():
+    """只超一点点时，丢的应该全是"最近 2 条之外"的老图 —— 视觉迭代靠的就是当前这张截图。"""
+    os.environ["VISION_MAX_BODY_MB"] = "1"
+    try:
+        big = "data:image/png;base64," + "C" * 400_000
+        items = [{"type": "message", "role": "user",
+                  "content": [{"type": "input_image", "image_url": big}]} for _ in range(6)]
+        parsed = {"input": items}
+        body = len(json.dumps(parsed).encode())          # 约 2.4MB：比上限多 1.4MB
+        out = vp.shed_oversized_history(parsed, body, "m")
+        assert out is not None
+        kinds = [it["content"][0]["type"] for it in items]
+        assert kinds[-2:] == ["input_image", "input_image"], f"最近两条的图被误丢：{kinds}"
+        assert kinds[:4] == ["input_text"] * 4, f"应只丢老图：{kinds}"
+    finally:
+        os.environ.pop("VISION_MAX_BODY_MB", None)
+
+
+def t_bodylimit_sheds_view_image_outputs():
+    """2026-09-30：view_image 的结果是 function_call_output.output 里的【列表形态】input_image
+    （真实会话里 58 条、26MB）。只认消息里的图片会漏掉它 —— 这条锁住"两种形态都要认"，
+    并且替换后必须还是列表（网关只认数组时不至于翻车）。"""
+    os.environ["VISION_MAX_BODY_MB"] = "1"
+    try:
+        big = "data:image/png;base64," + "B" * 400_000
+        items = [{"type": "function_call_output", "call_id": f"c{i}",
+                  "output": [{"type": "input_image", "image_url": big}]} for i in range(6)]
+        parsed = {"input": items}
+        body = len(json.dumps(parsed).encode())
+        out = vp.shed_oversized_history(parsed, body, "m")
+        assert out is not None and len(out) <= 1024 * 1024, f"没减下来：{len(out)}"
+        for it in items:
+            assert isinstance(it["output"], list), "本来列表形态的必须保持列表"
+            assert it["output"][0]["type"] in ("input_text", "input_image")
+        left = sum(1 for it in items if it["output"][0]["type"] == "input_image")
+        assert 1 <= left < 6, f"应丢掉若干老的 view_image 结果，实际留下 {left}"
+    finally:
+        os.environ.pop("VISION_MAX_BODY_MB", None)
+
+
+def t_bodylimit_sheds_outputs_then_text_when_no_images():
+    """没有图片可丢时：先丢老的大块工具输出，再截断超大文本。"""
+    os.environ["VISION_MAX_BODY_MB"] = "1"
+    try:
+        parsed = {"input": [
+            {"type": "function_call_output", "call_id": "c1", "output": "y" * 900_000},
+            {"type": "function_call_output", "call_id": "c2", "output": "z" * 900_000},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "w" * 900_000}]},
+        ]}
+        body = len(json.dumps(parsed).encode())
+        out = vp.shed_oversized_history(parsed, body, "m")
+        assert out is not None and len(out) <= 1024 * 1024, "应减到上限以内"
+        assert parsed["input"][0]["output"] != "y" * 900_000 or parsed["input"][2]["content"][0]["text"] != "w" * 900_000
+    finally:
+        os.environ.pop("VISION_MAX_BODY_MB", None)
+
+
+def t_bodylimit_malformed_never_crashes():
+    """畸形 payload 不许把请求搞崩（宁可原样放行）。"""
+    os.environ["VISION_MAX_BODY_MB"] = "1"
+    try:
+        cases = [
+            {},
+            {"input": None},
+            {"input": ["string", 123, None]},
+            {"input": [{"type": "message", "content": "not-a-list"}]},
+            {"input": [{"type": "message", "content": [None, 7, {"type": "input_image"}]}]},
+            {"input": [{"type": "function_call_output", "output": None}]},
+        ]
+        for p in cases:
+            vp.shed_oversized_history(p, 5 * 1024 * 1024, "m")   # 不该抛
+    finally:
+        os.environ.pop("VISION_MAX_BODY_MB", None)
+
+
 def t_protocol_unsupported_error_detect():
     """2026-09-27：网关把 chat-only 模型的 /responses 从 5xx 改成 400 ModelProtocolUnsupported，
     这种 400 必须被认出来并切 chat 桥（否则 mimo/GLM 会直接把 400 透传给用户）。"""

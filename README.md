@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.47.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.48.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.47.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.48.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.47.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.47.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.48.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.48.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,16 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.48 — 会话被截图撑爆不再卡死（45MB 自动丢老图）
+
+做图像迭代的会话会把截图和 `view_image` 结果的 base64 永久留在上下文里，每轮重发 → 撞上游
+**48.4 MiB** 上限 → 413/502 反复，线程自己永远恢复不了（实测卡在 50.7MB、累计 192 次 413）。
+现在代理在请求体超 **45MB** 时按时间从旧到新丢（图片优先，**永远保住最新 1 张**，其次大块工具输出），
+只改发往上游这一份、不动磁盘会话，并留下一行 `请求体减肥` 日志。
+真机 A/B：同一个 64.1MB 请求，旧代码 502（172 秒失败）、新代码 **200**（减到 32.1MB，15 秒）。
+
+版本 **1.1.11.48 (88)**。
 
 ### v1.1.11.47 — 说明「所有密钥 ≠ 各 Key 相加」的差额
 
@@ -121,14 +131,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ② 坏接口不再硬重试（以前一轮能拖几分钟）；③ 界面直接写明"明细暂缺、自动重试"。
 
 版本 **1.1.11.46 (86)**。
-
-### v1.1.11.45 — 上游 400 修复 + LongCat 2.5 Preview Free
-
-上游把 chat-only 模型的 `/responses` 从 5xx 改成 **400 ModelProtocolUnsupported**，导致 mimo/GLM 直接 400。
-代理现在会认出这种"协议不支持"的 400 并切 chat 桥（真正的请求错误仍透传）。同时接入今晚新上的
-**LongCat 2.5 Preview Free**（限时免费、无限额度）：自动发现已捡到，策略表里直接走 chat 桥，实测 200。
-
-版本 **1.1.11.45 (85)**。
 
 ## 本地构建
 
