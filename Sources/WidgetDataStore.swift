@@ -350,6 +350,13 @@ enum WidgetSnapshotRefresher {
         // 实测同一天同一个 Key：daily（新接口 rows）$1.12 vs 老接口 $0.60，界面上就打架。
         // 现在统一从**同一份当日数据**派生：今日模型取 daily 里今天那格，按 Key 取 dailyByKey 今天那格。
         let todayStr = ChartFormatters.day.string(from: Date())
+        // 2026-09-30：**今天那一格要说本轮抓到的权威值**。上面那次 `mergeDaily` 会再次对今天
+        // 施加"只增不减"（旧的比新的大 0.1% 就留旧的）—— 于是 CostCrawler 里刚重算出来的今天
+        // 又会被缓存里的坏值盖回去（实测：今天被写成昨天整天的 $2.29，刷新多少次都是 $2.29）。
+        // 今天这一格本来就该随一天进行而变，所以这里用本轮抓取结果覆盖它；历史天照旧只增不减。
+        let freshToday = cost.daily.first { $0.date == todayStr }?.entries ?? [:]
+        dailyFinal = UsageMerge.overrideToday(daily: dailyFinal, today: todayStr,
+                                             fresh: freshToday, authoritative: !freshToday.isEmpty)
         let entries: [String: Double] = (dailyFinal.first { $0.date == todayStr }?.entries ?? [:])
             .filter { $0.value > 0 }
         var byKeyEntries: [String: [String: Double]] = [:]

@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.48.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.49.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.48.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.49.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.48.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.48.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.49.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.49.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,15 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.49 — 「今日」写错一次不再永久锁死
+
+过了 0 点后「今日模型」显示 **$2.29**（其实那是**昨天整天**的 $2.2893），而按 Key 的今天只有 $0.50、
+控制台日志今天 0 点至今只有 **$0.51** —— 而且**怎么刷新都不动**：合并规则「只增不减」挡住了"变小"的修正。
+现在只在**今天这一格**、且这一轮**整天窗口抓成功**时，用日志整窗重算它（历史天一个字节不动；
+窗口失败或空窗口时保持旧值）。真机验证：刷新一次 $2.29 → **$0.51**。
+
+版本 **1.1.11.49 (89)**。
 
 ### v1.1.11.48 — 会话被截图撑爆不再卡死（45MB 自动丢老图）
 
@@ -116,13 +125,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 真机 A/B：同一个 64.1MB 请求，旧代码 502（172 秒失败）、新代码 **200**（减到 32.1MB，15 秒）。
 
 版本 **1.1.11.48 (88)**。
-
-### v1.1.11.47 — 说明「所有密钥 ≠ 各 Key 相加」的差额
-
-1.1.11.46 修好「今日模型」后剩下的对不上，是**按 Key 明细缺失**：14 天（9/19 前）官方没存按 Key 日志，
-加上今天 `request-logs` 超时/503。总额本身是准的 —— 现在这句话直接写在「所有密钥」视图里（含差额金额）。
-
-版本 **1.1.11.47 (87)**。
 
 ### v1.1.11.46 — 上游日志接口挂了也不像"坏了"
 

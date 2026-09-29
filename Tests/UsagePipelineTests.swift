@@ -292,6 +292,50 @@ func testLogsEndToEnd() {
           "日志明细齐全 → 这天不再算'缺明细'")
 }
 
+// MARK: - ⑭ 今天那格能被「整天日志窗口」重算（2026-09-30 事故）
+
+/// 事故现场（用户实拍）：今天(9/30)那格被写成了 $2.2905 —— 几乎等于 9/29 整天的 $2.2893，
+/// 按 Key 的今天却只有 $0.5044；而且怎么刷新都不掉，因为 `pickDay` 的「只增不减」只允许变大。
+/// 规则：**只有今天**这一格可以被「今天整天窗口」覆盖（抓失败 / 空窗口时不许动），历史天照旧。
+func testTodayCanBeRecomputed() {
+    print("⑭ 今天那格能被整天日志窗口重算（错误值不许被「只增不减」永久锁死）")
+    let yesterday = DailyCost(date: "2026-09-29",
+                              entries: ["deepseek-v4.1-flash": 2.25947891,
+                                        "deepseek-v4-flash": 0.02299392,
+                                        "glm-5.3-flash": 0.0057381])
+    let bogusToday = DailyCost(date: "2026-09-30",
+                               entries: ["deepseek-v4.1-flash": 2.26178218,
+                                         "deepseek-v4-flash": 0.02299392,
+                                         "glm-5.3-flash": 0.0057381])   // 其实是昨天的数
+    let realToday: [String: Double] = ["deepseek-v4.1-flash": 0.4926, "deepseek-v4-flash": 0.0106,
+                                       "glm-5.3-flash": 0.0044, "glm-5.3": 0.0023]
+    let realTotal = realToday.values.reduce(0, +)
+
+    // ① 整天窗口抓成功 → 今天被重算（$2.29 → $0.51），历史天一个字节不动
+    let fixed = UsageMerge.overrideToday(daily: [yesterday, bogusToday], today: "2026-09-30",
+                                         fresh: realToday, authoritative: true)
+    check(near(fixed.first { $0.date == "2026-09-30" }?.total ?? 0, realTotal, 1e-6),
+          "今天应被重算成日志整窗的 $\(realTotal)（实测事故：界面 $2.2905、实际只有 $0.51）")
+    check(fixed.first { $0.date == "2026-09-29" }?.total == yesterday.total, "历史天不许被动")
+    check(fixed.count == 2, "不许凭空多出/少掉天")
+
+    // ② 整天窗口这轮抓失败 → 一个字都不改（等下一轮，不能拿半截数据冲掉）
+    let kept = UsageMerge.overrideToday(daily: [yesterday, bogusToday], today: "2026-09-30",
+                                        fresh: realToday, authoritative: false)
+    check(kept.first { $0.date == "2026-09-30" }?.total == bogusToday.total, "窗口抓失败时不许动今天")
+
+    // ③ 日志这轮没回数据 → 保留旧值（宁可用旧值，也不能把今天清成 0）
+    let kept2 = UsageMerge.overrideToday(daily: [yesterday, bogusToday], today: "2026-09-30",
+                                         fresh: [:], authoritative: true)
+    check(kept2.first { $0.date == "2026-09-30" }?.total == bogusToday.total, "空窗口不许把今天清成 0")
+
+    // ④ 今天这格原来不存在 → 补上（新的一天第一次有用量）
+    let added = UsageMerge.overrideToday(daily: [yesterday], today: "2026-09-30",
+                                         fresh: realToday, authoritative: true)
+    check(added.count == 2 && near(added.first { $0.date == "2026-09-30" }?.total ?? 0, realTotal, 1e-6),
+          "今天这格缺失时应补上")
+}
+
 @main
 struct UsagePipelineTestRunner {
     static func main() {
@@ -308,6 +352,7 @@ struct UsagePipelineTestRunner {
         testWindowSplitDecision()
         testTotalMismatchGuard()
         testLogsEndToEnd()
+        testTodayCanBeRecomputed()
 
         if failures.isEmpty {
             print("\n全部通过 ✅")

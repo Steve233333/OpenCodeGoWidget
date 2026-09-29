@@ -115,12 +115,16 @@ final class CostCrawler: @unchecked Sendable {
         // 按 Key 的那份仍以日志为准（拿不到就保留旧值，不冲掉）。
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        // 今天这一格的**权威来源之一**：`usage/models?since=今天0点` 就是"今天整天"的汇总，
+        // 而且每轮都调（对账用）。日志接口退化时它就是今天的真源（2026-09-30 起也参与"重算今天"）。
+        var officialTodayModels: [String: Double] = [:]
         if let md = await consoleFetch(path: "usage/models",
                                        queryItems: [URLQueryItem(name: "range", value: "30d"),
                                                     URLQueryItem(name: "since", value: iso.string(from: dayStart))],
                                        cookie: cookie, ws: workspaceID),
            let json = try? JSONSerialization.jsonObject(with: md) {
             let officialModels = Self.parseModelCosts(json)
+            officialTodayModels = officialModels
             let official = officialModels.values.reduce(0, +)
             let fromLogs = rowDaily[todayStr]?.values.reduce(0, +) ?? 0
             if official > 0.01, abs(official - fromLogs) > max(0.01, official * 0.01) {
@@ -148,9 +152,48 @@ final class CostCrawler: @unchecked Sendable {
             let byKey = UsageMerge.mergeByKey(new: UsageMerge.toByKeyDaily(rowByKey),
                                               into: previous?.dailyByKey ?? [:])
             daily = UsageMerge.applyUnionDetail(daily: daily, byKey: byKey)
+            daily = Self.recomputeToday(daily, today: todayStr,
+                                        logsToday: todayWindow.ok ? (rowDaily[todayStr] ?? [:]) : [:],
+                                        officialToday: officialTodayModels,
+                                        logWindowOK: todayWindow.ok)
             return MonthlyCost(daily: daily, keys: [], dailyByKey: byKey)
         }
+        // 一条日志都没拿到（接口退化）：今天仍要用 `usage/models` 的权威值重算，
+        // 否则那次错误写入会被"只增不减"永久锁死。
+        daily = Self.recomputeToday(daily, today: todayStr, logsToday: [:],
+                                    officialToday: officialTodayModels, logWindowOK: false)
         return MonthlyCost(daily: daily, keys: [], dailyByKey: [:])
+    }
+
+    /// 2026-09-30：**今天这一格必须能被打扫干净** —— 一次错误写入（实测：半夜把昨天整天的
+    /// $2.2893 写进了今天，界面卡在 $2.29 而实际只有 $0.51）在 `pickDay` 的"只增不减"下
+    /// 永远出不来，用户怎么刷新都一样。
+    ///
+    /// 权威来源按顺序取（两者都是"今天整天"的口径，不是半窗）：
+    ///   ① `request-logs` 的今天整天窗口（成功且非空时优先 —— 它带逐模型 + 逐 Key 明细）；
+    ///   ② `usage/models?since=今天0点`（每轮都调，日志接口退化时兜底）。
+    /// 两边都拿到时取**大的那个**（今天宁可不少算），差得离谱只记日志不猜。
+    /// 都没有 → 一个字都不动（宁可用旧值，也不要把今天清成 0）。
+    private static func recomputeToday(_ daily: [DailyCost], today: String,
+                                       logsToday: [String: Double], officialToday: [String: Double],
+                                       logWindowOK: Bool) -> [DailyCost] {
+        let logsTotal = logsToday.values.reduce(0, +)
+        let officialTotal = officialToday.values.reduce(0, +)
+        let fresh: [String: Double]
+        if !logsToday.isEmpty, logsTotal >= officialTotal * 0.98 {
+            fresh = logsToday
+        } else if !officialToday.isEmpty {
+            fresh = officialToday
+        } else {
+            fresh = logsToday
+        }
+        guard !fresh.isEmpty else { return daily }
+        if !logWindowOK, !officialToday.isEmpty {
+            // 记录一次"日志不可用、走官方按模型兜底重算今天"，便于排障
+            Logger(subsystem: "com.steve233.opencodego", category: "CostCrawler")
+                .info("CostCrawler: 今天用 usage/models 权威值重算（日志窗口这轮不可用）")
+        }
+        return UsageMerge.overrideToday(daily: daily, today: today, fresh: fresh, authoritative: true)
     }
 
     // MARK: - 密钥列表（下拉框）

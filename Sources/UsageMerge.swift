@@ -103,6 +103,35 @@ enum UsageMerge {
         return out
     }
 
+    /// 今天那一格：**允许被"今天整天日志窗口"重算**（历史天仍走 `pickDay` 的"只增不减"）。
+    ///
+    /// 事故（2026-09-30，用户实拍）：半夜某次抓取把**昨天整天的数**（$2.2893）写进了今天这格
+    /// （快照里 9/29 与 9/30 的按模型明细几乎逐位相同，而按 Key 的今天只有 $0.5044），
+    /// 于是「今日模型」一直卡在 $2.29 —— 今天到那时实际只有 $0.51。怎么刷都不掉，因为
+    /// `pickDay` 的"只增不减"（当初为防 24h 半窗把整天冲小）让任何"变小"的修正都进不来。
+    ///
+    /// 今天的总额本来就该随一天进行而变，不该被早先的错误值永久锁死。只要【今天整天窗口】
+    /// 这一轮抓成功（`authoritative`，不含失败页/半截），它就是今天那一格的真源：
+    /// 直接覆盖；今天以外的天一个字节都不动。`fresh` 为空（例如日志接口这轮没回数据）时
+    /// 一律不动 —— 宁可用旧值，也不要把今天清成 0。
+    static func overrideToday(daily: [DailyCost], today: String,
+                              fresh: [String: Double], authoritative: Bool) -> [DailyCost] {
+        guard authoritative else { return daily }
+        let entries = fresh.filter { $0.value > 0 }
+        guard !entries.isEmpty else { return daily }
+        let freshTotal = entries.values.reduce(0, +)
+        if let idx = daily.firstIndex(where: { $0.date == today }) {
+            let oldTotal = daily[idx].total
+            if abs(oldTotal - freshTotal) > max(0.01, freshTotal * 0.02) {
+                logger.warning("UsageMerge: 今日 \(today, privacy: .public) 按整天日志窗口重算 —— \(oldTotal) → \(freshTotal)")
+            }
+            var out = daily
+            out[idx] = DailyCost(date: today, entries: entries)
+            return out.sorted { $0.date < $1.date }
+        }
+        return (daily + [DailyCost(date: today, entries: entries)]).sorted { $0.date < $1.date }
+    }
+
     /// 哪天需要回填：
     /// ① 没有逐模型明细（只有 `(total)`）；或 ② 按 Key 合计不足当天总额 90%
     /// （控制台每行都带 serviceApiKeyId，正常应≈100%）。
