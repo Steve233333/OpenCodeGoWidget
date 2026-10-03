@@ -86,6 +86,18 @@ if [ "${SKIP_KEY_TEST:-0}" != "1" ]; then
   fi
 fi
 
+# 2026-10-03：patch.sh 是「会不会把用户 Codex 副本搞坏」的唯一开关（clang 编译失败仍继续 →
+# 主可执行文件缺失；框架摘要不同步 → 启动即 FATAL）。它的修复曾经只落在本机、又被包内旧版按内容
+# 覆盖回来（安装器 sync_newer_file 是"内容不同就用包里的"），所以把四条护栏 + 行为用例钉进门禁。
+echo "==> 副本重建脚本自检（patch.sh 四条护栏 + 5 个行为用例）"
+if [ "${SKIP_PATCH_GUARD_TEST:-0}" != "1" ] && [ -x "scripts/test-patch-guards.sh" ]; then
+  if ! "scripts/test-patch-guards.sh"; then
+    echo "!! patch.sh 护栏自检没过（或包内 patch.sh 被回退成旧版），先修好再打包"
+    echo "   （或 SKIP_PATCH_GUARD_TEST=1 ./build.sh 跳过）"
+    exit 1
+  fi
+fi
+
 # 2026-09-23（Phase 0）：把"测试门槛"补齐 —— 以前只有上面两个解析自检，最容易翻车的
 # 用量管线（日界/合并/按 Key 口径）和 Python 代理全量测试都没有进门槛。
 echo "==> 用量管线自检（离线；日界 / 增量幂等 / 半窗不冲整天 / 按 Key 覆盖）"

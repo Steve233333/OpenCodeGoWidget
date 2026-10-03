@@ -410,3 +410,42 @@ rm -rf ~/Library/Application\ Support/Codex-Patched/GPUCache ~/Library/Applicati
 - 实测（真机真实数据 + 独立 harness 编译同一份源码）：修前「全部相加」= $24.59，修后账期窗口 = $0.09、自然月窗口 = $24.59；截图确认账期页顶部已是 $0.09。
 顺带：`build.sh` 不再每次构建往桌面拷 DMG/ZIP（改成 `COPY_TO_DESKTOP=1` 才拷），避免几版下来桌面堆一片。
 教训：**「总花费」这类数字必须和它旁边那张图共用同一个窗口函数**，否则窗口一变（换账期、跨月、切开关）就会出现「图空数字不空」这类自相矛盾的界面；另外抓取层要区分「没数据」和「抓失败」，否则正常的空周期会被当故障降级成旧数据。
+
+### 33. 26.930 副本「可能已损坏或不完整」+ `Failed to get integrity`（2026-10-03，双缺陷叠加）
+
+现象：官方升级到 **26.930.31730** 后自动重建的副本双击报「应用程序可能已损坏或不完整」；手工把主可执行文件补回去后，启动即崩（崩在 Electron 主进程）。崩溃报告：`~/Library/Logs/DiagnosticReports/ChatGPT.bin-2026-10-03-1422*.ips`。
+
+根因（**两个独立缺陷叠加**，缺一不可）：
+
+1. **clang 编译失败却继续签名收尾**：本机 CommandLineTools SDK 损坏 —— `ld: tapi error: malformed file` + `MacOSX27.0.sdk/usr/lib/libSystem.B.tbd: unknown architecture`。旧 `patch.sh` 只判断 `command -v clang` 与 `clang --version`，编译失败后不检查产物就往下走 → `Contents/MacOS/ChatGPT` 根本没生成，而 **`codesign --verify` 仍然通过**（代码签名不校验主可执行文件是否存在/非空）。
+2. **26.930 起 Electron（≥154）框架摘要校验变成 fail-closed**：框架二进制 `__DATA_CONST,__asar_integrity` 段里内嵌 `32B 哨兵 AGbevlPCksUGKNL8TSn7wGmJEuJsXb2A` + `used(1)` + `version(1)` + `32B SHA256`，摘要 = plist 里 `ElectronAsarIntegrity` 按 key 排序后 `key+algorithm+hash` 的 SHA256。patch 必然改 asar 哈希 → 摘要不同步就 `IsIntegrityDictionaryValid()` 失败 → `Failed to get integrity` FATAL。旧版此处 fail-open，所以从没暴露。
+
+排查（照抄）：
+
+```bash
+ls -l ~/Applications/ChatGPT-Patched.app/Contents/MacOS/        # 只有 ChatGPT.bin、没有 ChatGPT → 缺陷 1
+grep -n "tapi error\|unknown architecture" ~/.codex/picker-patch/patch.log | tail -3
+ls -lt ~/Library/Logs/DiagnosticReports | grep ChatGPT | head -3
+grep -a -c "Failed to get integrity" ~/Library/Logs/DiagnosticReports/ChatGPT.bin-*.ips
+```
+
+修复（四步，**顺序不能换**）：
+
+1. **补主可执行文件**：`cp ~/.codex/picker-patch/launcher-universal "$APP/Contents/MacOS/ChatGPT" && chmod +x "$APP/Contents/MacOS/ChatGPT"`（工程自带 arm64+x86_64 预编译启动器，机器上没装 clang 也能救）。
+2. **重算框架摘要并原地写回**：从 `Contents/Info.plist` 的 `ElectronAsarIntegrity` 重算 SHA256，写进每个 `Contents/Frameworks/*.framework/Versions/Current/*` 里找到哨兵且 `used=1,version=1` 的槽位（哨兵 +34 起 32 字节）。
+3. **重签**：`security unlock-keychain -p <pass> ~/Library/Keychains/codex-signing.keychain-db` → `codesign --force --deep --sign "Codex Patched Signing" --keychain … --entitlements ~/.codex/picker-patch/certs/ent2.plist "$APP"`。
+4. **清缓存再启动**：删 `~/Library/Application Support/Codex-Patched/{GPUCache,CacheStorage,Code Cache}` 后 `open "$APP"`。
+
+验证（三条都要过）：
+
+- **独立复算摘要**逐字节一致（不要只看「能启动」）；
+- `codesign --verify --deep --strict` 通过；
+- 启动后 `~/Library/Logs/DiagnosticReports` 不再新增 ChatGPT 崩溃（本次 14:22–14:23 有 3 个，14:32 修复后 0 个，进程稳定驻留）。
+
+已固化进仓库的护栏（2026-10-03 一起做，防复发）：
+
+- `patch.sh`：clang 产物**非空**校验 → 失败自动回退 `launcher-universal` → 签名前硬校验 `[ -s "$bindir/ChatGPT" ] || exit 1`（旧的 `-x` 会放行 0 字节空壳）；新增第 4 步自动同步框架摘要；重建收尾顺手维护 `~/.local/bin/codex` 软链（26.930 把 CLI 挪到 `Contents/Resources/codex-cli/bin/codex`，悬空会断手机端 ccpocket 桥）。
+- 新门禁 `scripts/test-patch-guards.sh`（4 条静态护栏 + 5 个行为用例：clang 失败必回退 / clang 可用走编译 / 启动器缺失必中止不留半成品 / 软链重指且幂等 / 无软链不主动创建），已进 `build.sh --test`。
+- **纪律**：线上 `~/.codex/picker-patch/patch.sh` 的任何修复，必须当轮 `sync-from-home` 回仓库再重建 —— 安装器 `sync_newer_file` 是「内容不同就用包里的」（只留 `.bak.<ts>`），不回流就等于下次重建把修复冲掉。
+
+教训：**「签名通过」≠「能启动」**。凡是「重建产物」的脚本，签名前必须校验**产物本身**（存在、非空、是 Mach-O），并把「改过 bundle 内容 → 所有嵌入摘要/哈希同步」写成脚本的硬步骤，别依赖平台默认 fail-open。

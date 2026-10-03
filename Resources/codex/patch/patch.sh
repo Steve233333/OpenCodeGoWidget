@@ -76,6 +76,31 @@ is_patched() {
   grep -aqE 'useHiddenModels&&[^`]*===`amazonBedrock`' "$asar" 2>/dev/null
 }
 
+# 官方改布局会让 ~/.local/bin/codex 变成**悬空软链**（26.930 把 CLI 从
+# Contents/Resources/codex 挪到 Contents/Resources/codex-cli/bin/codex）—— 手机端
+# ccpocket 桥的 PATH 第一项就是这个软链，悬空就起不来会话。只在软链已存在时维护它，
+# 绝不主动创建（别人的机器上可能故意没有这个软链）。
+ensure_cli_symlink() {
+  local link="$HOME/.local/bin/codex" target="" cand
+  [ -L "$link" ] || return 0
+  for cand in "$PATCHED/Contents/Resources/codex-cli/bin/codex" \
+              "$PATCHED/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex" \
+              "$PATCHED/Contents/Resources/codex"; do
+    [ -s "$cand" ] && { target="$cand"; break; }
+  done
+  if [ -z "$target" ]; then
+    log "WARN: 找不到 CLI 入口，跳过 codex 软链维护"
+    return 0
+  fi
+  if [ "$(readlink "$link")" = "$target" ]; then
+    log "codex CLI 软链无需变更 ($target)"
+  elif ln -sfn "$target" "$link"; then
+    log "codex CLI 软链已重指 → $target"
+  else
+    log "WARN: codex 软链重指失败 ($link)"
+  fi
+}
+
 build_patched() {
   log "== build patched copy =="
   # Resolve actual source location (handles /Applications vs ~/Applications installs)
@@ -211,7 +236,7 @@ build_patched() {
   # ElectronAsarIntegrity (the archive-level gate is fail-closed).
   # python 用 -u 关闭块缓冲，心跳日志才能实时写入文件
   if ! python3 -u - "$asar" "$plist" >>"$LOG" 2>&1 <<'PYEOF'
-import struct, json, hashlib, re, plistlib
+import struct, json, hashlib, re, plistlib, glob, os
 asar, plist = __import__('sys').argv[1], __import__('sys').argv[2]
 with open(asar, 'rb') as f:
     raw = f.read()
@@ -296,6 +321,37 @@ pl['ElectronAsarIntegrity']['Resources/app.asar']['hash'] = new_hash
 with open(plist, 'wb') as f:
     plistlib.dump(pl, f)
 print('header sha256 -> plist: %s...' % new_hash[:16])
+
+# 4. cross-check digest embedded in the framework binary (app 26.930+,
+#    Electron >=154): __DATA_CONST,__asar_integrity = 32B sentinel + used +
+#    version + sha256 over sorted key+algorithm+hash triples of the plist
+#    dict. If the plist hash changed but this digest did not,
+#    IsIntegrityDictionaryValid() fails => "Failed to get integrity" FATAL
+#    (app shows as damaged / crashes on launch).
+root = os.path.dirname(os.path.dirname(plist))
+hasher = hashlib.sha256()
+for k in sorted(pl['ElectronAsarIntegrity'].keys()):
+    ent = pl['ElectronAsarIntegrity'][k]
+    hasher.update(k.encode()); hasher.update(ent['algorithm'].encode()); hasher.update(ent['hash'].encode())
+digest = hasher.digest()
+sentinel = b'AGbevlPCksUGKNL8TSn7wGmJEuJsXb2A'
+slots = 0
+for fw in glob.glob(root + '/Contents/Frameworks/*.framework/Versions/Current/*'):
+    if not os.path.isfile(fw):
+        continue
+    with open(fw, 'rb') as f:
+        data = bytearray(f.read())
+    pos = data.find(sentinel)
+    if pos < 0 or pos + 66 > len(data):
+        continue
+    if data[pos + 32] == 1 and data[pos + 33] == 1:  # used=1, version=1
+        data[pos + 34:pos + 66] = digest
+        with open(fw, 'wb') as f:
+            f.write(bytes(data))
+        slots += 1
+        print('framework integrity digest refreshed: %s @0x%x' % (os.path.basename(fw), pos))
+if not slots:
+    print('framework integrity digest slot not found (older build) - skipped')
 assert len(buf) == len(raw), 'file size changed!'
 with open(asar, 'wb') as f:
     f.write(bytes(buf))
@@ -360,18 +416,34 @@ EOF
   # （resources/patch/launcher-universal，arm64+x86_64 通用二进制，源码见 launcher.c）。
   # 这样新电脑不需要命令行工具也能打出双开副本。
   # 同样不能只看 `command -v clang`：没装命令行工具时 /usr/bin/clang 是占位程序
+  # 2026-10-03：clang 存在 ≠ 能链接成功（CommandLineTools SDK 损坏时 ld 报
+  # unknown architecture 且不产出文件）。必须检查编译产物，失败就回退预编译
+  # 启动器，否则主可执行文件缺失 → 系统报"应用程序可能已损坏或不完整"。
+  launcher_ok=""
   if command -v clang >/dev/null 2>&1 && clang --version >/dev/null 2>&1; then
-    clang -O2 -o "$bindir/ChatGPT" "$BASE/scripts/launcher.c" >> "$LOG" 2>&1
-  elif [ -f "$BASE/launcher-universal" ]; then
+    if clang -O2 -o "$bindir/ChatGPT" "$BASE/scripts/launcher.c" >> "$LOG" 2>&1 && [ -s "$bindir/ChatGPT" ]; then
+      launcher_ok=1
+      log "launcher compiled with clang"
+    else
+      rm -f "$bindir/ChatGPT"
+      log "WARN: clang 编译启动器失败（SDK/链接问题），回退预编译启动器"
+    fi
+  fi
+  if [ -z "$launcher_ok" ] && [ -f "$BASE/launcher-universal" ]; then
     cp "$BASE/launcher-universal" "$bindir/ChatGPT"
     chmod +x "$bindir/ChatGPT"
-    log "clang 不可用 → 使用随包附带的预编译启动器（launcher-universal）"
-  else
+    launcher_ok=1
+    log "使用随包附带的预编译启动器（launcher-universal）"
+  fi
+  if [ -z "$launcher_ok" ]; then
     # 最后兜底：把原二进制放回去，副本仍可运行，只是和官方版共用配置目录
     cp "$bindir/ChatGPT.bin" "$bindir/ChatGPT"
     chmod +x "$bindir/ChatGPT"
     log "WARN: 既没有 clang 也没有预编译启动器，副本将直接运行（未注入独立 --user-data-dir）"
   fi
+  # 2026-10-03：`-x` 会放行"存在但 0 字节"的空壳（clang 链接失败就可能留下这种文件），
+  # 空壳主可执行文件 = 系统报"应用程序可能已损坏或不完整"。必须按非空校验。
+  [ -s "$bindir/ChatGPT" ] || { log "ERROR: launcher 缺失或为空，中止重建"; exit 1; }
   log "main executable wrapped with user-data-dir launcher ($uddir)"
 
   # The asar header hash in Info.plist was refreshed above (it covers the header
@@ -402,6 +474,9 @@ EOF
 
   printf '{"sourceVersion":"%s","builtAt":"%s"}\n' "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MARKER"
   log "marker written: $version"
+
+  # 每次重建顺手维护 CLI 软链：官方再改布局，手机端 ccpocket 桥也不会断
+  ensure_cli_symlink
 }
 
 install() {

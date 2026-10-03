@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.49.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.50.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.49.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.50.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -97,8 +97,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.49.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.49.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.50.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.50.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -106,6 +106,16 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.50 — 重建小组件不再搞坏 Codex 副本
+
+今天官方升级到 26.930 后副本坏了两处：clang 编译失败却继续签名（主可执行文件根本没生成，而 `codesign`
+照样报通过），加上新版 Electron 的框架摘要校验 fail-closed（摘要不同步就 FATAL）。修复当时只在本机脚本里，
+仓库那份落后 86 行 —— 安装器按内容覆盖，等于**下次重建就复发**。本版把修复**固化进仓库**，加门禁
+`scripts/test-patch-guards.sh`（4 条护栏 + 5 个行为用例）进 `./build.sh --test`；重建收尾顺手维护
+`~/.local/bin/codex` 软链；手册补 §33。
+
+版本 **1.1.11.50 (90)**。
 
 ### v1.1.11.49 — 「今日」写错一次不再永久锁死
 
@@ -125,14 +135,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 真机 A/B：同一个 64.1MB 请求，旧代码 502（172 秒失败）、新代码 **200**（减到 32.1MB，15 秒）。
 
 版本 **1.1.11.48 (88)**。
-
-### v1.1.11.46 — 上游日志接口挂了也不像"坏了"
-
-今天 `request-logs`（逐条明细）整段时间超时（连 `limit=5` 都不响应），而 `usage/*` 全部正常 ——
-于是「今日模型」只剩一条无名纯色条。现在：① 当日逐模型改用 `usage/models`（1 秒）快速兜底；
-② 坏接口不再硬重试（以前一轮能拖几分钟）；③ 界面直接写明"明细暂缺、自动重试"。
-
-版本 **1.1.11.46 (86)**。
 
 ## 本地构建
 
