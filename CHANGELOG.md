@@ -2,6 +2,21 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.51 — vision_proxy 正式改名 agent-relay（中继站）
+
+它早就不只是"视觉代理"了：模型名归一、路由策略、responses⇄chat⇄messages 协议互转、请求体减肥、
+搜索边车、工具修补、推理钳制、生命周期守护 —— 共 5,397 行 / 14 个模块。这次做的是**改名迁移**
+（不是重构，逻辑一行没改）：目录 `agent-vision-toolkit → agent-relay`、入口 `vision_proxy.py → relay.py`、
+launchd label `com.agent-vision-toolkit.proxy → com.agent-relay`、env 变量 `VISION_* → RELAY_*`、
+日志前缀 `[vision-proxy] → [relay]`；旧目录/旧入口**原地保留**并做成转发，随时可 `--rollback`。
+
+验证：改名后代码先在 **19101 影子实例**跑通四家族+跨模型历史冒烟（全程不碰 19100）→ 再切换；
+切换脚本自带"端口探测 + 真机请求自检"，失败自动回滚；切换后四家族冒烟六项全过、`launchd = com.agent-relay`、
+日志已是 `[relay]`。顺带修了三个真问题：`RELAY_MUSE_*` 的旧名兜底映射、MCP 搜索脚本的 env 路径兜底、
+以及门禁漏检 `Resources/codex/scripts/*.sh`（迁移脚本自己就栽在 `$VAR（` 上）。
+
+版本 **1.1.11.51 (91)**。
+
 ### v1.1.11.50 — 重建小组件不会再搞坏 Codex 副本（双修复固化 + 门禁）
 
 **现象（2026-10-03 14:18）**：官方升级到 **26.930.31730** 后，自动重建的 Codex 副本双击报
@@ -76,7 +91,7 @@
 用户贴的截图 16 张（21MB）+ `view_image` 的结果 58 条（26MB）。上游网关的上限实测在 **48.4 MiB**
 （同一体积 596 次 200 / 8 次 413，边缘节点略有差异）—— 历史只会更长，所以越重试越没救。
 
-**修法**（只动 vision_proxy，不改日界/配额/数据管线）：请求体超过 **45MB** 时按"从旧到新"丢：
+**修法**（只动 relay，不改日界/配额/数据管线）：请求体超过 **45MB** 时按"从旧到新"丢：
 ① 先丢**最近 2 条消息/调用之外**的图片，还不够再丢那 2 条里的（**永远保住最新 1 张**）；
 ② 再丢大块工具输出（≥32KB，可全丢）；③ 再截断超大文本（≥8KB）。
 图片**两种形态都认**——消息里的 `input_image`，以及 `view_image` 那种藏在
@@ -386,7 +401,7 @@ zen 免费家族在本机会被上游 403（`free tier can only be used from wit
 - server.py 1398 → 849 行；pipeline.py 独立成文件（`RequestPipelineMixin` 组合进 `Proxy`）。
 
 **新增部署护栏（今天的教训）**
-`scripts/deploy-proxy.sh`：备份运行目录 → 同步 → 强制重启 → **跑四家族冒烟** → 失败自动回滚并重启。
+`scripts/deploy-relay.sh`：备份运行目录 → 同步 → 强制重启 → **跑四家族冒烟** → 失败自动回滚并重启。
 起因：这次我把 `pipeline.py` 的重构**先部署再冒烟**，漏传一个变量（`incoming_headers`）导致四家族全 502，
 你的 Codex 先踩到了；补传后已恢复。以后统一走这个脚本，坏的代码上不了线。
 
@@ -405,7 +420,7 @@ Phase ① 之后先把**风险最低、收益明确**的第 ④ 阶段做掉（�
 - **删掉只被测试用的死代码** `_build_chat_fallback_events`（生产早走增量翻译器）：它那两条测试
   （"流里正文 + 工具调用拼装"、"坏 JSON 参数修复"）**改走生产路径**（`ChatBridgeTranslator`）继续守着，
   死代码没了、覆盖没少。
-- **新增 `Resources/codex/vision/README.md`**：一张图看懂模块分工、策略表字段含义、每个模型家族现在的行为、
+- **新增 `Resources/codex/relay/README.md`**：一张图看懂模块分工、策略表字段含义、每个模型家族现在的行为、
   "症状 → 先看哪里"对照表、测试与门槛。以后加模型或排查问题不用再翻代码。
 
 验证：全量 **47 + 3 + 8 + 31 + 14 + 8** 全绿；真机冒烟四个家族全绿（DeepSeek / MiMo / Muse / GLM）。
@@ -560,7 +575,7 @@ Python 全量 **45 + 8 + 31 + 14 + 8** 全绿。
   带上 output 项 / 上游挂着不发字节 → 空闲宽限补 completed / 内容不完整 → 仍判 failed / 真终止帧原样转发。
   已接进 `build.sh --test` 门槛（Python 全量 37+4+31+18+8 全绿）。
 - 顺带修一个我刚引入的坑：ensure-proxy 变"幂等不重启"后，**「配置」同步了新代理代码却不会重启它**
-  （新代码永远不生效）→ 加 `--force-restart`，安装器这一步强制换新进程；`scripts/test-ensure-proxy.sh`
+  （新代码永远不生效）→ 加 `--force-restart`，安装器这一步强制换新进程；`scripts/test-ensure-relay.sh`
   第 ⑥ 条断言"跑着的旧进程会被换掉"（pid 变化）。
 - 真机：deepseek 流式 200 且日志出现 `SSE 空闲宽限 5s 已启用`；muse 冒烟 200（顺带看到 narration-only
   空转重试真实触发一次 #1/#2 后成功）。
@@ -580,17 +595,17 @@ Python 全量 **45 + 8 + 31 + 14 + 8** 全绿。
 
 上周加的「配置后自检」正好抓到了第 2 条（`自检① 本地代理：❌`）。这次补的是三个结构性缺口：
 
-**① 代理生命周期只有一份实现（新 `vision/ensure-proxy.sh`）**
+**① 代理生命周期只有一份实现（新 `vision/ensure-relay.sh`）**
 挑解释器 → 写状态文件 → 写/刷新 plist → 起服务 → **探活验证**，安装器与 App 都调它。
 解释器改成**逐个实测**（`import ssl,json,asyncio` 跑得通才算），优先级：
 python.org `3.*`（版本号倒序，跳过 `Versions/Current` 软链）→ `/usr/local` → Homebrew → `/usr/bin/python3`
 （仅兜底，且日志明说"依赖 Xcode/命令行工具"）。绝不再看 PATH 里第一个。
-状态文件 `~/.local/share/agent-vision-toolkit/proxy-runtime`（key=value）：解释器、版本、上次修复时间、
+状态文件 `~/.local/share/agent-relay/relay-runtime`（key=value）：解释器、版本、上次修复时间、
 上次结果 —— App 自检直接读它显示。
 
 **② App 自己把代理救回来（新 `Sources/ProxyWatchdog.swift`）**
 启动后 10 秒、每 5 分钟、系统唤醒时先探活（**端口有响应就立刻返回，平时零开销零日志**）；
-没响应才调 ensure-proxy.sh，顺手把"新模型自动发现"那个 launchd 任务也检查/重挂一次。
+没响应才调 ensure-relay.sh，顺手把"新模型自动发现"那个 launchd 任务也检查/重挂一次。
 救不回来时：**菜单栏图标红点 + 面板顶部红字 + 设置里「修复本地代理」按钮**（不引入通知权限）。
 不新增常驻 LaunchAgent —— App 本身是登录项，少一个零件。
 
@@ -608,7 +623,7 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 
 **验证**：
 
-- 离线（进了 `build.sh --test` 门槛）：`scripts/test-ensure-proxy.sh` 6 条 —— 跳过跑不起来的解释器、
+- 离线（进了 `build.sh --test` 门槛）：`scripts/test-ensure-relay.sh` 6 条 —— 跳过跑不起来的解释器、
   全坏时 rc=1 且不写脏文件、兜底解释器有警告、**真起一次**（临时 label + 端口 19531 + 临时目录）端口有响应、
   优先用 python.org 而不是 `/usr/bin/python3`、已在跑时幂等；Python 侧补了前缀路由 3 组单测。
 - 真机：`launchctl bootout` 掉代理后跑 ensure-proxy → **2.6 秒修好**，plist 从 `/usr/bin/python3`(3.9)
@@ -655,11 +670,11 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 
 ### v1.1.11.28 — 重构第三阶段：本地代理拆包（纯搬移，行为不变）
 
-`vision_proxy.py` 原来是 **3793 行 / 107 个顶层符号**的单体脚本（协议桥、搜索边车、工具修补、Muse 兼容、SSE 重写、HTTP 服务全在一个文件里）。这一版拆成薄入口 + `proxy/` 包：
+`relay.py` 原来是 **3793 行 / 107 个顶层符号**的单体脚本（协议桥、搜索边车、工具修补、Muse 兼容、SSE 重写、HTTP 服务全在一个文件里）。这一版拆成薄入口 + `proxy/` 包：
 
 | 文件 | 内容 | 行数 |
 |---|---|---|
-| `vision_proxy.py` | 入口 + 兼容层（launchd 路径没变） | 55 |
+| `relay.py` | 入口 + 兼容层（launchd 路径没变） | 55 |
 | `proxy/config.py` | 配置/常量/日志/推理档位注册表 | 284 |
 | `proxy/bridges_chat.py` | Responses ⇄ Chat Completions 桥 | 550 |
 | `proxy/bridges_messages.py` | Responses ⇄ Anthropic Messages 桥 | 309 |
@@ -674,7 +689,7 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 
 配套改动：
 
-- **入口保留兼容层**：老测试是用 `spec_from_file_location` 直接加载 `vision_proxy.py` 再取 `vp.<符号>` 的，所以入口把各模块的顶层符号重新导出一遍，这些测试（66 个用例）与 Muse 兼容自检（13 项）全部照旧通过；
+- **入口保留兼容层**：老测试是用 `spec_from_file_location` 直接加载 `relay.py` 再取 `vp.<符号>` 的，所以入口把各模块的顶层符号重新导出一遍，这些测试（66 个用例）与 Muse 兼容自检（13 项）全部照旧通过；
 - `check-drift.sh` 改成**整目录递归比对**（含 `proxy/` 子目录），不再只比几个固定文件；
 - `docs/gen-model-matrix.py` 改成从 `proxy/` 包里抠常量（以前只读单文件文本）；
 - **顺带修掉一个原有的静默 bug**：`_perform_web_search` 的 env 兜底用到了 `pathlib` 但整个文件**从没 import 过它**，而那一圈是裸 `except: pass` —— 结果是"环境变量里没有 ZEN_API_KEY 时，去 env 文件里找 key"这条兜底永远静默失败。补上 `import pathlib`。
@@ -917,8 +932,8 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 5. **响应侧拆点号工具名**：`multi_agent_v1.spawn_agent` → `name=spawn_agent` + `namespace=multi_agent_v1`，流式和非流式都做。
 6. **空转兜底**：请求尾补「要么调用工具、要么给最终答复」的硬约束（`instructions` + `input` 末尾各一条）；流式响应先缓冲判断，确实空转就用同一份请求体重发（最多 2 次，同一份响应 2 分钟 6 次熔断），最后一次不管怎样都原样发给客户端，绝不把调用方吊着。
 
-**开关**（写在 `~/.config/agent-vision-toolkit/env`，不改代码就能关）：
-`VISION_PROXY_MUSE_SCHEMA_FIX` / `VISION_PROXY_MUSE_NO_PREAMBLE` / `VISION_PROXY_MUSE_STALL_RETRY` / `VISION_PROXY_MUSE_TOOLNAME_FIX`
+**开关**（写在 `~/.config/agent-relay/env`，不改代码就能关）：
+`RELAY_MUSE_SCHEMA_FIX` / `RELAY_MUSE_NO_PREAMBLE` / `RELAY_MUSE_STALL_RETRY` / `RELAY_MUSE_TOOLNAME_FIX`
 
 **验证**：13 项离线断言全过（Muse 命中、非 Muse 字节不变、空转判定不误判回显的 instructions），实机 Muse / DeepSeek / GLM 请求各一条均 200，非 Muse 日志无任何 muse 改写行。
 
@@ -995,7 +1010,7 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 ### v1.1.10.3 — 修「新机器 502」的真凶：Python 缺 CA 证书（2026-09-19）
 
 - **502 的真凶找到了**：新机器上代理日志写着 `RuntimeError: Upstream network error: [SSL: CERTIFICATE_VERIFY_FAILED] ... unable to get local issuer certificate` —— python.org 的 Python 没跑过官方的 `Install Certificates.command` 时**没有 CA 根证书**，所有 HTTPS 直接失败。表现很有迷惑性：同机 Swift 侧（走 macOS 系统信任库）一切正常、Key 检测也通过，只有代理连不上上游 → Codex 只看到 `502 Upstream proxy request failed`。
-  三层修复：① `vision_proxy.py` / `model_discovery.py` 启动时若 `SSL_CERT_FILE` 未设且 `/etc/ssl/cert.pem` 存在就指过去（macOS 自带 CA bundle，用户什么都不用做）；② 两个 launchd plist 显式带上 `SSL_CERT_FILE`；③ 安装时若发现 `/Applications/Python 3.*/Install Certificates.command` 就自动跑一次。
+  三层修复：① `relay.py` / `model_discovery.py` 启动时若 `SSL_CERT_FILE` 未设且 `/etc/ssl/cert.pem` 存在就指过去（macOS 自带 CA bundle，用户什么都不用做）；② 两个 launchd plist 显式带上 `SSL_CERT_FILE`；③ 安装时若发现 `/Applications/Python 3.*/Install Certificates.command` 就自动跑一次。
 - **「环境自检」三项增强**：新增 **Python 证书**检查（专门抓 `CERTIFICATE_VERIFY_FAILED` 并给出修法）、新增 **费用凭据**检查（workspace + authCookie 是否存在，并实测 `_server` 接口 —— cookie 过期就是"费用/额度不刷新"的常见原因，返回登录页会明确指出）；修掉 **双开副本**误报：以前只查 `~/Applications/ChatGPT.app`，装在 `/Applications` 的机器会被误判"找不到官方 app"，现在两处都查。
 - **设置页按钮去重**：「Codex 一键配置」里那个重复的「浏览器登录自动获取」去掉（和「Go 额度设置」里的是同一个登录弹窗），统一保留 Go 额度那一栏的。
 - 版本 **1.1.10.3 (33)**。
@@ -1008,7 +1023,7 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
   - **Go Key：存在性 + 真实有效性**（发一次 `max_tokens=1` 的最小请求；401=Key 失效、429=限流、5xx=网关抽风不算 Key 的错，且会重试一次再判）
   - **DeepSeek Key：存在性 + 真实有效性**（`/models` 免费接口）
   - Codex 配置、模型目录（数量 + 其中 Go 几个）、双开副本（官方/副本版本对比）、小组件数据通道
-  - **代理最近一次报错原文**：直接读 `proxy.err.log` 里最后的 `handler error` / `fallback FAILED` / `not set in env` —— 也就是 Codex 那个 502 的真因
+  - **代理最近一次报错原文**：直接读 `relay.err.log` 里最后的 `handler error` / `fallback FAILED` / `not set in env` —— 也就是 Codex 那个 502 的真因
 - **探测模型从 `deepseek-v4-flash` 换成 `kimi-k3`**：实测同一时刻 `deepseek-v4-flash` 的 chat 适配层返回 530、`kimi-k3`/`glm-5.3` 正常，用它探活会把「网关抽风」误判成「你的 Key/网络有问题」。
 - 版本 **1.1.10.2 (32)**。
 
@@ -1055,7 +1070,7 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 ### v1.1.9.6 — 换电脑点「配置」能不能复制出一样的 Codex：全链路体检 + 修掉档位映射被目录反压（2026-09-17）
 
 - **体检方法**：假 HOME + 假 launchctl，跑**应用包里**那支安装器，再和本机逐字段比对；干净安装、旧机更新两条路各跑一遍。
-- **干净安装 = 完全一致**：38 个模型、顺序一致、逐字段差异 **0**（上下文 / 最大上下文 / 模态 / 默认档位 / 搜索 / apply_patch 类型 / 显示名 / 档位表）；`vision_proxy.py`、`model_discovery.py`、`reasoning_registry.json`、`reasoning_overrides.json`、`probe-new-model.sh` 五份哈希全一致；代理与自动发现两个 launchd 任务（6h + 开机）正确落盘。
+- **干净安装 = 完全一致**：38 个模型、顺序一致、逐字段差异 **0**（上下文 / 最大上下文 / 模态 / 默认档位 / 搜索 / apply_patch 类型 / 显示名 / 档位表）；`relay.py`、`model_discovery.py`、`reasoning_registry.json`、`reasoning_overrides.json`、`probe-new-model.sh` 五份哈希全一致；代理与自动发现两个 launchd 任务（6h + 开机）正确落盘。
 - **旧机更新会自动纠错**：新模型自动补回（union-alpha / grok-4.6 / hy4-preview 37→40）、上下文纠回（hy3-go 200000→262144）、模态与显示名按 models.dev 纠正、陈旧代码文件按 mtime 覆盖、下架模型走 12h 宽限后清理。
 - **修掉一个真缺口：手工实测档位被旧目录反压**。以前「目录里已有、且覆盖层也有」的模型会被跳过同步，导致老机器上错误的档位永远修不回来，而 `reasoning_registry.json` 又是照着目录生成的（实测 glm-5.3-go 卡在 `['medium']`、deepseek-v4-flash-go 卡在 `['low']`，一致性检查还打印「以目录为准」）。现在抽出 `_effective_levels()`，优先级钉死 **覆盖层 > models.dev > opencodex**，不一致就纠回并打日志，一致性检查文案同步改对；新增两条回归用例（含用假 `CODEX_HOME`/`CACHE_DIR` 驱动整个 `sync()` 的端到端用例）。
 - 版本 **1.1.9.6 (26)**。
@@ -1133,7 +1148,7 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 ### v1.1.8.8 — 应用内更新 + 视觉代理下线（2026-09-10）
 
 - **应用内更新**：设置页新增「检查更新」（打开设置页自动查一次，24 小时节流；菜单栏也有入口）。发现新版显示「发现新版 x.y.z」，点「更新」才会下载 ZIP、校验 bundle id/版本、替换 `/Applications` 里的旧版（旧版改名 `.bak-旧版本` 留作回退）并自动重启；不后台静默更新，`/Applications` 不可写时退化为打开 Release 页面。
-- **视觉代理彻底下线**：删除智谱 GLM 转文字整条链路（`vision_client.py`、`vision/bin/` 五个看图 CLI、`NATIVE_VISION_MODELS`、图片历史裁剪）。**不再需要视觉 Key**，一键配置从 4 栏减到 3 栏（Go / DeepSeek / 签名密码）；图片由模型原生处理，不声明 `image` 的模型发图会报错，换有视觉的模型即可。安装器会顺手清掉旧机器 env 里的 `VISION_*` 三行。
+- **视觉代理彻底下线**：删除智谱 GLM 转文字整条链路（`vision_client.py`、`vision/bin/` 五个看图 CLI、`NATIVE_RELAY_MODELS`、图片历史裁剪）。**不再需要视觉 Key**，一键配置从 4 栏减到 3 栏（Go / DeepSeek / 签名密码）；图片由模型原生处理，不声明 `image` 的模型发图会报错，换有视觉的模型即可。安装器会顺手清掉旧机器 env 里的 `VISION_*` 三行。
 - **修复 kimi-k3 不可用**：Go 网关把「该模型不支持 responses 格式」的报错从 500 改成 401，代理只在 500 时切 chat 桥，导致 kimi-k3 文/图都失败。现在已知 chat 适配模型吃 401 也会切桥（kimi-k3 文本与图片实测通过）。
 - **档位三层一致**：`model_discovery.py` 每次同步会一起生成代理档位表 `reasoning_registry.json` 和桌面端 `enabled-reasoning-efforts` 白名单，并做一致性自检——以前目录声明 3 档、界面只显示 2 档、发出去还可能被压成第 2 档的问题不会再出现。手工档位改 `reasoning_overrides.json`（registry 从此是生成物）。
 - **模型 id 归一**：Go 配额表里的新模型会用 models.dev 官方 id 校正（`DeepSeek V4.1 Flash` 曾猜成 `deepseek-v4.1-flash` 导致 401，正确 id 是 `deepseek-flash`）。
@@ -1151,7 +1166,7 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 ### v1.1.8.6 — 元数据接 models.dev + Omen Alpha 接入（2026-09-05）
 
 - **模型元数据源升级**：`model_discovery.py` 接入 `models.dev`（OpenCode 官方同源），优先级链为本地手工 registry > models.dev > opencodex 上游。一次回填修正 20 个模型的上下文/档位偏差（如 luna 372K→1.05M、kimi-k2.x 1M→262K、grok-4.6 1M→500K），新增模型元数据从此与 OpenCode 客户端同源，不再靠模板抄错。
-- **Omen Alpha (Go) 接入**：网关 `/responses` 适配层对其全坏（裸 500/带工具 400），代理新增 `RESPONSES_ALWAYS_BRIDGE` 无条件走 chat 桥（官方原生端点即 chat）；原生视觉直通（`NATIVE_VISION_MODELS`）、deepseek 边车代搜修复（直连用裸模型 ID 修 401 + 超时 15s→60s）、`_SEARCH_FALSE_MODELS` 保护。
+- **Omen Alpha (Go) 接入**：网关 `/responses` 适配层对其全坏（裸 500/带工具 400），代理新增 `RESPONSES_ALWAYS_BRIDGE` 无条件走 chat 桥（官方原生端点即 chat）；原生视觉直通（`NATIVE_RELAY_MODELS`）、deepseek 边车代搜修复（直连用裸模型 ID 修 401 + 超时 15s→60s）、`_SEARCH_FALSE_MODELS` 保护。
 - **sync 脚本两处修复**：占位符替换硬编码旧路径；config.toml 模板不再整体抄 home（防真 key/本机路径进公开模板）。
 - 版本 **1.1.8.6 (16)**。
 
@@ -1182,12 +1197,12 @@ bash 在非 UTF-8 locale 下会把标点当成变量名的一部分 → `set -u`
 ### v1.1.8.1 — 同步 Muse Spark 1.3（2026-09-03）
 
 - 三处回退表补上 `muse-spark-1.3-contributor`：配额与 1.2 同值（45,300 / 113,300 / 226,600），图例给略深一档的绿与 1.2 区分。
-- `Resources/codex` 副本同步电脑最新配置（vision_proxy 1.3 原生搜索等），models.json 模板 33→34 项。
+- `Resources/codex` 副本同步电脑最新配置（relay 1.3 原生搜索等），models.json 模板 33→34 项。
 - 版本 **1.1.8.1 (11)**。
 
 ### v1.1.8 — 非联网模型只走 deepseek 代搜（2026-09-02）
 
-- 按你说的改成 `非联网的只走 deepseek`：`vision_proxy` 的 `Google/DuckDuckGo 直连` 那段删了，只留 `deepseek-v4-flash-go` 代搜；`websearch-server` 的 `回退 Exa/Parallel` 也删了，只留 `delegate`，`深圳天气` 试过真能搜到才停。
+- 按你说的改成 `非联网的只走 deepseek`：`relay` 的 `Google/DuckDuckGo 直连` 那段删了，只留 `deepseek-v4-flash-go` 代搜；`websearch-server` 的 `回退 Exa/Parallel` 也删了，只留 `delegate`，`深圳天气` 试过真能搜到才停。
 - 版本 **1.1.8 (10)**。
 
 ### v1.1.7 — 双路联网搜索 + 代搜托付（2026-09-02）

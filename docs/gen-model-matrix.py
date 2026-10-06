@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """生成 docs/MODEL-MATRIX.md（模型 × 调整矩阵）。
 
-数据源：Resources/codex/templates/models.json（模型清单）+ Resources/codex/vision/vision_proxy.py（协议/搜索名单）
+数据源：Resources/codex/templates/models.json（模型清单）+ Resources/codex/relay/relay.py（协议/搜索名单）
 2026-09-10：视觉转文字链路下线，矩阵不再有「视觉」列。
 
 用法：python3 docs/gen-model-matrix.py
@@ -17,9 +17,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS = ROOT / "Resources/codex/templates/models.json"
-# 2026-09-23 Phase 3：代理拆成 vision_proxy.py + proxy/ 包，所以常量要按目录找
-PROXY_DIR = ROOT / "Resources/codex/vision"
-PROXY = PROXY_DIR / "vision_proxy.py"
+# 2026-09-23 Phase 3：代理拆成 relay.py + proxy/ 包，所以常量要按目录找
+PROXY_DIR = ROOT / "Resources/codex/relay"
+PROXY = PROXY_DIR / "relay.py"
 OUT = ROOT / "docs/MODEL-MATRIX.md"
 
 
@@ -32,7 +32,7 @@ def read_proxy_sources() -> str:
 
 
 def slug_set(source: str, name: str) -> set[str]:
-    """从 vision_proxy.py 里抠出 frozenset 常量里的模型名。"""
+    """从 relay.py 里抠出 frozenset 常量里的模型名。"""
     m = re.search(rf"{name}\s*=\s*frozenset\(\{{(.*?)\}}\)", source, re.S)
     if not m:
         return set()
@@ -70,7 +70,7 @@ def main() -> int:
         f"# 模型 × 调整矩阵（基线 {time.strftime('%Y-%m-%d')}）",
         "",
         "> 由 `docs/gen-model-matrix.py` 生成：模型清单来自 `Resources/codex/templates/models.json`，",
-        "> 协议/搜索列来自 `vision_proxy.py` 的名单。新增模型按 SOP 接入后重跑本脚本。",
+        "> 协议/搜索列来自 `relay.py` 的名单。新增模型按 SOP 接入后重跑本脚本。",
         "",
         f"总数 {len(models)}（Go {len(go)} + Zen {len(zen)} + 官方 {len(official)}）",
         "",

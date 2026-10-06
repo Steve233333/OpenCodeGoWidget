@@ -38,14 +38,14 @@ fi
 
 # 更新模式：提前校验是否存在旧安装
 CODEX_HOME="$HOME/.codex-deepseek"
-ENV_FILE="$HOME/.config/agent-vision-toolkit/env"
+ENV_FILE="$HOME/.config/agent-relay/env"
 PATCH_BASE="$HOME/.codex/picker-patch"
 PASS_FILE="$PATCH_BASE/.keychain-pass"
 
 if [[ "$MODE" == "update" ]]; then
   if [[ ! -f "$CODEX_HOME/config.toml" && ! -f "$ENV_FILE" ]]; then
     if [[ "$NONINTERACTIVE" -eq 1 ]]; then
-      die "更新模式下未检测到现有安装（~/.codex-deepseek/config.toml 与 ~/.config/agent-vision-toolkit/env 均不存在），请改用 安装 模式。"
+      die "更新模式下未检测到现有安装（~/.codex-deepseek/config.toml 与 ~/.config/agent-relay/env 均不存在），请改用 安装 模式。"
     else
       # 友好提示并切回安装
       osascript - "未检测到现有安装，将为你切换到“安装”模式。\n\n请继续填写 Key 完成首次安装。" "Codex 一键配置安装器" <<'APPLESCRIPT' >/dev/null 2>&1 || true

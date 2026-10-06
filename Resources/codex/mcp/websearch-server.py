@@ -15,14 +15,19 @@ import urllib.request, urllib.error
 EXA_URL = os.environ.get("EXA_API_KEY") and f"https://mcp.exa.ai/mcp?exaApiKey={os.environ['EXA_API_KEY']}" or "https://mcp.exa.ai/mcp"
 PARALLEL_URL = "https://search.parallel.ai/mcp"
 
-# 复用 vision_proxy 的绕代理直连思路（见 codex-vpn-502-fix）：Clash/SakuraCat 会把系统代理设成 127.0.0.1:7890，
+# 复用 relay 的绕代理直连思路（见 codex-vpn-502-fix）：Clash/SakuraCat 会把系统代理设成 127.0.0.1:7890，
 # 沙箱里 DNS 解析失败时 urllib 默认走代理就卡死，DIRECT_OPENER 强制直连避免卡 50 秒。
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 # 兜底：DIRECT 失败时再试系统/环境代理，兼顾“连 VPN 上外网 / 不连上大陆网”两种情况
 SYSTEM_OPENER = urllib.request.build_opener()
 
 def _load_zen_key():
-    for fp in ["/Users/steve233/.config/agent-vision-toolkit/env", str(pathlib.Path.home()/".config/agent-vision-toolkit/env")]:
+    # 2026-10-06 改名：新路径优先，旧路径兜底（迁移前后都能读到同一个 ZEN key）
+    _candidates = [
+        str(pathlib.Path.home() / ".config/agent-relay/env"),
+        str(pathlib.Path.home() / ".config/agent-vision-toolkit/env"),
+    ]
+    for fp in _candidates:
         try:
             for line in open(fp):
                 line=line.strip()
@@ -33,7 +38,7 @@ def _load_zen_key():
     return os.environ.get("ZEN_API_KEY","")
 
 def _delegate_via_deepseek(query: str, timeout=12):
-    """让 deepseek-v4-flash-go (原生 web_search) 代搜，给 24 个无原生模型用。走本地 vision_proxy 127.0.0.1:19100，经它转发到 https://opencode.ai/zen/go，复用 ZEN_API_KEY，双路兼顾 VPN 开/关。"""
+    """让 deepseek-v4-flash-go (原生 web_search) 代搜，给 24 个无原生模型用。走本地 relay 127.0.0.1:19100，经它转发到 https://opencode.ai/zen/go，复用 ZEN_API_KEY，双路兼顾 VPN 开/关。"""
     import time as _time
     zen_key = _load_zen_key()
     if not zen_key:
@@ -46,7 +51,7 @@ def _delegate_via_deepseek(query: str, timeout=12):
     }
     body = json.dumps(payload).encode()
     headers_base = {"Content-Type":"application/json", "Accept":"text/event-stream", "User-Agent":"websearch-delegate/1.0"}
-    # 1) 走本地 vision_proxy（它会把 Authorization 换成真实 ZEN key 并选 GO_UPSTREAM）
+    # 1) 走本地 relay（它会把 Authorization 换成真实 ZEN key 并选 GO_UPSTREAM）
     # 2) 直连 opencode.ai/zen/go 兜底
     targets = [
         ("http://127.0.0.1:19100/v1/responses", True),

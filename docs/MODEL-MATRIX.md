@@ -1,7 +1,7 @@
 # 模型 × 调整矩阵（基线 2026-09-23）
 
 > 由 `docs/gen-model-matrix.py` 生成：模型清单来自 `Resources/codex/templates/models.json`，
-> 协议/搜索列来自 `vision_proxy.py` 的名单。新增模型按 SOP 接入后重跑本脚本。
+> 协议/搜索列来自 `relay.py` 的名单。新增模型按 SOP 接入后重跑本脚本。
 
 总数 42（Go 30 + Zen 10 + 官方 2）
 

@@ -69,7 +69,7 @@ def _rewrite_apply_patch_tool(parsed):
         tool["parameters"] = parameters
         changed = True
     if changed:
-        _log("[vision-proxy] apply_patch tool rewritten custom->function for upstream")
+        _log("[relay] apply_patch tool rewritten custom->function for upstream")
     return changed
 
 
@@ -95,7 +95,7 @@ def _extract_apply_patch_input(args_acc):
                 return value
         return args_acc
     except Exception as exc:
-        _log(f"[vision-proxy] extract_apply_patch_input failed: {exc!r}")
+        _log(f"[relay] extract_apply_patch_input failed: {exc!r}")
         return args_acc
 
 
@@ -117,9 +117,9 @@ def _rewrite_apply_patch_response_json(body, model=None):
         for item in output:
             if not isinstance(item, dict):
                 continue
-            if (_is_muse_model(model) and _muse_flag("VISION_PROXY_MUSE_TOOLNAME_FIX")
+            if (_is_muse_model(model) and _muse_flag("RELAY_MUSE_TOOLNAME_FIX")
                     and _fix_namespaced_tool_name(item)):
-                _log("[vision-proxy] muse namespaced tool call split (non-stream)")
+                _log("[relay] muse namespaced tool call split (non-stream)")
                 changed = True
             if item.get("type") != "function_call":
                 continue
@@ -143,5 +143,5 @@ def _rewrite_apply_patch_response_json(body, model=None):
             return body
         return json.dumps(parsed, ensure_ascii=False).encode()
     except Exception as exc:
-        _log(f"[vision-proxy] json response rewrite failed: {exc!r}")
+        _log(f"[relay] json response rewrite failed: {exc!r}")
         return body

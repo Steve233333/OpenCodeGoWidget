@@ -8,7 +8,7 @@ import AppKit
 /// "Reconnecting… waiting for network"，用户只能自己再点一次「配置」。
 ///
 /// 这里只负责"什么时候叫修"：启动后 10 秒、每 5 分钟、系统唤醒时先探活（端口有响应就立刻返回，
-/// 平时零开销），没响应才去调 `ensure-proxy.sh`。**挑解释器 / 写 plist / 起服务 / 探活验证
+/// 平时零开销），没响应才去调 `ensure-relay.sh`。**挑解释器 / 写 plist / 起服务 / 探活验证
 /// 全在那一个脚本里**（安装器也调它），这边不复制任何规则。
 @MainActor
 final class ProxyWatchdog: ObservableObject {
@@ -32,9 +32,9 @@ final class ProxyWatchdog: ObservableObject {
     private var started = false
 
     private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
-    private static var visionDir: URL { home.appendingPathComponent(".local/share/agent-vision-toolkit") }
-    private static var ensureScript: URL { visionDir.appendingPathComponent("ensure-proxy.sh") }
-    private static var runtimeFile: URL { visionDir.appendingPathComponent("proxy-runtime") }
+    private static var visionDir: URL { home.appendingPathComponent(".local/share/agent-relay") }
+    private static var ensureScript: URL { visionDir.appendingPathComponent("ensure-relay.sh") }
+    private static var runtimeFile: URL { visionDir.appendingPathComponent("relay-runtime") }
     private static var logFile: URL { home.appendingPathComponent("Library/Logs/opencodego-watchdog.log") }
     private static let discoveryLabel = "com.steve233.go-model-discovery"
 
@@ -60,7 +60,7 @@ final class ProxyWatchdog: ObservableObject {
 
     // MARK: - 体检 / 修复
 
-    /// 先探活：活着就只刷新状态（读 proxy-runtime），死了才动手修。
+    /// 先探活：活着就只刷新状态（读 relay-runtime），死了才动手修。
     func check(reason: String) async {
         if await HealthCheck.proxyResponds() {
             refreshFromRuntime()
@@ -84,12 +84,12 @@ final class ProxyWatchdog: ObservableObject {
         let script = ensureScriptForRun()
         guard let script else {
             status = .failed
-            detail = "找不到 ensure-proxy.sh（点「配置」重装一次）"
+            detail = "找不到 ensure-relay.sh（点「配置」重装一次）"
             appendLog("\(reason)：找不到 \(Self.ensureScript.path)")
             return
         }
 
-        appendLog("\(reason)：代理没响应 → 调 ensure-proxy.sh")
+        appendLog("\(reason)：代理没响应 → 调 ensure-relay.sh")
         let (rc, output) = await runProcess("/bin/bash", [script.path, "--trigger", "watchdog", "--quiet"], timeout: 120)
         let alive = await HealthCheck.proxyResponds()
         refreshFromRuntime()
@@ -112,7 +112,7 @@ final class ProxyWatchdog: ObservableObject {
     private func ensureScriptForRun() -> URL? {
         if FileManager.default.isExecutableFile(atPath: Self.ensureScript.path) { return Self.ensureScript }
         if let bundled = Bundle.main.resourceURL?
-            .appendingPathComponent("codex/vision/ensure-proxy.sh"),
+            .appendingPathComponent("codex/relay/ensure-relay.sh"),
            FileManager.default.fileExists(atPath: bundled.path) {
             try? FileManager.default.createDirectory(at: Self.visionDir, withIntermediateDirectories: true)
             try? FileManager.default.removeItem(at: Self.ensureScript)
@@ -186,7 +186,7 @@ final class ProxyWatchdog: ObservableObject {
         }
         if proc.isRunning {
             proc.terminate()
-            return (-9, "ensure-proxy.sh 超时（\(Int(timeout)) 秒）")
+            return (-9, "ensure-relay.sh 超时（\(Int(timeout)) 秒）")
         }
         let data = (try? pipe.fileHandleForReading.readToEnd()) ?? Data()
         return (proc.terminationStatus, String(data: data, encoding: .utf8) ?? "")

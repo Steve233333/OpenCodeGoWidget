@@ -7,7 +7,7 @@
 电脑上的 `~/.codex-deepseek/` 是老大：
 - `config.toml` 怎么连、默认用哪个模型、记忆开不开
 - `models.json` 有哪些模型、排什么顺序
-- `vision_proxy.py` 怎么转发（Go/Zen 路由、协议桥、搜索边车；视觉转文字已下线）
+- `relay.py` 怎么转发（Go/Zen 路由、协议桥、搜索边车；视觉转文字已下线）
 - `model_discovery.py` 怎么从配额表自动同步模型、档位白名单和代理档位表
 - `reasoning_registry.json`（生成物）和 `reasoning_overrides.json`（手工档位）
 - `scripts/archive-large-rollouts.sh` 搬不搬大对话（现在是不搬）
@@ -15,7 +15,7 @@
 小组件里的 `Resources/codex/` 是小弟：
 - `templates/config.toml`
 - `templates/models.json`
-- `vision/vision_proxy.py`
+- `vision/relay.py`
 - `vision/model_discovery.py` + `vision/tests/`
 - `vision/reasoning_registry.json` + `vision/reasoning_overrides.json`
 - `scripts/archive-large-rollouts.sh`

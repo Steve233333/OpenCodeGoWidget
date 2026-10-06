@@ -116,7 +116,7 @@ def _inject_synthetic_web_search(parsed, model=None, go_route=False):
     if not replaced:
         new_tools.append(synthetic)
     parsed["tools"] = new_tools
-    _log(f"[vision-proxy] injected synthetic web_search for {model} sidecar (unconditional)")
+    _log(f"[relay] injected synthetic web_search for {model} sidecar (unconditional)")
     return True
 
 
@@ -127,7 +127,7 @@ async def _perform_web_search(query, zen_key=None):
         zen_key = os.environ.get("ZEN_API_KEY", "")
         if not zen_key:
             try:
-                for fp in ["/Users/steve233/.config/agent-vision-toolkit/env", str(pathlib.Path.home() / ".config/agent-vision-toolkit/env")]:
+                for fp in ["/Users/steve233/.config/agent-relay/env", str(pathlib.Path.home() / ".config/agent-relay/env")]:
                     for line in open(fp):
                         line = line.strip()
                         if line.startswith("ZEN_API_KEY"):
@@ -140,7 +140,7 @@ async def _perform_web_search(query, zen_key=None):
             except:
                 pass
     if not zen_key:
-        _log(f"[vision-proxy] _perform_web_search no ZEN_API_KEY for query='{query[:30]}'")
+        _log(f"[relay] _perform_web_search no ZEN_API_KEY for query='{query[:30]}'")
         return f"Search for '{query}' failed: ZEN_API_KEY missing"
     # 只走 deepseek-v4-flash-go 代搜
     try:
@@ -157,7 +157,7 @@ async def _perform_web_search(query, zen_key=None):
         _delegate_direct = dict(_delegate_local, model="deepseek-v4-flash")
         data_local = json.dumps(_delegate_local).encode()
         data_direct = json.dumps(_delegate_direct).encode()
-        # 双路：先本地 19100（走 vision_proxy 转发，自动换真实 key），不通直连 zen/go
+        # 双路：先本地 19100（走 relay 转发，自动换真实 key），不通直连 zen/go
         last_err = None
         for url, is_local, data in [("http://127.0.0.1:19100/v1/responses", True, data_local), ("https://opencode.ai/zen/go/v1/responses", False, data_direct)]:
             for opener in (urllib.request.build_opener(urllib.request.ProxyHandler({})), urllib.request.build_opener()):
@@ -166,7 +166,7 @@ async def _perform_web_search(query, zen_key=None):
                     req.add_header("Authorization", f"Bearer {zen_key}")
                     req.add_header("Content-Type", "application/json")
                     req.add_header("Accept", "application/json, text/event-stream")
-                    req.add_header("User-Agent", "vision-proxy-delegate/1.0")
+                    req.add_header("User-Agent", "agent-relay-delegate/1.0")
 
                     def do_search():
                         with opener.open(req, timeout=60) as resp:
@@ -213,19 +213,19 @@ async def _perform_web_search(query, zen_key=None):
 
                     result = await asyncio.to_thread(do_search)
                     if result and len(result.strip()) > 30:
-                        _log(f"[vision-proxy] delegate deepseek success via {url} query='{query[:30]}' len={len(result)}")
+                        _log(f"[relay] delegate deepseek success via {url} query='{query[:30]}' len={len(result)}")
                         return result
                     last_err = f"{url} empty"
                 except Exception as e:
                     last_err = f"{url} {e!r}"
-                    _log(f"[vision-proxy] delegate failed {url} opener={'direct' if 'ProxyHandler' in str(type(opener)) else 'system'}: {e!r}")
+                    _log(f"[relay] delegate failed {url} opener={'direct' if 'ProxyHandler' in str(type(opener)) else 'system'}: {e!r}")
                     if "ProxyHandler" in str(type(opener)):
                         continue
                     break
-        _log(f"[vision-proxy] delegate all failed query='{query[:30]}' last_err={last_err}")
+        _log(f"[relay] delegate all failed query='{query[:30]}' last_err={last_err}")
         return f"Search for '{query}' failed: delegate all targets failed ({last_err})"
     except Exception as e:
-        _log(f"[vision-proxy] sidecar deepseek failed: {e!r}")
+        _log(f"[relay] sidecar deepseek failed: {e!r}")
         return f"Search for '{query}' failed: {e!r}"
 
 
@@ -277,7 +277,7 @@ async def _handle_shell_network_sidecar(item, zen_key=None):
     url = urls[0].rstrip('"\';')
     # Clean up URL (remove trailing | head etc.)
     url = url.split("|")[0].strip().split()[0].strip('"\';')
-    _log(f"[vision-proxy] shell network sidecar for {url}")
+    _log(f"[relay] shell network sidecar for {url}")
     try:
         def fetch():
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
@@ -290,10 +290,10 @@ async def _handle_shell_network_sidecar(item, zen_key=None):
                 return content
         content = await asyncio.to_thread(fetch)
         if content and len(content) > 50:
-            _log(f"[vision-proxy] shell sidecar success {url} len={len(content)}")
+            _log(f"[relay] shell sidecar success {url} len={len(content)}")
             return f"Fetched {url} (via sidecar, bypassing sandbox):\n{content[:6000]}"
     except Exception as e:
-        _log(f"[vision-proxy] shell sidecar failed {url}: {e!r}")
+        _log(f"[relay] shell sidecar failed {url}: {e!r}")
         return f"Failed to fetch {url} via sidecar: {e}. Try using web_search tool instead for search."
     return None
 
@@ -353,5 +353,5 @@ def _normalize_web_search_call(parsed):
             action["queries"] = [fallback]
             changed = True
     if changed:
-        _log("[vision-proxy] normalized web_search_call action(s) to gateway format for zen/go (dual-field)")
+        _log("[relay] normalized web_search_call action(s) to gateway format for zen/go (dual-field)")
     return changed

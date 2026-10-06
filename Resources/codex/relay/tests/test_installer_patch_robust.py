@@ -93,8 +93,8 @@ def t_installer_simple_pass_allowed():
     # use existing Go if available, else dummy long
     existing = ""
     try:
-        if os.path.exists(os.path.expanduser("~/.config/agent-vision-toolkit/env")):
-            txt = open(os.path.expanduser("~/.config/agent-vision-toolkit/env")).read()
+        if os.path.exists(os.path.expanduser("~/.config/agent-relay/env")):
+            txt = open(os.path.expanduser("~/.config/agent-relay/env")).read()
             m = re.search(r'ZEN_API_KEY=(\S+)', txt)
             if m: existing = m.group(1).strip()
     except: pass
@@ -166,9 +166,9 @@ def t_detect_status_malformed_files():
         # malformed models.json
         (cd / "models.json").write_text('{"models": [{"slug": 123}]}', encoding="utf-8")
         # env with weird lines
-        envp = home / ".config/agent-vision-toolkit/env"
+        envp = home / ".config/agent-relay/env"
         envp.parent.mkdir(parents=True, exist_ok=True)
-        envp.write_text('ZEN_API_KEY=  "  spaced \"key\"  "\nVISION_API_KEY=\n# comment\nNOT_A_KEY=foo\n', encoding="utf-8")
+        envp.write_text('ZEN_API_KEY=  "  spaced \"key\"  "\nRELAY_API_KEY=\n# comment\nNOT_A_KEY=foo\n', encoding="utf-8")
         # patch-state with truncated json
         patchdir = home / ".codex/picker-patch"
         patchdir.mkdir(parents=True)

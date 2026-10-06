@@ -66,7 +66,7 @@ Implement as request/response rewrites in the proxy, gated on the model name sta
 ## Verify
 
 ```bash
-python3 scripts/test_muse_compat.py ~/.local/share/agent-vision-toolkit/vision_proxy.py
+python3 scripts/test_muse_compat.py ~/.local/share/agent-relay/relay.py
 ```
 
 Twelve offline assertions: each rewrite fires for Muse, no-ops for other models, and stall

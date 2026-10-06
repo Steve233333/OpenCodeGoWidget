@@ -9,21 +9,21 @@
 # ---------------------------------------------------------------------------
 PROXY_OK=0
 if [[ "$USE_PROXY" -eq 1 ]]; then
-  VISION_DIR="$HOME/.local/share/agent-vision-toolkit"
-  mkdir -p "$VISION_DIR" "$HOME/.config/agent-vision-toolkit"
+  RELAY_DIR="$HOME/.local/share/agent-relay"
+  mkdir -p "$RELAY_DIR" "$HOME/.config/agent-relay"
   # 2026-09-05: 逐文件 mtime 比较同步（见 sync_newer_file），旧包不再整体覆盖本机
-  if [ -d "$RES_DIR/vision" ]; then
-    ( cd "$RES_DIR/vision" && find . -type f -print0 ) | while IFS= read -r -d '' _rel; do
-      sync_newer_file "$RES_DIR/vision/$_rel" "$VISION_DIR/$_rel"
+  if [ -d "$RES_DIR/relay" ]; then
+    ( cd "$RES_DIR/relay" && find . -type f -print0 ) | while IFS= read -r -d '' _rel; do
+      sync_newer_file "$RES_DIR/relay/$_rel" "$RELAY_DIR/$_rel"
     done
   else
-    cp -R "$RES_DIR/vision/." "$VISION_DIR/" 2>/dev/null || true
+    cp -R "$RES_DIR/relay/." "$RELAY_DIR/" 2>/dev/null || true
   fi
   touch "$ENV_FILE"
   chmod 600 "$ENV_FILE" 2>/dev/null || true
   tmp_env_x="$(mktemp)"
   # 2026-09-10：视觉链路下线，顺手把历史 VISION_* 三行从旧机器的 env 里清掉
-  grep -vE '^(VISION_API_KEY|VISION_BASE_URL|VISION_MODEL|ZEN_API_KEY)=' "$ENV_FILE" 2>/dev/null > "$tmp_env_x" || true
+  grep -vE '^(RELAY_API_KEY|RELAY_BASE_URL|RELAY_MODEL|ZEN_API_KEY)=' "$ENV_FILE" 2>/dev/null > "$tmp_env_x" || true
   {
     cat "$tmp_env_x"
     if ! grep -q '^LANG=' "$tmp_env_x" 2>/dev/null; then printf 'LANG=zh\n'; fi
@@ -45,19 +45,19 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
       fi
     fi
   done
-  # 2026-09-23（Phase 5）：挑解释器 / 写 plist / 起服务 / 探活**只有一份实现** = ensure-proxy.sh。
+  # 2026-09-23（Phase 5）：挑解释器 / 写 plist / 起服务 / 探活**只有一份实现** = ensure-relay.sh。
   # 以前这里用 `command -v python3` 挑解释器：App 点「配置」时 PATH 很干净，命中的是
   # /usr/bin/python3（Xcode 自带的 3.9），刚升完 macOS 27 它一时起不来 → 代理 5 分钟没监听 →
   # Codex 侧就是 "Reconnecting… waiting for network"。现在由脚本逐个实测候选解释器再决定。
   if [[ "$SKIP_PROXY_START" -eq 0 ]]; then
     log "阶段：重启本地代理（ensure-proxy：实测挑解释器 → 起服务 → 探活）…"
     # --force-restart：这一步刚把新的代理代码同步下来，跑着的旧进程必须换掉才会生效
-    if "$VISION_DIR/ensure-proxy.sh" --vision-dir "$VISION_DIR" --env-file "$ENV_FILE" \
+    if "$RELAY_DIR/ensure-relay.sh" --vision-dir "$RELAY_DIR" --env-file "$ENV_FILE" \
          --trigger installer --force-restart >>"$LOG" 2>&1; then
       PROXY_OK=1
       log "本地代理已启动并验证（127.0.0.1:19100）"
     else
-      log "WARN: 代理这次没能起来（详见 $VISION_DIR/ensure-proxy.log）——App 的看护每 5 分钟会再试一次"
+      log "WARN: 代理这次没能起来（详见 $RELAY_DIR/ensure-relay.log）——App 的看护每 5 分钟会再试一次"
     fi
   else
     PROXY_OK=1
@@ -65,7 +65,7 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   fi
 
   # 解释器只挑一次：Go 模型自动发现任务复用 ensure-proxy 挑中的那个（同一个决定，两处用）
-  PY_BIN="$(sed -n 's/^interpreter=//p' "$VISION_DIR/proxy-runtime" 2>/dev/null | head -1)"
+  PY_BIN="$(sed -n 's/^interpreter=//p' "$RELAY_DIR/relay-runtime" 2>/dev/null | head -1)"
   if [[ -z "$PY_BIN" || ! -x "$PY_BIN" ]]; then
     for _cand in /Library/Frameworks/Python.framework/Versions/*/bin/python3 \
                  /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
@@ -86,7 +86,7 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   <key>ProgramArguments</key>
   <array>
     <string>$PY_BIN</string>
-    <string>$VISION_DIR/model_discovery.py</string>
+    <string>$RELAY_DIR/model_discovery.py</string>
     <string>--sync</string>
   </array>
   <key>EnvironmentVariables</key>
@@ -95,8 +95,8 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   </dict>
   <key>StartInterval</key><integer>21600</integer>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>$VISION_DIR/discovery.log</string>
-  <key>StandardErrorPath</key><string>$VISION_DIR/discovery.err.log</string>
+  <key>StandardOutPath</key><string>$RELAY_DIR/discovery.log</string>
+  <key>StandardErrorPath</key><string>$RELAY_DIR/discovery.err.log</string>
 </dict>
 </plist>
 EOF2
@@ -105,7 +105,7 @@ EOF2
     log "Go 模型自动发现已安装（6h + 启动，跟配额表自动同步）"
     # 立即同步一次（quota表 -> models.json，需联网约 10~20 秒，详细输出只写文件日志）
     log "阶段：同步 Go 模型配额表（需联网，请耐心等待）…"
-    "$PY_BIN" "$VISION_DIR/model_discovery.py" --sync --force >>"$LOG" 2>&1 || log "WARN: 首次 Go 模型同步失败，详见 $VISION_DIR/discovery.err.log"
+    "$PY_BIN" "$RELAY_DIR/model_discovery.py" --sync --force >>"$LOG" 2>&1 || log "WARN: 首次 Go 模型同步失败，详见 $RELAY_DIR/discovery.err.log"
     log "配额表同步步骤结束"
   fi
 else
@@ -114,7 +114,7 @@ else
   # Go 模型自动发现还会每 6h 把 -go 模型写回 models.json，导致 Codex 里能选到
   # 用不了的 Go 模型（选中会被直连发给 DeepSeek 官方报 model 不支持）。
   # 之后加回 Go Key 再点配置，这两项会自动重新安装。
-  STALE_PROXY_PLIST="$HOME/Library/LaunchAgents/com.agent-vision-toolkit.proxy.plist"
+  STALE_PROXY_PLIST="$HOME/Library/LaunchAgents/com.agent-relay.plist"
   STALE_DISCOVERY_PLIST="$HOME/Library/LaunchAgents/com.steve233.go-model-discovery.plist"
   launchctl bootout "gui/$(id -u)" "$STALE_PROXY_PLIST" 2>/dev/null || launchctl unload "$STALE_PROXY_PLIST" 2>/dev/null || true
   launchctl bootout "gui/$(id -u)/com.steve233.go-model-discovery" 2>/dev/null || true

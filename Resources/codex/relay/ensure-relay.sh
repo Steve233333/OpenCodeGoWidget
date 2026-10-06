@@ -10,7 +10,7 @@
 # 规则只有一处：**挑一个真能跑的解释器 → 写/刷新 plist → 起服务 → 探活验证**。
 #
 # 用法：
-#   ensure-proxy.sh [--env-file PATH] [--vision-dir PATH] [--port N]
+#   ensure-relay.sh [--env-file PATH] [--vision-dir PATH] [--port N]
 #                   [--trigger installer|watchdog|manual] [--check-only] [--dry-run] [--quiet]
 #                   [--force-restart]
 # 退出码：0 = 代理已验证在跑；1 = 这次没能让它跑起来；2 = 参数/环境问题
@@ -20,8 +20,8 @@
 #   PROXY_LABEL / PROXY_PLIST                       覆盖 launchd label 与 plist 路径
 set -uo pipefail
 
-VISION_DIR="$HOME/.local/share/agent-vision-toolkit"
-ENV_FILE="$HOME/.config/agent-vision-toolkit/env"
+RELAY_DIR="$HOME/.local/share/agent-relay"
+ENV_FILE="$HOME/.config/agent-relay/env"
 PORT=19100
 TRIGGER=manual
 CHECK_ONLY=0
@@ -32,7 +32,7 @@ QUIET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --env-file)   ENV_FILE="$2"; shift 2 ;;
-    --vision-dir) VISION_DIR="$2"; shift 2 ;;
+    --vision-dir) RELAY_DIR="$2"; shift 2 ;;
     --port)       PORT="$2"; shift 2 ;;
     --trigger)    TRIGGER="$2"; shift 2 ;;
     --check-only) CHECK_ONLY=1; shift ;;
@@ -43,17 +43,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-LABEL="${PROXY_LABEL:-com.agent-vision-toolkit.proxy}"
+LABEL="${PROXY_LABEL:-com.agent-relay}"
 PLIST="${PROXY_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
-RUNTIME="$VISION_DIR/proxy-runtime"
-LOG="$VISION_DIR/ensure-proxy.log"
+RUNTIME="$RELAY_DIR/relay-runtime"
+LOG="$RELAY_DIR/ensure-relay.log"
 UID_NUM="$(/usr/bin/id -u)"
 
 say() { [ "$QUIET" = 1 ] || echo "$@"; }
 logline() {
   # --dry-run 不落任何文件（连日志也不写），只从 stdout 报它"会做什么"
   if [ "$DRY_RUN" != 1 ]; then
-    mkdir -p "$VISION_DIR" 2>/dev/null
+    mkdir -p "$RELAY_DIR" 2>/dev/null
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG" 2>/dev/null
   fi
   say "$@"
@@ -137,7 +137,7 @@ write_plist() {
   <key>ProgramArguments</key>
   <array>
     <string>$py</string>
-    <string>$VISION_DIR/vision_proxy.py</string>
+    <string>$RELAY_DIR/relay.py</string>
     <string>--port</string><string>$PORT</string>
     <string>--upstream</string><string>https://api.deepseek.com/</string>
     <string>--env-file</string><string>$ENV_FILE</string>
@@ -148,8 +148,8 @@ write_plist() {
   </dict>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>$VISION_DIR/proxy.log</string>
-  <key>StandardErrorPath</key><string>$VISION_DIR/proxy.err.log</string>
+  <key>StandardOutPath</key><string>$RELAY_DIR/relay.log</string>
+  <key>StandardErrorPath</key><string>$RELAY_DIR/relay.err.log</string>
 </dict>
 </plist>
 EOF
@@ -176,7 +176,7 @@ wait_port() {
 # 状态文件：只由本脚本写（App 只读它显示"当前解释器 / 上次自动修复时间"）
 write_state() {
   local interp="$1" version="$2" result="$3" detail="$4" repair_at="$5"
-  mkdir -p "$VISION_DIR" 2>/dev/null
+  mkdir -p "$RELAY_DIR" 2>/dev/null
   {
     printf 'interpreter=%s\n'   "$interp"
     printf 'version=%s\n'       "$version"
@@ -191,7 +191,7 @@ write_state() {
 
 # ---- 参数/环境收尾 ----
 if [ "$DRY_RUN" != 1 ]; then
-  mkdir -p "$VISION_DIR" "$(dirname "$ENV_FILE")" 2>/dev/null
+  mkdir -p "$RELAY_DIR" "$(dirname "$ENV_FILE")" 2>/dev/null
   if [ ! -f "$ENV_FILE" ]; then
     : > "$ENV_FILE" 2>/dev/null
   fi
@@ -264,11 +264,11 @@ if [ -n "$CHOSEN" ]; then
   exit 0
 fi
 
-ERRLINE="$(tail -3 "$VISION_DIR/proxy.err.log" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+ERRLINE="$(tail -3 "$RELAY_DIR/relay.err.log" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
 if [ "$DRY_RUN" = 1 ]; then
   say "dry-run：没有可用解释器（按候选清单逐个试过）"
   exit 1
 fi
 write_state "${SKIP:-none}" "?" failed "没有可用解释器，或起来了端口也无响应" "$PREV_REPAIR"
-logline "❌ 代理没能起来。下一步：点「配置」重装一次；日志：$LOG 和 $VISION_DIR/proxy.err.log${ERRLINE:+（最后几行：${ERRLINE}）}"
+logline "❌ 代理没能起来。下一步：点「配置」重装一次；日志：$LOG 和 $RELAY_DIR/relay.err.log${ERRLINE:+（最后几行：${ERRLINE}）}"
 exit 1

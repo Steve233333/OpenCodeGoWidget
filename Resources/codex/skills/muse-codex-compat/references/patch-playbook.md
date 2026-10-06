@@ -1,6 +1,6 @@
 # Patch playbook: five Muse rewrites in a local proxy
 
-Reference implementation: `~/.local/share/agent-vision-toolkit/vision_proxy.py` (the proxy this
+Reference implementation: `~/.local/share/agent-relay/relay.py` (the proxy this
 skill was derived from). Adapt names to the proxy you are patching; keep the structure.
 
 ## Placement rules
@@ -150,10 +150,10 @@ client retry loop cannot multiply upstream calls.
 ## Switches and rollback
 
 ```
-VISION_PROXY_MUSE_SCHEMA_FIX=1     # depth cap + $ref inlining + strict relaxation
-VISION_PROXY_MUSE_NO_PREAMBLE=1    # trailing constraint in input
-VISION_PROXY_MUSE_STALL_RETRY=1    # buffered stall detection + retry
-VISION_PROXY_MUSE_TOOLNAME_FIX=1   # dotted tool-name splitting
+RELAY_MUSE_SCHEMA_FIX=1     # depth cap + $ref inlining + strict relaxation
+RELAY_MUSE_NO_PREAMBLE=1    # trailing constraint in input
+RELAY_MUSE_STALL_RETRY=1    # buffered stall detection + retry
+RELAY_MUSE_TOOLNAME_FIX=1   # dotted tool-name splitting
 ```
 
 Read them from the proxy's env file so a fix can be disabled without a code change. Rolling the

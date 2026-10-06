@@ -7,23 +7,23 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/Resources/codex/vision"
-VISION_HOME="${VISION_HOME:-$HOME/.local/share/agent-vision-toolkit}"
-BACKUP="$VISION_HOME/.backup-$(date +%Y%m%d%H%M%S)"
+SRC="$ROOT/Resources/codex/relay"
+RELAY_HOME="${RELAY_HOME:-$HOME/.local/share/agent-relay}"
+BACKUP="$RELAY_HOME/.backup-$(date +%Y%m%d%H%M%S)"
 
 echo "==> 备份当前运行目录 → $BACKUP"
 mkdir -p "$BACKUP"
-(cd "$VISION_HOME" && find . -type f -not -path './.backup-*/*' -print0 | while IFS= read -r -d '' rel; do
+(cd "$RELAY_HOME" && find . -type f -not -path './.backup-*/*' -print0 | while IFS= read -r -d '' rel; do
   mkdir -p "$BACKUP/$(dirname "$rel")"; cp -p "$rel" "$BACKUP/$rel"
 done)
 
 echo "==> 同步新代码"
 (cd "$SRC" && find . -type f -not -path './__pycache__/*' -not -path '*/__pycache__/*' -not -name '*.pyc' -print0 |
-  while IFS= read -r -d '' rel; do mkdir -p "$VISION_HOME/$(dirname "$rel")"; cp -p "$rel" "$VISION_HOME/$rel"; done)
-chmod +x "$VISION_HOME/ensure-proxy.sh" 2>/dev/null || true
+  while IFS= read -r -d '' rel; do mkdir -p "$RELAY_HOME/$(dirname "$rel")"; cp -p "$rel" "$RELAY_HOME/$rel"; done)
+chmod +x "$RELAY_HOME/ensure-relay.sh" 2>/dev/null || true
 
 echo "==> 强制重启代理（换新代码）"
-"$VISION_HOME/ensure-proxy.sh" --trigger manual --force-restart --quiet
+"$RELAY_HOME/ensure-relay.sh" --trigger manual --force-restart --quiet
 
 echo "==> 冒烟（四家族）"
 if "$ROOT/scripts/smoke-conversion.sh"; then
@@ -33,12 +33,12 @@ fi
 
 echo "!! 冒烟没过 → 回滚到备份"
 (cd "$BACKUP" && find . -type f -print0 | while IFS= read -r -d '' rel; do
-  mkdir -p "$VISION_HOME/$(dirname "$rel")"; cp -p "$rel" "$VISION_HOME/$rel"
+  mkdir -p "$RELAY_HOME/$(dirname "$rel")"; cp -p "$rel" "$RELAY_HOME/$rel"
 done)
-"$VISION_HOME/ensure-proxy.sh" --trigger manual --force-restart --quiet
+"$RELAY_HOME/ensure-relay.sh" --trigger manual --force-restart --quiet
 if "$ROOT/scripts/smoke-conversion.sh"; then
   echo "已回滚，代理恢复可用（坏的代码没上线）"
 else
-  echo "!! 回滚后仍冒烟失败，人工介入：$VISION_HOME"
+  echo "!! 回滚后仍冒烟失败，人工介入：$RELAY_HOME"
 fi
 exit 1

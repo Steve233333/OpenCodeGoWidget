@@ -138,7 +138,7 @@ def _log_history_replay(stats, parsed, bridge):
     if not translated and not dropped:
         return
     model = parsed.get("model") if isinstance(parsed, dict) else None
-    _log(f"[vision-proxy] history replay: translated {translated} web_search_call, "
+    _log(f"[relay] history replay: translated {translated} web_search_call, "
          f"dropped {dropped} reasoning items (model={model}, bridge={bridge})")
 
 
@@ -559,7 +559,7 @@ class ChatBridgeTranslator:
         out += self._frame({"type": "response.output_item.done", "output_index": idx, "item": done_item})
         self.items_done.append(done_item)
         self.output_index += 1
-        _log(f"[vision-proxy] MiMo XML 工具调用已转成 function_call：{name}")
+        _log(f"[relay] MiMo XML 工具调用已转成 function_call：{name}")
         return out
 
     def on_reasoning_delta(self, text):

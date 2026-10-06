@@ -63,7 +63,7 @@ def _normalize_assistant_content(parsed):
         item["content"] = "".join(parts)
         changed = True
     if changed:
-        _log("[vision-proxy] collapsed assistant content array(s) to string for zen/go chat conversion")
+        _log("[relay] collapsed assistant content array(s) to string for zen/go chat conversion")
     return changed
 
 
@@ -73,7 +73,7 @@ def _rewrite_model_compat(parsed):
     if parsed.get("model") != "gpt-5.2":
         return False
     parsed["model"] = "deepseek-v4-flash"
-    _log("[vision-proxy] model compatibility gpt-5.2 -> deepseek-v4-flash")
+    _log("[relay] model compatibility gpt-5.2 -> deepseek-v4-flash")
     return True
 
 
@@ -93,7 +93,7 @@ def _rewrite_zen_model(parsed):
     ZEN_ALIASES = {"ox-alpha": "x-preview-f-free"}
     mapped = ZEN_ALIASES.get(bare, bare)
     parsed["model"] = mapped
-    _log(f"[vision-proxy] zen model compat {raw} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))
+    _log(f"[relay] zen model compat {raw} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))
     return True
 
 
@@ -110,7 +110,7 @@ def _rewrite_go_model(parsed):
     GO_ALIASES = {"ox-alpha": "ox-alpha-free"}
     mapped = GO_ALIASES.get(bare, bare)
     parsed["model"] = mapped
-    _log(f"[vision-proxy] go model compat {raw} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))
+    _log(f"[relay] go model compat {raw} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))
     return True
 
 
@@ -147,7 +147,7 @@ class RequestPipelineMixin:
                                 break
                     has_synth = any(isinstance(t, dict) and t.get("type") == "function" and t.get("name") == "web_search" for t in parsed.get("tools", []) or [])
                     has_native = any(isinstance(t, dict) and t.get("type") == "web_search" for t in parsed.get("tools", []) or [])
-                    _log(f"[vision-proxy] sidecar check model={model} go={go_changed} has_synth={has_synth} has_native={has_native} text='{last_text[:30]}' stream={parsed.get('stream')}")
+                    _log(f"[relay] sidecar check model={model} go={go_changed} has_synth={has_synth} has_native={has_native} text='{last_text[:30]}' stream={parsed.get('stream')}")
                     if last_text and (has_synth or has_native) and any(kw in last_text.lower() for kw in ["搜", "搜索", "新闻", "search", "news", "天气", "weather", "热点", "热榜", "today"]):
                         try:
                             # REAL search for BOTH stream and non-stream: inject results before upstream so
@@ -156,7 +156,7 @@ class RequestPipelineMixin:
                             try:
                                 search_res = await asyncio.wait_for(_perform_web_search(last_text, zen_key), timeout=25.0)
                             except asyncio.TimeoutError:
-                                _log(f"[vision-proxy] proactive real search timeout for {model}, using hint")
+                                _log(f"[relay] proactive real search timeout for {model}, using hint")
                                 search_res = ""
                             if search_res and len(search_res) > 60:
                                 parsed["input"].append({
@@ -165,7 +165,7 @@ class RequestPipelineMixin:
                                     "content": [{"type": "input_text", "text": f"[web_search sidecar] 已为你实时搜索完成，直接基于以下搜索结果回答：\n{search_res[:WEB_SEARCH_INLINE_LIMIT]}"}]
                                 })
                                 proactive_changed = True
-                                _log(f"[vision-proxy] proactive REAL search injected for {model} query='{last_text[:30]}' len={len(search_res)}")
+                                _log(f"[relay] proactive REAL search injected for {model} query='{last_text[:30]}' len={len(search_res)}")
                             else:
                                 placeholder = f"Web search is available for '{last_text[:50]}'. You have real-time search capability via the web_search tool. Please use web_search to search and then summarize. Do not claim you have no search ability."
                                 parsed["input"].append({
@@ -174,9 +174,9 @@ class RequestPipelineMixin:
                                     "content": [{"type": "input_text", "text": f"[web_search sidecar] {placeholder}"}]
                                 })
                                 proactive_changed = True
-                                _log(f"[vision-proxy] proactive sidecar hint injected for {model} query='{last_text[:30]}' (search empty)")
+                                _log(f"[relay] proactive sidecar hint injected for {model} query='{last_text[:30]}' (search empty)")
                         except Exception as e:
-                            _log(f"[vision-proxy] proactive sidecar failed: {e!r}")
+                            _log(f"[relay] proactive sidecar failed: {e!r}")
             wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)
             ac_changed = (zen_changed or go_changed) and _normalize_assistant_content(parsed)
             fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
@@ -193,7 +193,7 @@ class RequestPipelineMixin:
             _cur_budget = parsed.get("max_output_tokens") if isinstance(parsed, dict) else None
             if _min_budget and isinstance(_cur_budget, int) and _cur_budget < _min_budget:
                 parsed["max_output_tokens"] = _min_budget
-                _log(f"[vision-proxy] {model} max_output_tokens {_cur_budget} → {_min_budget}"
+                _log(f"[relay] {model} max_output_tokens {_cur_budget} → {_min_budget}"
                      f"（推理计入这个预算，太小会只思考不出字）")
             # reasoning clamp: generic high fallback, hand-written registry, zero probe
             reasoning_changed = False
@@ -293,14 +293,14 @@ class RequestPipelineMixin:
                     except Exception:
                         peek = b""
                     if protocol_unsupported_error(peek):
-                        _log("[vision-proxy] 上游 400 协议不支持 → 切 chat 桥："
+                        _log("[relay] 上游 400 协议不支持 → 切 chat 桥："
                              + peek[:160].decode(errors="replace"))
                         needs_bridge = True
                 if bridge_eligible and needs_bridge:
                     if pol.route != ROUTE_NATIVE_OR_BRIDGE:
-                        _log(f"[vision-proxy] auto-bridge new model {model} on {upstream_status} (策略表里没登记这个模型)")
+                        _log(f"[relay] auto-bridge new model {model} on {upstream_status} (策略表里没登记这个模型)")
                     else:
-                        _log(f"[vision-proxy] bridge on {upstream_status} for chat-adapted model {model}")
+                        _log(f"[relay] bridge on {upstream_status} for chat-adapted model {model}")
                     fallback_now = True
             if fallback_now:
                 if response is not None:
@@ -341,7 +341,7 @@ class RequestPipelineMixin:
                                 reason=f"chat {chat_status}"):
                             return
                         txn["status"], txn["bridge"] = 502, "chat-fallback-failed"
-                        _log(f"[vision-proxy] responses->chat fallback FAILED model={model} "
+                        _log(f"[relay] responses->chat fallback FAILED model={model} "
                              f"upstream_status={upstream_status} chat_status={chat_status} err={err_text[:120]}")
                         await self._send_error(
                             writer, 502,
@@ -355,12 +355,12 @@ class RequestPipelineMixin:
                     # 日志误导排查。现在只有真试过原生才记账/打那行。
                     if upstream_status:
                         ttl = NATIVE_PROBES.note_failure(model)
-                        _log(f"[vision-proxy] {model} 原生 /responses 连续失败 "
+                        _log(f"[relay] {model} 原生 /responses 连续失败 "
                              f"{NATIVE_PROBES.streak(model)} 次 → 接下来 {int(ttl)}s 直接走 chat 桥")
                     else:
-                        _log(f"[vision-proxy] {model} 策略=bridge：直接走 chat 桥（不试原生，省一次注定失败的探测）")
+                        _log(f"[relay] {model} 策略=bridge：直接走 chat 桥（不试原生，省一次注定失败的探测）")
                     txn["status"], txn["bridge"] = 200, "chat-fallback"
-                    _log(f"[vision-proxy] responses->chat fallback engaged model={model} "
+                    _log(f"[relay] responses->chat fallback engaged model={model} "
                          f"upstream_status={upstream_status} chat_status={chat_status}")
                     await self._send_chat_bridge(writer, chat_resp, parsed, model, txn)
                 finally:
@@ -398,7 +398,7 @@ class RequestPipelineMixin:
                                         ws_query = "news"
                                     break
                             if has_ws and ws_query:
-                                _log(f"[vision-proxy] sidecar web_search detected model={model} query='{ws_query[:30]}', delegating to deepseek")
+                                _log(f"[relay] sidecar web_search detected model={model} query='{ws_query[:30]}', delegating to deepseek")
                                 zen_key = os.environ.get("ZEN_API_KEY")
                                 search_result = await _perform_web_search(ws_query, zen_key)
                                 # Synthesize a new response that includes the search results as tool output
@@ -437,7 +437,7 @@ class RequestPipelineMixin:
                                     pass
                                 return
                         except Exception as e:
-                            _log(f"[vision-proxy] sidecar check failed: {e!r}")
+                            _log(f"[relay] sidecar check failed: {e!r}")
                         # If not handled, fall through to normal send
                         # Need to restore response for normal handling - we already consumed it, so we need to recreate
                         # For now, just send the original body
@@ -448,7 +448,7 @@ class RequestPipelineMixin:
                         txn["status"] = getattr(response, "status", 200)
                         return
                 except Exception as e:
-                    _log(f"[vision-proxy] sidecar outer failed: {e!r}")
+                    _log(f"[relay] sidecar outer failed: {e!r}")
 
             # For non-search models that called web_search via synthetic tool, handle the search here
             # This handles both direct and bridge cases where the model returns a web_search function_call
@@ -479,7 +479,7 @@ class RequestPipelineMixin:
                                         ws_query = "news"
                                     break
                             if ws_query:
-                                _log(f"[vision-proxy] sidecar handling web_search for {model} query='{ws_query[:30]}'")
+                                _log(f"[relay] sidecar handling web_search for {model} query='{ws_query[:30]}'")
                                 zen_key = os.environ.get("ZEN_API_KEY")
                                 search_res = await _perform_web_search(ws_query, zen_key)
                                 # Create a new response with search results
@@ -534,7 +534,7 @@ class RequestPipelineMixin:
                         headers = list(response.headers.items()) if hasattr(response, "headers") else []
                         response = RestoredResponse(getattr(response, "status", 200), {k: v for k, v in headers}, body_peek)
                     except Exception as e:
-                        _log(f"[vision-proxy] sidecar web_search check failed: {e!r}")
+                        _log(f"[relay] sidecar web_search check failed: {e!r}")
                         # Restore for normal handling
                         class RestoredResponse2:
                             def __init__(self, status, headers, body):
@@ -554,20 +554,20 @@ class RequestPipelineMixin:
                         headers = list(response.headers.items()) if hasattr(response, "headers") else []
                         response = RestoredResponse2(getattr(response, "status", 200), {k: v for k, v in headers}, body_peek)
             except Exception as e:
-                _log(f"[vision-proxy] sidecar response handling failed: {e!r}")
+                _log(f"[relay] sidecar response handling failed: {e!r}")
 
             txn["response_started"] = True
             txn["status"] = getattr(response, "status", None) or getattr(response, "code", None)
             # 2026-09-20：Muse 空转兜底（narration-only turn）。是不是空转要读完整段响应才知道，
             # 所以重发只能在 _send_response 里做；这里把「拿同一份请求体重发一次」的能力传进去。
             stall_retry = None
-            if (not fallback_now) and pol.stall_guard and _muse_flag("VISION_PROXY_MUSE_STALL_RETRY"):
+            if (not fallback_now) and pol.stall_guard and _muse_flag("RELAY_MUSE_STALL_RETRY"):
                 retry_base = bytes(body)
 
                 async def stall_retry(attempt, _base=retry_base, _path=path, _headers=list(headers),
                                       _upstream=upstream, _method=method):
                     retry_body = _build_muse_retry_body(_base, attempt)
-                    _log(f"[vision-proxy] muse stall retry #{attempt} model={model} bytes={len(retry_body)}")
+                    _log(f"[relay] muse stall retry #{attempt} model={model} bytes={len(retry_body)}")
                     return await self._open_upstream(_method, _path, retry_body, _headers, _upstream)
             # model 显式传进去：_last_model 是服务实例上的共享字段，并发请求会互相覆盖，
             # 用它的后果是"另一个模型的响应被按 Muse 规则改名/漏改名"。
@@ -616,7 +616,7 @@ class RequestPipelineMixin:
         self._last_model = model
         txn["model"] = model or "-"
         txn["route"] = "go" if go_route else ("zen" if zen_route else "direct")
-        _log(f"[vision-proxy] request {method} {path} model={model} body_bytes={len(body)} zen={zen_route} go={go_route}")
+        _log(f"[relay] request {method} {path} model={model} body_bytes={len(body)} zen={zen_route} go={go_route}")
         # 2026-09-23：老 web_search_call 历史不再拦 400（换会话），由桥接层翻成
         # web_search 工具调用 + 诚实占位结果（chat/messages 桥各一处，见 _translate_history）。
         return {"method": method, "path": path, "body": body, "parsed": parsed,
@@ -635,7 +635,7 @@ class RequestPipelineMixin:
         except (ConnectionResetError, BrokenPipeError):
             txn["status"] = txn["status"] or 499
         except Exception as exc:
-            _log(f"[vision-proxy] handler error: {exc!r}\n{__import__('traceback').format_exc()}")
+            _log(f"[relay] handler error: {exc!r}\n{__import__('traceback').format_exc()}")
             if not txn.get("response_started"):
                 txn["status"] = 502
                 # 2026-09-19：把底层异常类型带出去，Codex 里那句 502 才有信息量
@@ -646,7 +646,7 @@ class RequestPipelineMixin:
                 )
         finally:
             if txn["path"].endswith("/responses") or "/completions" in txn["path"] or "/messages" in txn["path"]:
-                _log("[vision-proxy] txn {method} {path} model={model} route={route} "
+                _log("[relay] txn {method} {path} model={model} route={route} "
                      "status={status} bridge={bridge} ms={ms}".format(
                          ms=int((time.monotonic() - txn["t0"]) * 1000), **{k: v for k, v in txn.items() if k != "t0"}))
             writer.close()

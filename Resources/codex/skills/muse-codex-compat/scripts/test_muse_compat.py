@@ -2,7 +2,7 @@
 """Offline assertions for the Muse compatibility rewrites in a local proxy.
 
 Usage:
-    python3 test_muse_compat.py [path/to/vision_proxy.py]
+    python3 test_muse_compat.py [path/to/relay.py]
 
 Imports the proxy module (it must guard its server behind __main__) and checks that each rewrite
 fires for Muse models, never fires for other models, and that stall detection does not trip over
@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-DEFAULT_PROXY = "~/.local/share/agent-vision-toolkit/vision_proxy.py"
+DEFAULT_PROXY = "~/.local/share/agent-relay/relay.py"
 MUSE = "muse-spark-1.3-contributor-go"
 OTHER = "deepseek-v4.1-flash-go"
 

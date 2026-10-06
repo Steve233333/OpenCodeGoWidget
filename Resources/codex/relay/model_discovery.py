@@ -15,7 +15,7 @@ Usage:
 
 每次 --sync 结束还会同步另两层"档位副本"（2026-09-10 起）：
   1) 目录层  models.json（模型自己声明几档）      <- 本文件主流程
-  2) 代理层  reasoning_registry.json             <- 由目录生成，vision_proxy 读它做 clamp
+  2) 代理层  reasoning_registry.json             <- 由目录生成，relay 读它做 clamp
   3) 桌面层  config.toml [desktop] enabled-reasoning-efforts
                                                 <- 由目录生成，决定滑杆能显示几档
 手工实测的档位请写 reasoning_overrides.json（覆盖层），registry 已是生成物，别手改。
@@ -53,7 +53,7 @@ INCLUDE_ZEN = os.environ.get("OPENCODE_INCLUDE_ZEN", "").strip().lower() in ("1"
 
 CODEX_HOME = Path.home() / ".codex-deepseek"
 MODELS_JSON = CODEX_HOME / "models.json"
-CACHE_DIR = Path.home() / ".local/share/agent-vision-toolkit"
+CACHE_DIR = Path.home() / ".local/share/agent-relay"
 CACHE_FILE = CACHE_DIR / "go_models_cache.json"
 
 # OpenCode Zen Free：上游 /zen/v1/models 动态识别（2026-09-05 改：原来硬编码 7 个，
@@ -1043,7 +1043,7 @@ def sync(force=False, dry_run=False):
 # ---------------------------------------------------------------------------
 # 三层档位一致（2026-09-10）
 #   目录层 models.json                                  <- models.dev / 覆盖层（上面主流程）
-#   代理层 reasoning_registry.json                       <- 由目录生成（vision_proxy 读它 clamp）
+#   代理层 reasoning_registry.json                       <- 由目录生成（relay 读它 clamp）
 #   桌面层 config.toml [desktop] enabled-reasoning-efforts <- 由目录生成（决定滑杆显示几档）
 # 以前三层各写各的：目录声明 3 档、滑杆只显示 2 档、发出去还可能被压成第 2 档。
 # ---------------------------------------------------------------------------

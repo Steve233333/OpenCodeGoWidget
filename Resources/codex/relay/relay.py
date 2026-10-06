@@ -14,7 +14,7 @@
   * `proxy/sse.py`               SSE 流改写引擎
   * `proxy/server.py`            Proxy 类（路由/上游转发）+ main()
 
-launchd 的入口仍然是 `$VISION_DIR/vision_proxy.py`，路径没变。
+launchd 的入口仍然是 `$RELAY_DIR/relay.py`，路径没变。
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ from proxy import (  # noqa: E402
 from proxy.server import main  # noqa: E402
 
 # 兼容层：tests/test_robust.py、tests/test_units.py 和 muse-codex-compat 的
-# test_muse_compat.py 都是 spec_from_file_location("vp", "vision_proxy.py") 然后取
+# test_muse_compat.py 都是 spec_from_file_location("vp", "relay.py") 然后取
 # `vp.<符号>`（如 vp._sanitize_muse_tool_schemas、vp.ChatBridgeTranslator）。
 # 拆包后这些符号住在子模块里，这里把它们的顶层名字重新导出一遍 —— 纯转发，不改行为。
 for _module in (_config, _bodylimit, _bridges_chat, _bridges_messages, _toolfix, _search_sidecar,

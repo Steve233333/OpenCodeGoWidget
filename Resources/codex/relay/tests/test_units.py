@@ -1,6 +1,6 @@
-"""Unit tests for vision_proxy protocol-translation helpers.
+"""Unit tests for relay protocol-translation helpers.
 
-Run: python3 tests/test_units.py   (from the agent-vision-toolkit dir)
+Run: python3 tests/test_units.py   (from the agent-relay dir)
 No network required.
 """
 import importlib.util
@@ -12,7 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-spec = importlib.util.spec_from_file_location("vp", os.path.join(ROOT, "vision_proxy.py"))
+spec = importlib.util.spec_from_file_location("vp", os.path.join(ROOT, "relay.py"))
 vp = importlib.util.module_from_spec(spec)
 sys.modules["vp"] = vp
 spec.loader.exec_module(vp)

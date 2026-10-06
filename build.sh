@@ -108,7 +108,7 @@ if [ "${SKIP_PIPELINE_TEST:-0}" != "1" ] && [ -x "scripts/test-usage-pipeline.sh
   fi
 fi
 
-# 2026-09-23：代理生命周期（挑解释器/起服务/探活）也只有一份实现（ensure-proxy.sh），
+# 2026-09-23：代理生命周期（挑解释器/起服务/探活）也只有一份实现（ensure-relay.sh），
 # 单独验它：坏的会被跳过、全坏不写脏文件、真起一次端口要有响应、已在跑时幂等。
 # 2026-09-23：shell 脚本里 `$VAR` 紧跟中文标点会被 bash 当成变量名（非 UTF-8 locale 下 unbound），
 # 今天栽过三次 —— 进门槛，永不复发。
@@ -119,8 +119,8 @@ if [ -x "scripts/check-shell-cjk-vars.sh" ] && ! "scripts/check-shell-cjk-vars.s
 fi
 
 echo "==> 代理生命周期自检（离线；解释器挑选 / 修复 / 幂等）"
-if [ "${SKIP_ENSURE_PROXY_TEST:-0}" != "1" ] && [ -x "scripts/test-ensure-proxy.sh" ]; then
-  if ! "scripts/test-ensure-proxy.sh"; then
+if [ "${SKIP_ENSURE_PROXY_TEST:-0}" != "1" ] && [ -x "scripts/test-ensure-relay.sh" ]; then
+  if ! "scripts/test-ensure-relay.sh"; then
     echo "!! 代理生命周期自检没过，先修好再打包（或 SKIP_ENSURE_PROXY_TEST=1 ./build.sh 跳过）"
     exit 1
   fi
@@ -128,8 +128,8 @@ fi
 
 echo "==> 本地代理自检（Python 全量测试 + Muse 兼容层）"
 if [ "${SKIP_PROXY_TEST:-0}" != "1" ]; then
-  if [ -f "Resources/codex/vision/tests/run_all_robust.py" ]; then
-    if ! python3 "Resources/codex/vision/tests/run_all_robust.py" >/tmp/opencodego-proxy-tests.log 2>&1; then
+  if [ -f "Resources/codex/relay/tests/run_all_robust.py" ]; then
+    if ! python3 "Resources/codex/relay/tests/run_all_robust.py" >/tmp/opencodego-proxy-tests.log 2>&1; then
       echo "!! 代理测试没过，日志：/tmp/opencodego-proxy-tests.log"
       tail -20 /tmp/opencodego-proxy-tests.log
       exit 1
@@ -137,7 +137,7 @@ if [ "${SKIP_PROXY_TEST:-0}" != "1" ]; then
   fi
   if [ -f "Resources/codex/skills/muse-codex-compat/scripts/test_muse_compat.py" ]; then
     if ! python3 "Resources/codex/skills/muse-codex-compat/scripts/test_muse_compat.py" \
-          "Resources/codex/vision/vision_proxy.py" >/tmp/opencodego-muse-tests.log 2>&1; then
+          "Resources/codex/relay/relay.py" >/tmp/opencodego-muse-tests.log 2>&1; then
       echo "!! Muse 兼容自检没过，日志：/tmp/opencodego-muse-tests.log"
       tail -20 /tmp/opencodego-muse-tests.log
       exit 1

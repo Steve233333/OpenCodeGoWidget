@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""鲁莽性/混沌测试 - 覆盖 vision_proxy 全量边界和异常路径.
+"""鲁莽性/混沌测试 - 覆盖 relay 全量边界和异常路径.
 Run: python3 tests/test_robust.py [--verbose]
 No network required, all local fuzz.
 """
@@ -15,7 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-spec = importlib.util.spec_from_file_location("vp", os.path.join(ROOT, "vision_proxy.py"))
+spec = importlib.util.spec_from_file_location("vp", os.path.join(ROOT, "relay.py"))
 vp = importlib.util.module_from_spec(spec)
 sys.modules["vp"] = vp
 spec.loader.exec_module(vp)
@@ -463,19 +463,19 @@ def t_web_search_history_fuzz():
 
 def t_bodylimit_under_limit_untouched():
     """2026-09-30：没超限就一个字都不许改。"""
-    os.environ["VISION_MAX_BODY_MB"] = "10"
+    os.environ["RELAY_MAX_BODY_MB"] = "10"
     try:
         parsed = {"input": [{"type": "message", "role": "user",
                              "content": [{"type": "input_text", "text": "hi"}]}]}
         assert vp.shed_oversized_history(parsed, 100, "m") is None
         assert vp.shed_oversized_history(parsed, 10 * 1024 * 1024, "m") is None  # 正好等于上限
     finally:
-        os.environ.pop("VISION_MAX_BODY_MB", None)
+        os.environ.pop("RELAY_MAX_BODY_MB", None)
 
 
 def t_bodylimit_sheds_oldest_images():
     """超限时按时间丢最老的图片，保住最新的几张（上游 ~48MB 会随机 413）。"""
-    os.environ["VISION_MAX_BODY_MB"] = "1"
+    os.environ["RELAY_MAX_BODY_MB"] = "1"
     try:
         big = "data:image/png;base64," + "A" * 400_000      # 每张约 0.4MB
         items = []
@@ -499,12 +499,12 @@ def t_bodylimit_sheds_oldest_images():
                  if isinstance(p, dict) and p.get("type") == "input_text"]
         assert any("省略" in t for t in texts), "丢弃处应留占位说明"
     finally:
-        os.environ.pop("VISION_MAX_BODY_MB", None)
+        os.environ.pop("RELAY_MAX_BODY_MB", None)
 
 
 def t_bodylimit_keeps_recent_two_items_images():
     """只超一点点时，丢的应该全是"最近 2 条之外"的老图 —— 视觉迭代靠的就是当前这张截图。"""
-    os.environ["VISION_MAX_BODY_MB"] = "1"
+    os.environ["RELAY_MAX_BODY_MB"] = "1"
     try:
         big = "data:image/png;base64," + "C" * 400_000
         items = [{"type": "message", "role": "user",
@@ -517,14 +517,14 @@ def t_bodylimit_keeps_recent_two_items_images():
         assert kinds[-2:] == ["input_image", "input_image"], f"最近两条的图被误丢：{kinds}"
         assert kinds[:4] == ["input_text"] * 4, f"应只丢老图：{kinds}"
     finally:
-        os.environ.pop("VISION_MAX_BODY_MB", None)
+        os.environ.pop("RELAY_MAX_BODY_MB", None)
 
 
 def t_bodylimit_sheds_view_image_outputs():
     """2026-09-30：view_image 的结果是 function_call_output.output 里的【列表形态】input_image
     （真实会话里 58 条、26MB）。只认消息里的图片会漏掉它 —— 这条锁住"两种形态都要认"，
     并且替换后必须还是列表（网关只认数组时不至于翻车）。"""
-    os.environ["VISION_MAX_BODY_MB"] = "1"
+    os.environ["RELAY_MAX_BODY_MB"] = "1"
     try:
         big = "data:image/png;base64," + "B" * 400_000
         items = [{"type": "function_call_output", "call_id": f"c{i}",
@@ -539,12 +539,12 @@ def t_bodylimit_sheds_view_image_outputs():
         left = sum(1 for it in items if it["output"][0]["type"] == "input_image")
         assert 1 <= left < 6, f"应丢掉若干老的 view_image 结果，实际留下 {left}"
     finally:
-        os.environ.pop("VISION_MAX_BODY_MB", None)
+        os.environ.pop("RELAY_MAX_BODY_MB", None)
 
 
 def t_bodylimit_sheds_outputs_then_text_when_no_images():
     """没有图片可丢时：先丢老的大块工具输出，再截断超大文本。"""
-    os.environ["VISION_MAX_BODY_MB"] = "1"
+    os.environ["RELAY_MAX_BODY_MB"] = "1"
     try:
         parsed = {"input": [
             {"type": "function_call_output", "call_id": "c1", "output": "y" * 900_000},
@@ -556,12 +556,12 @@ def t_bodylimit_sheds_outputs_then_text_when_no_images():
         assert out is not None and len(out) <= 1024 * 1024, "应减到上限以内"
         assert parsed["input"][0]["output"] != "y" * 900_000 or parsed["input"][2]["content"][0]["text"] != "w" * 900_000
     finally:
-        os.environ.pop("VISION_MAX_BODY_MB", None)
+        os.environ.pop("RELAY_MAX_BODY_MB", None)
 
 
 def t_bodylimit_malformed_never_crashes():
     """畸形 payload 不许把请求搞崩（宁可原样放行）。"""
-    os.environ["VISION_MAX_BODY_MB"] = "1"
+    os.environ["RELAY_MAX_BODY_MB"] = "1"
     try:
         cases = [
             {},
@@ -574,7 +574,7 @@ def t_bodylimit_malformed_never_crashes():
         for p in cases:
             vp.shed_oversized_history(p, 5 * 1024 * 1024, "m")   # 不该抛
     finally:
-        os.environ.pop("VISION_MAX_BODY_MB", None)
+        os.environ.pop("RELAY_MAX_BODY_MB", None)
 
 
 def t_protocol_unsupported_error_detect():

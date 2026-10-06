@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import os
 
-from .config import _log
+from .config import _log, relay_env
 
 DEFAULT_MAX_MB = 45
 IMAGE_PLACEHOLDER = "[较早的截图已省略：请求体过大，已自动丢弃以适配上游上限]"
@@ -36,9 +36,9 @@ _IMAGE_TYPES = ("input_image", "image_url", "output_image")
 
 
 def max_body_bytes() -> int:
-    """上限（字节）。可用 VISION_MAX_BODY_MB 覆盖，默认 45 MiB。"""
+    """上限（字节）。可用 RELAY_MAX_BODY_MB 覆盖，默认 45 MiB。"""
     try:
-        mb = int(os.environ.get("VISION_MAX_BODY_MB", "") or DEFAULT_MAX_MB)
+        mb = int(relay_env("RELAY_MAX_BODY_MB") or DEFAULT_MAX_MB)
     except ValueError:
         mb = DEFAULT_MAX_MB
     return max(1, mb) * 1024 * 1024
@@ -46,7 +46,7 @@ def max_body_bytes() -> int:
 
 def _keep_recent(name: str, default: int) -> int:
     try:
-        return max(0, int(os.environ.get(name, "") or default))
+        return max(0, int(relay_env(name) or default))
     except ValueError:
         return default
 
@@ -180,7 +180,7 @@ def shed_oversized_history(parsed, body_bytes: int, model=None):
         saved += max(0, size - len(text))
 
     # ① 图片：从最老开始丢；最近 keep_items 条消息/调用里的图留到最后（视觉迭代时当前截图最值钱）
-    keep_items = max(1, _keep_recent("VISION_MIN_KEEP_ITEMS", 2))
+    keep_items = max(1, _keep_recent("RELAY_MIN_KEEP_ITEMS", 2))
     images = _collect_image_parts(parsed)
     protected = _recent_image_ids(parsed, keep_items)
     for container, idx, part in images:
@@ -203,7 +203,7 @@ def shed_oversized_history(parsed, body_bytes: int, model=None):
 
     # ② 大块工具输出：从最老开始丢（可以全丢 —— 工具输出可重跑，用户的文字更值钱）
     if need() > 0:
-        keep_outputs = max(0, _keep_recent("VISION_MIN_KEEP_OUTPUTS", 0))
+        keep_outputs = max(0, _keep_recent("RELAY_MIN_KEEP_OUTPUTS", 0))
         outputs = _collect_big_outputs(parsed)
         for item, size in _droppable(outputs, keep_outputs):
             if need() <= 0:
@@ -218,7 +218,7 @@ def shed_oversized_history(parsed, body_bytes: int, model=None):
 
     # ③ 超大文本：从最老开始截断（同样允许全截断，只留一段开头）
     if need() > 0:
-        keep_texts = max(0, _keep_recent("VISION_MIN_KEEP_TEXTS", 0))
+        keep_texts = max(0, _keep_recent("RELAY_MIN_KEEP_TEXTS", 0))
         texts = _collect_big_text_parts(parsed)
         for part, size in _droppable(texts, keep_texts):
             if need() <= 0:
@@ -229,13 +229,13 @@ def shed_oversized_history(parsed, body_bytes: int, model=None):
             truncated_texts += 1
 
     if not (dropped_images or dropped_outputs or truncated_texts):
-        _log(f"[vision-proxy] body {body_bytes/1048576:.1f}MB 超上限 {limit/1048576:.0f}MB，"
+        _log(f"[relay] body {body_bytes/1048576:.1f}MB 超上限 {limit/1048576:.0f}MB，"
              f"但没有可丢的图片/工具输出/大文本（model={model}）")
         return None
 
     new_body = bytearray(json.dumps(parsed).encode())
     still_over = len(new_body) > limit
-    _log(f"[vision-proxy] 请求体减肥：{body_bytes/1048576:.1f}MB → {len(new_body)/1048576:.1f}MB "
+    _log(f"[relay] 请求体减肥：{body_bytes/1048576:.1f}MB → {len(new_body)/1048576:.1f}MB "
          f"(上限 {limit/1048576:.0f}MB) · 丢图 {dropped_images} 张 · 丢工具输出 {dropped_outputs} 条 · "
          f"截断文本 {truncated_texts} 段 · 省 {saved/1048576:.1f}MB (model={model})"
          + ("· 仍超上限（已无可丢内容，这次可能还是 413）" if still_over else ""))

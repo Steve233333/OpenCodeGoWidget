@@ -16,7 +16,7 @@ description: 核对 Codex Go 模型上下文与推理档位的上网交叉验证
 ```bash
 python3 ~/.config/opencode/skills/context-reasoning-audit/audit.py --report
 ```
-读取 `~/.codex-deepseek/models.json:27` 与 `~/.local/share/agent-vision-toolkit/reasoning_registry.json:28`，列 `slug, ctx, levels, default`。
+读取 `~/.codex-deepseek/models.json:27` 与 `~/.local/share/agent-relay/reasoning_registry.json:28`，列 `slug, ctx, levels, default`。
 
 ### 第二步：远端交叉（配额表 + 厂商文档）
 

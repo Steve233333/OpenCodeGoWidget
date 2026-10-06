@@ -226,7 +226,7 @@ class Proxy(RequestPipelineMixin):
         self.upstream = upstream.rstrip("/")
         self.codex_header_compat = codex_header_compat
         self.inject_reasoning_summary = inject_reasoning_summary
-        os.environ["VISION_LOG_FILE"] = log_path
+        os.environ["RELAY_LOG_FILE"] = log_path
 
     def _upstream_headers(self, incoming):
         headers = []
@@ -245,7 +245,7 @@ class Proxy(RequestPipelineMixin):
         cleaned = []
         for key, value in headers:
             if key.lower() == "user-agent" and value.lower().startswith("python-urllib"):
-                value = "vision-proxy/1.0"
+                value = "agent-relay/1.0"
             cleaned.append((key, value))
         return cleaned
 
@@ -277,7 +277,7 @@ class Proxy(RequestPipelineMixin):
                         "Network is unreachable", "Temporary failure",
                     ))
                     if i < attempts - 1 and transient:
-                        _log(f"[vision-proxy] upstream transient error ({reason}), retry {i + 1}/{attempts - 1}")
+                        _log(f"[relay] upstream transient error ({reason}), retry {i + 1}/{attempts - 1}")
                         time.sleep(RETRY_BACKOFF_BASE * (i + 1))
                         continue
                     raise
@@ -333,7 +333,7 @@ class Proxy(RequestPipelineMixin):
                             ws_query = "news"
                         break
                 if has_ws and ws_query:
-                    _log(f"[vision-proxy] bridge sidecar web_search for {model} query='{ws_query[:30]}'")
+                    _log(f"[relay] bridge sidecar web_search for {model} query='{ws_query[:30]}'")
                     try:
                         zen_key = os.environ.get("ZEN_API_KEY")
                         search_res = await _perform_web_search(ws_query, zen_key)
@@ -350,9 +350,9 @@ class Proxy(RequestPipelineMixin):
                         # a response that already contains both the call and the output, so the next turn is not needed
                         # To make it work, we will also add a message that summarizes the search
                         obj["output"].append({"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": f"Search results for '{ws_query}':\n{search_res[:WEB_SEARCH_BRIDGE_LIMIT]}", "annotations": []}]})
-                        _log(f"[vision-proxy] bridge sidecar injected search results for {model} len={len(search_res)}")
+                        _log(f"[relay] bridge sidecar injected search results for {model} len={len(search_res)}")
                     except Exception as e:
-                        _log(f"[vision-proxy] bridge sidecar failed: {e!r}")
+                        _log(f"[relay] bridge sidecar failed: {e!r}")
             body = json.dumps(obj, ensure_ascii=False).encode()
             await self._write_head(writer, 200, [("Content-Type", "application/json")], len(body))
             writer.write(body)
@@ -372,7 +372,7 @@ class Proxy(RequestPipelineMixin):
             try:
                 chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except Exception as exc:  # socket reset mid-stream etc.
-                _log(f"[vision-proxy] bridge upstream read error model={model}: {exc!r}")
+                _log(f"[relay] bridge upstream read error model={model}: {exc!r}")
                 break
             if not chunk:
                 upstream_ended_cleanly = True
@@ -392,7 +392,7 @@ class Proxy(RequestPipelineMixin):
             if out:
                 writer.write(out)
         if not upstream_ended_cleanly and not tr.truncated and not tr.finished:
-            _log(f"[vision-proxy] bridge upstream stream ended prematurely model={model}; finalizing anyway")
+            _log(f"[relay] bridge upstream stream ended prematurely model={model}; finalizing anyway")
         writer.write(tr.on_finish())
         await writer.drain()
 
@@ -411,7 +411,7 @@ class Proxy(RequestPipelineMixin):
                 err_text = (await asyncio.to_thread(resp.read)).decode(errors="replace")[:200]
             except Exception:
                 pass
-            _log(f"[vision-proxy] chat bridge transient {status} model={model}, "
+            _log(f"[relay] chat bridge transient {status} model={model}, "
                  f"retry {attempt + 1}/{attempts - 1}: {err_text[:100]}")
             try:
                 resp.close()
@@ -452,7 +452,7 @@ class Proxy(RequestPipelineMixin):
             try:
                 messages_resp, payload = await self._open_messages_upstream(parsed, path, headers, upstream)
             except Exception as exc:
-                _log(f"[vision-proxy] messages bridge open failed model={model} "
+                _log(f"[relay] messages bridge open failed model={model} "
                      f"attempt={attempt + 1}/{attempts}: {exc!r} ({reason})")
                 if attempt < attempts - 1:
                     await asyncio.sleep(RETRY_BACKOFF_BASE * (attempt + 1))
@@ -463,7 +463,7 @@ class Proxy(RequestPipelineMixin):
                 txn["messages_bridge"] = status
                 if status < 400:
                     txn["status"], txn["bridge"] = 200, "messages-fallback"
-                    _log(f"[vision-proxy] responses->messages fallback engaged model={model} status={status} "
+                    _log(f"[relay] responses->messages fallback engaged model={model} status={status} "
                          f"tools={len(payload.get('tools') or [])} msgs={len(payload.get('messages') or [])} "
                          f"({reason})")
                     await self._send_messages_bridge(writer, messages_resp, parsed, model, txn)
@@ -475,10 +475,10 @@ class Proxy(RequestPipelineMixin):
                     pass
                 txn["messages_bridge_error"] = err_text[:200]
                 if status in _UPSTREAM_TRANSIENT_STATUS and attempt < attempts - 1:
-                    _log(f"[vision-proxy] messages bridge transient {status} model={model}, "
+                    _log(f"[relay] messages bridge transient {status} model={model}, "
                          f"retry {attempt + 1}/{attempts - 1}: {err_text[:100]}")
                 else:
-                    _log(f"[vision-proxy] messages bridge FAILED model={model} status={status} "
+                    _log(f"[relay] messages bridge FAILED model={model} status={status} "
                          f"tools={len(payload.get('tools') or [])} msgs={len(payload.get('messages') or [])} "
                          f"err={err_text[:160]} ({reason})")
                     return False
@@ -528,7 +528,7 @@ class Proxy(RequestPipelineMixin):
             try:
                 chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except Exception as exc:
-                _log(f"[vision-proxy] messages bridge upstream read error model={model}: {exc!r}")
+                _log(f"[relay] messages bridge upstream read error model={model}: {exc!r}")
                 break
             if not chunk:
                 upstream_ended_cleanly = True
@@ -548,7 +548,7 @@ class Proxy(RequestPipelineMixin):
             if out:
                 writer.write(out)
         if not upstream_ended_cleanly and not tr.truncated and not tr.finished:
-            _log(f"[vision-proxy] messages bridge stream ended prematurely model={model}; finalizing anyway")
+            _log(f"[relay] messages bridge stream ended prematurely model={model}; finalizing anyway")
         writer.write(tr.on_finish())
         await writer.drain()
 
@@ -605,7 +605,7 @@ class Proxy(RequestPipelineMixin):
             try:
                 chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except Exception as exc:
-                _log(f"[vision-proxy] muse stall probe read failed: {exc!r}")
+                _log(f"[relay] muse stall probe read failed: {exc!r}")
                 break
             if not chunk:
                 break
@@ -618,7 +618,7 @@ class Proxy(RequestPipelineMixin):
                 if has_tool_call or long_text or over_hold:
                     reason = ("工具调用" if has_tool_call
                               else "正文够长" if long_text else "扣留到上限")
-                    _log(f"[vision-proxy] muse 放行实时转发（{reason}，已扣 {len(body)} 字节 "
+                    _log(f"[relay] muse 放行实时转发（{reason}，已扣 {len(body)} 字节 "
                          f"{time.monotonic() - started:.1f}s）")
                     return _PrefixedResponse(body, response, status, headers), status, headers
         if not hold:
@@ -629,9 +629,9 @@ class Proxy(RequestPipelineMixin):
         if _sse_looks_like_stall(body):
             attempt_no = MUSE_MAX_STALL_RETRIES - attempts_left + 1
             if not _muse_retry_allowed(bytes(body)):
-                _log(f"[vision-proxy] muse stall detected but circuit breaker open (#{attempt_no}); forwarding as-is")
+                _log(f"[relay] muse stall detected but circuit breaker open (#{attempt_no}); forwarding as-is")
             else:
-                _log(f"[vision-proxy] muse narration-only stall detected (retry #{attempt_no})")
+                _log(f"[relay] muse narration-only stall detected (retry #{attempt_no})")
                 try:
                     response.close()
                 except Exception:
@@ -640,7 +640,7 @@ class Proxy(RequestPipelineMixin):
                 try:
                     nxt = await retry(attempt_no)
                 except Exception as exc:
-                    _log(f"[vision-proxy] muse stall retry failed: {exc!r}")
+                    _log(f"[relay] muse stall retry failed: {exc!r}")
                 if nxt is not None:
                     nxt_status = getattr(nxt, "status", None) or getattr(nxt, "code", 0) or status
                     nxt_headers = list(nxt.headers.items()) if hasattr(nxt, "headers") else headers
@@ -684,7 +684,7 @@ class Proxy(RequestPipelineMixin):
         try:
             sock = response.fp.raw._sock          # urllib 响应的底层 socket
             sock.settimeout(grace)
-            _log(f"[vision-proxy] SSE 空闲宽限 {grace:.0f}s 已启用")
+            _log(f"[relay] SSE 空闲宽限 {grace:.0f}s 已启用")
         except Exception:
             sock = None
 
@@ -693,12 +693,12 @@ class Proxy(RequestPipelineMixin):
                 chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except (socket.timeout, TimeoutError):
                 if sse_turn_looks_complete(state):
-                    _log(f"[vision-proxy] 上游空闲 {grace:.0f}s 且内容已完整 → 收尾"
+                    _log(f"[relay] 上游空闲 {grace:.0f}s 且内容已完整 → 收尾"
                          f"（trigger=idle model={state.get('compat', {}).get('model')}）")
                     break
                 idle_rounds += 1
                 if idle_rounds >= TERMINAL_IDLE_MAX_ROUNDS:
-                    _log(f"[vision-proxy] 上游连续空闲 {idle_rounds}×{grace:.0f}s 且内容不完整 → 收尾")
+                    _log(f"[relay] 上游连续空闲 {idle_rounds}×{grace:.0f}s 且内容不完整 → 收尾")
                     break
                 continue
             if not chunk:
@@ -745,7 +745,7 @@ class Proxy(RequestPipelineMixin):
                         "output": list(state.get("completed_items") or []),
                     },
                 }
-                _log(f"[vision-proxy] 上游没发终止帧但内容已完整 → 补 response.completed model={model}")
+                _log(f"[relay] 上游没发终止帧但内容已完整 → 补 response.completed model={model}")
                 frame_bytes = f"data: {json.dumps(done_payload)}\n\n".encode()
                 for compat_frame in _complete_sse_frame(frame_bytes, state):
                     for out_frame in _rewrite_sse_frame(compat_frame, state):
@@ -762,10 +762,10 @@ class Proxy(RequestPipelineMixin):
                     "model": model,
                     "output": [],
                     "error": {"code": "upstream_stream_interrupted",
-                              "message": "Upstream SSE stream ended without a terminal event; synthesized by vision-proxy"},
+                              "message": "Upstream SSE stream ended without a terminal event; synthesized by agent-relay"},
                 },
             }
-            _log(f"[vision-proxy] upstream SSE ended without terminal event; synthesized response.failed model={model}")
+            _log(f"[relay] upstream SSE ended without terminal event; synthesized response.failed model={model}")
             frame_bytes = f"data: {json.dumps(fail_payload)}\n\n".encode()
             for compat_frame in _complete_sse_frame(frame_bytes, state):
                 for out_frame in _rewrite_sse_frame(compat_frame, state):
@@ -773,7 +773,7 @@ class Proxy(RequestPipelineMixin):
         for item_id, entry in list(state["pending"].items()):
             state["pending"].pop(item_id, None)
             state.setdefault("flushed", set()).add(item_id)
-            _log(f"[vision-proxy] apply_patch stream ended mid-call item_id={item_id}")
+            _log(f"[relay] apply_patch stream ended mid-call item_id={item_id}")
             for out_frame in _flush_apply_patch(entry, interrupted=True):
                 await emit(out_frame)
 
@@ -816,7 +816,7 @@ class Proxy(RequestPipelineMixin):
 
     async def serve(self):
         server = await asyncio.start_server(self.handle, "127.0.0.1", self.port)
-        _log(f"[vision-proxy] listening on 127.0.0.1:{self.port} -> {self.upstream}")
+        _log(f"[relay] listening on 127.0.0.1:{self.port} -> {self.upstream}")
         async with server:
             await server.serve_forever()
 

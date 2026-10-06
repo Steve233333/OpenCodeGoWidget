@@ -331,7 +331,7 @@ class MessagesBridgeTranslator(ChatBridgeTranslator):
             return self.on_finish(self.stop_reason, self.anthropic_usage)
         if etype == "error":
             err = event.get("error") or {}
-            _log(f"[vision-proxy] messages bridge upstream error model={self.model}: "
+            _log(f"[relay] messages bridge upstream error model={self.model}: "
                  f"{json.dumps(err, ensure_ascii=False)[:200]}")
             return self.on_finish("error", self.anthropic_usage)
         return b""  # ping / 其它事件忽略

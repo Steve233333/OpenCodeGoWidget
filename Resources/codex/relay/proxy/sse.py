@@ -134,16 +134,16 @@ def _flush_apply_patch(entry, interrupted=False):
         output_index = entry.get("output_index", 0)
         if interrupted:
             if "*** Begin Patch" in input_text and "*** End Patch" in input_text:
-                _log(f"[vision-proxy] apply_patch interrupted but complete, applying item_id={item_id} input_len={len(input_text)}")
+                _log(f"[relay] apply_patch interrupted but complete, applying item_id={item_id} input_len={len(input_text)}")
             else:
                 # Codex 0.146 ignores custom_tool_call status and would execute
                 # the truncated arguments, polluting tool history with a parse
                 # failure. The item was announced with empty input; dropping the
                 # terminal frame keeps the interrupted call inert.
-                _log(f"[vision-proxy] apply_patch interrupted with incomplete patch, dropping item_id={item_id} args_len={len(entry.get('args_acc') or '')}")
+                _log(f"[relay] apply_patch interrupted with incomplete patch, dropping item_id={item_id} args_len={len(entry.get('args_acc') or '')}")
                 return []
         if not input_text.strip():
-            _log(f"[vision-proxy] apply_patch flush EMPTY item_id={item_id}")
+            _log(f"[relay] apply_patch flush EMPTY item_id={item_id}")
             return []
         frames = [
             _sse_event("response.custom_tool_call_input.delta", {
@@ -157,10 +157,10 @@ def _flush_apply_patch(entry, interrupted=False):
                 "item": {"type": "custom_tool_call", "id": item_id, "call_id": call_id,
                          "name": name, "input": input_text, "status": "completed"}}),
         ]
-        _log(f"[vision-proxy] apply_patch flush OK item_id={item_id} input_len={len(input_text)}")
+        _log(f"[relay] apply_patch flush OK item_id={item_id} input_len={len(input_text)}")
         return frames
     except Exception as exc:
-        _log(f"[vision-proxy] apply_patch flush failed, announced item may hang: {exc!r}")
+        _log(f"[relay] apply_patch flush failed, announced item may hang: {exc!r}")
         return []
 
 
@@ -255,7 +255,7 @@ def _rf_terminal(frame, payload, etype, state):
     for item_id, entry in list(pending.items()):
         pending.pop(item_id, None)
         state.setdefault("flushed", set()).add(item_id)
-        _log(f"[vision-proxy] apply_patch call interrupted by terminal event item_id={item_id}")
+        _log(f"[relay] apply_patch call interrupted by terminal event item_id={item_id}")
         out.extend(_flush_apply_patch(entry, interrupted=True))
     out.extend(_rebuild_sse_frame(frame, payload, etype) if terminal_renamed else [frame])
     return out
@@ -266,7 +266,7 @@ def _rf_output_item_added(frame, payload, etype, state):
     pending = state["pending"]
     item = payload.get("item") or {}
     if _is_muse_model(_sse_state_model(state)) and _fix_namespaced_tool_name(item):
-        _log("[vision-proxy] muse namespaced tool call split (stream added)")
+        _log("[relay] muse namespaced tool call split (stream added)")
         return _rebuild_sse_frame(frame, payload, etype)
     name = item.get("name") or ""
     if item.get("type") == "function_call" and _is_apply_patch_name(name):
@@ -281,7 +281,7 @@ def _rf_output_item_added(frame, payload, etype, state):
         if item_id:
             pending[item_id] = entry
         else:
-            _log("[vision-proxy] apply_patch function_call without item id; cannot track stream")
+            _log("[relay] apply_patch function_call without item id; cannot track stream")
         new_item = dict(item)
         new_item["type"] = "custom_tool_call"
         new_item["input"] = ""
@@ -299,7 +299,7 @@ def _rf_fc_args_delta(frame, payload, etype, state):
     if entry is not None:
         delta = payload.get("delta")
         if not isinstance(delta, str):
-            _log(f"[vision-proxy] non-string function delta, forwarding raw: {type(delta).__name__}")
+            _log(f"[relay] non-string function delta, forwarding raw: {type(delta).__name__}")
             return [frame]
         entry["args_acc"] += delta
         return []
@@ -336,7 +336,7 @@ def _rf_output_item_done(frame, payload, etype, state):
     item = payload.get("item") or {}
     item_renamed = _is_muse_model(_sse_state_model(state)) and _fix_namespaced_tool_name(item)
     if item_renamed:
-        _log("[vision-proxy] muse namespaced tool call split (stream done)")
+        _log("[relay] muse namespaced tool call split (stream done)")
     name = item.get("name") or ""
     if item.get("type") == "function_call" and _is_apply_patch_name(name):
         item_id = item.get("id")
@@ -407,7 +407,7 @@ def _rewrite_sse_frame(frame, state):
             return [frame]
         return handler(frame, payload, etype, state)
     except Exception as exc:
-        _log(f"[vision-proxy] sse frame rewrite failed, forwarding raw: {exc!r}")
+        _log(f"[relay] sse frame rewrite failed, forwarding raw: {exc!r}")
         return [frame]
 
 
@@ -439,7 +439,7 @@ def _rewrite_sse_body(body):
     for item_id, entry in list(state["pending"].items()):
         state["pending"].pop(item_id, None)
         state.setdefault("flushed", set()).add(item_id)
-        _log(f"[vision-proxy] apply_patch stream ended mid-call item_id={item_id}")
+        _log(f"[relay] apply_patch stream ended mid-call item_id={item_id}")
         for out_frame in _flush_apply_patch(entry, interrupted=True):
             out.extend(out_frame)
     return bytes(out)
@@ -511,7 +511,7 @@ class _ChatCompatCtx:
         output_index = item["output_index"]
         repaired = _repair_json_object_args(item.get("args_acc", ""))
         if repaired != item.get("args_acc", ""):
-            _log(f"[vision-proxy] repaired fc args at stream close item_id={item_id} "
+            _log(f"[relay] repaired fc args at stream close item_id={item_id} "
                  f"model={self.compat.get('model')}")
         self.out.append(_sse_event("response.function_call_arguments.done", {
             "type": "response.function_call_arguments.done", "sequence_number": self.seq,
@@ -610,7 +610,7 @@ class _ChatCompatCtx:
             if _fc_args_broken(raw_args):
                 repaired = _repair_json_object_args(raw_args)
                 if repaired != raw_args:
-                    _log(f"[vision-proxy] repaired fc args in arguments.done item_id={item['item_id']} "
+                    _log(f"[relay] repaired fc args in arguments.done item_id={item['item_id']} "
                          f"model={compat.get('model')} broken={raw_args[:60]!r}")
                     new_payload["arguments"] = repaired
                     return [_sse_event("response.function_call_arguments.done", new_payload)]
@@ -620,7 +620,7 @@ class _ChatCompatCtx:
         if _fc_args_broken(raw_args):
             repaired = _repair_json_object_args(raw_args)
             if repaired != raw_args:
-                _log(f"[vision-proxy] repaired fc args in arguments.done (untracked) "
+                _log(f"[relay] repaired fc args in arguments.done (untracked) "
                      f"broken={raw_args[:60]!r}")
                 new_payload = dict(payload)
                 new_payload["arguments"] = repaired
@@ -641,7 +641,7 @@ class _ChatCompatCtx:
         if item.get("type") == "function_call" and _fc_args_broken(item.get("arguments")):
             repaired = _repair_json_object_args(item.get("arguments"))
             if repaired != item.get("arguments"):
-                _log(f"[vision-proxy] repaired fc args in output_item.done call_id={item.get('call_id')} "
+                _log(f"[relay] repaired fc args in output_item.done call_id={item.get('call_id')} "
                      f"model={compat.get('model')} broken={str(item.get('arguments'))[:60]!r}")
                 new_payload = dict(payload)
                 fixed_item = dict(item)
@@ -702,7 +702,7 @@ def _complete_sse_frame(frame, state):
 
         return [frame]
     except Exception as exc:
-        _log(f"[vision-proxy] sse envelope completion failed, forwarding raw: {exc!r}")
+        _log(f"[relay] sse envelope completion failed, forwarding raw: {exc!r}")
         return [frame]
 
 

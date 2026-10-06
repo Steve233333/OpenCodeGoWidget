@@ -10,7 +10,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VISION_SRC="$ROOT/Resources/codex/vision"
+VISION_SRC="$ROOT/Resources/codex/relay"
 TMP="$(mktemp -d)"
 TEST_LABEL="com.steve233.opencodego.proxytest.$$"
 TEST_PORT=19531
@@ -32,9 +32,9 @@ printf '#!/bin/bash\nsleep 30\n' > "$TMP/bin/hang"
 printf '#!/bin/bash\necho 3.99.0\n' > "$TMP/bin/good"
 chmod +x "$TMP/bin/"*
 
-ensure="$VISION_SRC/ensure-proxy.sh"
+ensure="$VISION_SRC/ensure-relay.sh"
 
-echo "==> 代理生命周期自检（ensure-proxy.sh）"
+echo "==> 代理生命周期自检（ensure-relay.sh）"
 
 # ① 坏的在前面 → 选 good
 out="$(ENSURE_PROXY_CANDIDATES="$TMP/bin/broken:$TMP/bin/good" bash "$ensure" \
@@ -69,14 +69,14 @@ fi
 # ④ 真起一次：临时 label + 临时端口 + 临时目录（跑完 cleanup 里 bootout）
 mkdir -p "$TMP/v4"
 cp -R "$VISION_SRC/proxy" "$TMP/v4/proxy"
-cp "$VISION_SRC/vision_proxy.py" "$TMP/v4/vision_proxy.py"
+cp "$VISION_SRC/relay.py" "$TMP/v4/relay.py"
 : > "$TMP/env4"
 out="$(PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" bash "$ensure" \
         --port "$TEST_PORT" --vision-dir "$TMP/v4" --env-file "$TMP/env4" --trigger test 2>&1)"
 rc=$?
-interp="$(sed -n 's/^interpreter=//p' "$TMP/v4/proxy-runtime" 2>/dev/null | head -1)"
-result="$(sed -n 's/^last_result=//p' "$TMP/v4/proxy-runtime" 2>/dev/null | head -1)"
-repair_at="$(sed -n 's/^last_repair_at=//p' "$TMP/v4/proxy-runtime" 2>/dev/null | head -1)"
+interp="$(sed -n 's/^interpreter=//p' "$TMP/v4/relay-runtime" 2>/dev/null | head -1)"
+result="$(sed -n 's/^last_result=//p' "$TMP/v4/relay-runtime" 2>/dev/null | head -1)"
+repair_at="$(sed -n 's/^last_repair_at=//p' "$TMP/v4/relay-runtime" 2>/dev/null | head -1)"
 code="$(/usr/bin/curl -s -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:$TEST_PORT/v1/models" 2>/dev/null)"
 if [ "$rc" = 0 ] && [ -n "$code" ] && [ "$code" != "000" ] && [ "$result" = "ok" ] && [ -n "$repair_at" ]; then
   ok "④ 真起成功：端口 $TEST_PORT 有响应（HTTP ${code}），状态文件记了 $interp / last_result=ok"
@@ -90,11 +90,11 @@ else
 fi
 
 # ⑤ 幂等：已经在跑时再跑一次 → rc=0，且不再往日志里刷行
-before="$(wc -l < "$TMP/v4/ensure-proxy.log" 2>/dev/null | tr -d ' ')"
+before="$(wc -l < "$TMP/v4/ensure-relay.log" 2>/dev/null | tr -d ' ')"
 PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" bash "$ensure" \
   --port "$TEST_PORT" --vision-dir "$TMP/v4" --env-file "$TMP/env4" --trigger test >/dev/null 2>&1
 rc=$?
-after="$(wc -l < "$TMP/v4/ensure-proxy.log" 2>/dev/null | tr -d ' ')"
+after="$(wc -l < "$TMP/v4/ensure-relay.log" 2>/dev/null | tr -d ' ')"
 if [ "$rc" = 0 ] && [ "$before" = "$after" ]; then
   ok "⑤ 已在跑时幂等：退出码 0、日志不刷（$before 行不变）"
 else

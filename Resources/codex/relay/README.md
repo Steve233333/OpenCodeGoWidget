@@ -1,11 +1,11 @@
-# 本地转换层（vision_proxy）
+# 本地转换层（relay）
 
 Codex 只会说 **Responses** 协议，而各家模型说的是各自方言。这一层负责翻译、修补与兜底。
 
 ## 一张图看懂
 
 ```
-Codex ──▶ vision_proxy.py（薄入口 + 兼容 re-export）
+Codex ──▶ relay.py（薄入口 + 兼容 re-export）
               │
               ├─ proxy/policy.py    ★ 模型怪癖的唯一真源（家族 + 单模型覆盖）
               ├─ proxy/server.py      HTTP 服务本体：Proxy.handle() 读请求 → 路由 → 转发
@@ -59,8 +59,8 @@ Codex ──▶ vision_proxy.py（薄入口 + 兼容 re-export）
 
 | 症状 | 先看 |
 |---|---|
-| 完全连不上 / Codex 报 "waiting for network" | `~/.local/share/agent-vision-toolkit/{ensure-proxy.log,proxy.err.log}`；`ensure-proxy.sh` 一键修 |
-| 模型"只思考不出字" | `proxy.err.log` 里有没有 `max_output_tokens … → 16384`（预算太小）或 `response.incomplete` |
+| 完全连不上 / Codex 报 "waiting for network" | `~/.local/share/agent-relay/{ensure-relay.log,relay.err.log}`；`ensure-relay.sh` 一键修 |
+| 模型"只思考不出字" | `relay.err.log` 里有没有 `max_output_tokens … → 16384`（预算太小）或 `response.incomplete` |
 | 话说一半断了 | 上游流断（`status=0`）/ 终止帧缺失：日志会写 `上游空闲 … 收尾` 或 `补 response.completed` |
 | 正文一次闪出来 | 上游把整段一次 flush（直连网关也这样）；本层只做平滑，不改内容 |
 | 工具调用没执行 / 正文冒出 `<tool_call>` | MiMo XML 解析是否命中：日志 `MiMo XML 工具调用已转成 function_call` |

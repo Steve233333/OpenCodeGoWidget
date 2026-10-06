@@ -160,7 +160,7 @@ def t_prune_safety_hold():
         try:
             md.CODEX_HOME = home / ".codex-deepseek"
             md.MODELS_JSON = md.CODEX_HOME / "models.json"
-            md.CACHE_DIR = home / ".local/share/agent-vision-toolkit"
+            md.CACHE_DIR = home / ".local/share/agent-relay"
             md.CACHE_FILE = md.CACHE_DIR / "go_models_cache.json"
             md.QUOTA_CACHE_FILE = md.CACHE_DIR / "go_quota_cache.json"
             md.PRUNE_PENDING_FILE = md.CACHE_DIR / "prune_pending.json"
@@ -309,7 +309,7 @@ def t_sync_with_fake_quota():
         try:
             md.CODEX_HOME = home / ".codex-deepseek"
             md.MODELS_JSON = md.CODEX_HOME / "models.json"
-            md.CACHE_DIR = home / ".local/share/agent-vision-toolkit"
+            md.CACHE_DIR = home / ".local/share/agent-relay"
             md.CACHE_DIR.mkdir(parents=True, exist_ok=True)
             md.CACHE_FILE = md.CACHE_DIR / "go_models_cache.json"
             md.QUOTA_CACHE_FILE = md.CACHE_DIR / "go_quota_cache.json"
@@ -353,7 +353,7 @@ def t_sync_quota_failure_no_clobber():
         try:
             md.CODEX_HOME = home / ".codex-deepseek"
             md.MODELS_JSON = md.CODEX_HOME / "models.json"
-            md.CACHE_DIR = home / ".local/share/agent-vision-toolkit"
+            md.CACHE_DIR = home / ".local/share/agent-relay"
             md.CACHE_DIR.mkdir(parents=True, exist_ok=True)
             md.QUOTA_CACHE_FILE = md.CACHE_DIR / "go_quota_cache.json"
             md.CODEX_HOME.mkdir(parents=True, exist_ok=True)

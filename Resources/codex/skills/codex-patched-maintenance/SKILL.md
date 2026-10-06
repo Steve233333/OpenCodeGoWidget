@@ -139,7 +139,7 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 - 教训：未来接入 Zen/Go 新模型时，默认 `supports_search_tool=false` + 无 `web_search_tool_type`，除非该模型在 Go 网关走原生 responses 路径（deepseek-* 已确认支持，见故障 9）
 
 ### 7. Go 订阅模型接入（2026-08-18 完成，2026-08-22 扩至 14 模型：Vision Exp）
-- proxy 路由：`GO_SUFFIX="-go"`、`GO_UPSTREAM="https://opencode.ai/zen/go"`、`_rewrite_go_model()` 剥离后缀、请求分支 `go_route` 用 Go 端点 + ZEN_API_KEY（vision_proxy.py 顶部常量区）；新增 `NATIVE_VISION_MODELS={"deepseek-v4-flash-vision-exp","deepseek-v4-flash-vision-exp-go"}`，`handle()` 中命中则跳过 `_rewrite_image_inputs` 直通原生视觉
+- proxy 路由：`GO_SUFFIX="-go"`、`GO_UPSTREAM="https://opencode.ai/zen/go"`、`_rewrite_go_model()` 剥离后缀、请求分支 `go_route` 用 Go 端点 + ZEN_API_KEY（relay.py 顶部常量区）；新增 `NATIVE_RELAY_MODELS={"deepseek-v4-flash-vision-exp","deepseek-v4-flash-vision-exp-go"}`，`handle()` 中命中则跳过 `_rewrite_image_inputs` 直通原生视觉
 - models.json **现有 14 个模型**（2026-08-22，无 Zen 免费：官方 deepseek-v4-flash-vision-exp/pro + Go 12 个 —— deepseek-v4-flash/pro-go、deepseek-v4-flash-vision-exp-go、mimo-v2.5/pro-go、glm-5/5.1/5.2/5.3-go、gpt-5.6-luna-go、muse-spark-1.2-contributor-go、ox-alpha-go 限时）。`supports_search_tool`：官方 Vision Exp/pro、deepseek-v4-flash/pro-go、deepseek-v4-flash-vision-exp-go、gpt-5.6-luna-go、muse-spark-1.2-contributor-go = true，其余 7 个（mimo/glm/ox-alpha）= false；`tool_mode` 全部 null
 - 已删除（2026-08-18 精简）：hy3-free-zen、kimi-k2.7-code-go、kimi-k2.6-go、minimax-m2.7-go、grok-4.5-go（注：hy3-go 于 2026-08-21 按原生 responses 重新接入，见 §19，不再属删除列）
 - 曾实测不可用已移除：qwen3.x 全系+minimax-m3/m2.5+kimi-k3（anthropic-only，responses wire 401 "not supported for format openai"）、mimo-v2-pro/omni（404 已下架）、kimi-k2.5（503 端点不可用）（注：gpt-5.6-luna 原 403 已于 2026-08-20 经 VPN 复测 200 并接入见 §13；hy3-preview 原 400 已于 2026-08-21 复测可用但仅作拦截见 §19）
@@ -150,7 +150,7 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 ### 8. Go 网关 chat 适配模型 SSE 事件缺失（mimo/glm/kimi/hy3"完成但无文本"）
 症状：Codex 里选 mimo-v2.5-go（及 glm/kimi/hy3 系）发送后，UI 显示完成但**没有任何回复文本**；deepseek-v4-flash-go/pro-go 正常。
 根因：Go 网关对 chat 系模型走 chat→responses 适配路径，返回的 SSE 流**缺标准 Responses 事件**：无 `response.created`/`in_progress`，`output_text.delta` 和 `function_call_arguments.delta` 无 `item_id`/`output_index`（用 curl 重放可见事件只有裸 delta+completed+ping）。Codex 客户端无法把文本挂到输出项上 → 静默丢文本。flash/pro 是原生 Responses 协议模型，事件完整，故正常。
-修复：proxy 新增 `_complete_sse_frame()`（vision_proxy.py），在 `_rewrite_sse_frame`（apply_patch 桥）**之前**对每帧做协议补全：
+修复：proxy 新增 `_complete_sse_frame()`（relay.py），在 `_rewrite_sse_frame`（apply_patch 桥）**之前**对每帧做协议补全：
 - 流缺 `response.created` 时合成 `response.created`+`response.in_progress`（序列号自增）
 - 首个 `output_text.delta` 前合成 message 的 `output_item.added`+`content_part.added`，delta 补 `item_id`/`output_index`/`content_index`
 - 首个 `function_call_arguments.delta` 前合成 function_call 的 `output_item.added`（若无上游帧），delta 补 `item_id`
@@ -170,7 +170,7 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 症状：同一会话第一条消息正常，**换新聊天后** Codex 报 `[400] Provider returned error`（mimo/glm/kimi/hy3 等 chat 适配模型）。
 根因：Codex 回传的 assistant 消息 content 是**数组**（`[{"type":"output_text","text":...}]`，标准 Responses 格式）；Go 网关把这些模型转 chat 格式时，assistant content 数组无法映射到 chat schema → 整请求 400。第一个聊天里没有 assistant 历史消息所以正常；换新聊天后带上历史回复就炸。deepseek-v4-flash/pro-go 与官方直连是原生 Responses，接受数组不受影响。
 定位方法：proxy 请求 dump 后二分 input——含 assistant 消息（role=assistant + content 数组）即 400；content 改字符串或 role 改 user 即 200。
-修复：proxy 新增 `_normalize_assistant_content()`（vision_proxy.py），对 zen/go 路由把 assistant 消息 content 数组拼接成纯字符串（原生模型接受两种形式，无副作用）。
+修复：proxy 新增 `_normalize_assistant_content()`（relay.py），对 zen/go 路由把 assistant 消息 content 数组拼接成纯字符串（原生模型接受两种形式，无副作用）。
 教训：新增 chat 适配模型时，验证用例必须包含「回传 assistant 消息」的场景（第二条消息），只测单条消息会漏掉此 bug。
 
 ### 11. 带图片聊天 mimo 400 = 故障 10 同根因（2026-08-18 排查结论）
@@ -183,9 +183,9 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 症状：用官方 DeepSeek（默认模型，supports_search_tool=true）联网搜索后，同一会话切到 Go 模型（deepseek-v4-flash-go/pro-go）即报 `[400] Provider returned error`；新开窗口正常。
 根因：官方 DeepSeek 联网后历史里含 `web_search_call` item，其 `action.type="web_search"`（OpenAI 官方格式）。Go 网关 **deepseek 原生 responses 路径**只接受 `action.type ∈ {search, open_page, find_in_page}`，官方 `web_search` 触发 `input: unknown variant 'web_search'` 400。mimo/glm 等 chat 适配路径不受此限制（但 history 走 proxy 的 `_normalize_assistant_content` 修复后正常）。
 定位方法：直连 Go 网关 `https://opencode.ai/zen/go/v1/responses` 重放带 `web_search_call` 的历史，二分 action 变体——`web_search`→400；`search`+`queries`（字符串数组）→200；`open_page`+url→200；空 output 或简化为单 item 不触发（需多轮完整历史才能复现）。
-修复：proxy 新增 `_normalize_web_search_call(parsed)`（vision_proxy.py），对 zen/go 路由把 `action.type=="web_search"` 改写为 `{"type":"search","queries":[item.search_query 或 action.query 或 "search"]}`，output（搜索结果）原样保留；已是 search/open_page 的不动。接入调用链：`wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)`。
+修复：proxy 新增 `_normalize_web_search_call(parsed)`（relay.py），对 zen/go 路由把 `action.type=="web_search"` 改写为 `{"type":"search","queries":[item.search_query 或 action.query 或 "search"]}`，output（搜索结果）原样保留；已是 search/open_page 的不动。接入调用链：`wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)`。
 副作用：仅搜索词可能兜底为 "search"（搜索结果正文保留），实际影响可忽略；官方直连/纯文本不受影响。
-验证：单测 4 种 case + 端到端 flash-go/mimo-go 带官方 ws 历史均 200（备份 vision_proxy.py.bak.20260819142412）。
+验证：单测 4 种 case + 端到端 flash-go/mimo-go 带官方 ws 历史均 200（备份 relay.py.bak.20260819142412）。
 
 ## 回滚
 
@@ -200,17 +200,17 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 - 副本 models.json：`~/.codex-deepseek/models.json`（33 个：官方 deepseek 1 个 + Go/Zen 32 个；supports_search_tool：`✓ 9 个`（`deepseek-v4-pro, deepseek-v4-pro-go, deepseek-v4-flash-go, deepseek-v4-flash-vision-exp, deepseek-v4-flash-vision-exp-go, gpt-5.6-luna-go, muse-spark-1.2-contributor-free-zen/go, grok-4.6-go`），`✗ 24 个`（`glm×4, kimi×3, qwen×5, hy×2, mimo×3, minimax×2, longcat, ling, nemotron×2, big-pickle`），见 §7/13/14/18/27/28）
 - models.json **排序规则**（2026-08-18 三次整理，2026-08-22 Vision Exp 置顶/插入，Codex 选择器按此顺序显示）：官方 Vision Exp/pro → Go 的 deepseek（flash-go、vision-exp-go、pro-go）→ Go 的 mimo（v2.5-go、mimo-v2.5-pro-go）→ Go 的 glm（5.3/5.2/5.1/5-go 版本倒序）→ Ox Alpha (Go) 限时
 - **排序由 `priority` 字段决定**（教训：只改 models.json 数组顺序无效，Codex 客户端按 priority 升序稳定排序，同值按数组顺序）：14 个模型已设为 1–14 与目标顺序一致；重排时数组顺序和 priority 必须同步改，备份 models.json.bak.20260821173828.before-hy3
-- 视觉代理：launchd 常驻 `com.agent-vision-toolkit.proxy`（端口 19100），DeepSeek 上游转发（另有 codex-vpn-502-fix skill）
+- 视觉代理：launchd 常驻 `com.agent-relay`（端口 19100），DeepSeek 上游转发（另有 codex-vpn-502-fix skill）
 - sudo 密码：0000（本机）
 
 ### 13. Go 新增 GPT-5.6 Luna / Muse Spark 1.2 Contributor（2026-08-20）
 - 背景：用户要求接入便宜且原生 `openai-responses` 的 Go 模型。Luna（OpenAI，1.05M 上下文，$0.20/$1.20，`grok-4.5` 同级原生 responses）与 Muse Contributor（Meta，1M 上下文，$0.10/$0.20，数据用于改进模型）均走 `https://opencode.ai/zen/go/v1/responses`，pi.dev 确认 `sessionAffinityFormat=openai-nosession`，理论完美兼容 Codex
 - 核对：Luna 初始 403 大陆封锁（需 VPN 全局 TUN），Muse 初始 403 `requires explicit opt in`（需 https://opencode.ai/workspace/wrk_01KT9VX0KZCD5SYNXH8D3EYJD8/go 同意数据采集）。Luna 经 VPN 复测 200，Muse opt in 后 200
 - 接入：`models.json` 新增 `gpt-5.6-luna-go`（priority 5，context 1050000，reasoning low/medium/high/xhigh/max 五档）与 `muse-spark-1.2-contributor-go`（priority 6，context 1048576，reasoning low/medium/high/xhigh 四档，无 minimal/max），插于 `deepseek-v4-pro-go` 之后，其余 priority 顺延至 14；`config.toml` 默认模型切至 `deepseek-v4-flash-go/high`（用户指定）
-- 联网：`vision_proxy.py:_strip_web_search_tool` 白名单从 `deepseek-*` 扩至 `("deepseek-","gpt-5.6-luna","muse-spark-1.2")`，`models.json` Luna/Muse 设 `supports_search_tool=true` + `web_search_tool_type="text"`
+- 联网：`relay.py:_strip_web_search_tool` 白名单从 `deepseek-*` 扩至 `("deepseek-","gpt-5.6-luna","muse-spark-1.2")`，`models.json` Luna/Muse 设 `supports_search_tool=true` + `web_search_tool_type="text"`
 - 额度：Muse Contributor 最便宜但 Go 额度表未列；按 $0.10/$0.20 估算月约 15 万次（同 MiMo-V2.5 量级）
 
-### 14. Go 网关 Luna/Muse 400 三连击与修复（2026-08-20，vision_proxy.py）
+### 14. Go 网关 Luna/Muse 400 三连击与修复（2026-08-20，relay.py）
 - **阶段1 `colon` 非法**：Luna 报 `Invalid 'input[5].id': 'rs_aaa:rs_bbb' Expected ^[a-zA-Z0-9_-]+$`。根因 Codex 回放 `rs_*:rs_*` 推理 ID 含 `:`。初修 `_sanitize_input_ids` 将 `:`→`_`，触发下一阶段
 - **阶段2 `encrypted_content` 验签失败**：改 ID 后 Luna 报 `encrypted content could not be verified`，Muse 同款。根因密文与原始 ID 绑定，改 ID 即验签失败。改修：Go 路由下 `":" in id` 的 `input` 项剥离 `encrypted_content` 再改 ID
 - **阶段3 `Item not found (store=false)` / `limit` 缺失**：剥离后 Luna 报 `Item rs_aaa_rs_bbb not found. store=false`，且 Luna/Muse 同报 `'required' Missing 'limit'`（工具 schema 严格校验：`properties` 含 `limit` 则 `required` 必须含 `limit`，DeepSeek 宽松但 Luna/Muse 严格）
@@ -227,26 +227,26 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 ### 16. 跨模型长历史复用与 DeepSeek→Muse `query` 缺失（2026-08-20）
 - 症状：DeepSeek 长会话（`input[670]`）切 Muse 报 `input[670].action missing required field query`。直接用 Muse 不报错，仅 DeepSeek 670 项历史→Muse 触发
 - 根因：DeepSeek 历史 `web_search_call.action` 为 Go 定制 `{"type":"search","queries":[...]}`（仅 `queries` 数组），Muse 经 Go 严格校验 `query: string` 必选。`_normalize_web_search_call` 原仅 `web_search→search+queries` 单向，未补 `query`
-- 修复：`vision_proxy.py:_normalize_web_search_call` 升级为**双字段兜底**——对所有 `web_search_call` 的 `action`，缺 `query` 则 `query=queries[0]`，缺 `queries` 则 `queries=[query]`，两者皆缺则 `query="search"`+`queries=["search"]`；保留 `web_search→search` 转换。Go 全量但实为跨模型历史触发，非长历史日常不触发
+- 修复：`relay.py:_normalize_web_search_call` 升级为**双字段兜底**——对所有 `web_search_call` 的 `action`，缺 `query` 则 `query=queries[0]`，缺 `queries` 则 `queries=[query]`，两者皆缺则 `query="search"`+`queries=["search"]`；保留 `web_search→search` 转换。Go 全量但实为跨模型历史触发，非长历史日常不触发
 - 关联：同日新增拦截策略（见 §17），与本双字段修复互补：前者保跨 `search=true` 家族互通，后者保 `search=true→false` 不静默丢弃
 
 ### 17. `search=true 历史 → search=false 模型` 拦截与记忆模型切换（2026-08-20，用户选“拦截并提示”；2026-08-21 同步 ox-alpha/hy3）
 - 背景：跨模型审计（14 模型）发现 `search=true(6个: 官方 DeepSeek×2 + deepseek-v4-flash/pro-go + luna/muse)` → `search=false(8个: mimo×2/GLM×4/ox-alpha/hy3)` 长历史复用必 400；用户要求**不静默丢弃 `web_search_call`，改为拦截提示新开会话**
-- 实现：`vision_proxy.py` 新增 `_SEARCH_FALSE_MODELS`（`mimo-v2.5/pro, glm-5/5.1/5.2/5.3, ox-alpha/ox-alpha-free/x-preview-f-free, hy3/hy3-preview`）与 `_intercept_unsupported_history(parsed,model)`；`handle()` 中 `go_route` 时若目标为无搜索模型且历史含 `web_search_call`，直接 400 返回友好文案“Cross-model history blocked... Please start a new session... Model=xxx”（2026-08-20 初始为 `deepseek-v4-flash-free/mimo-v2.5-free`，2026-08-21 由 §18/19 替换为 ox-alpha/hy3，见 proxy 日志 `_SEARCH_FALSE_MODELS`）
+- 实现：`relay.py` 新增 `_SEARCH_FALSE_MODELS`（`mimo-v2.5/pro, glm-5/5.1/5.2/5.3, ox-alpha/ox-alpha-free/x-preview-f-free, hy3/hy3-preview`）与 `_intercept_unsupported_history(parsed,model)`；`handle()` 中 `go_route` 时若目标为无搜索模型且历史含 `web_search_call`，直接 400 返回友好文案“Cross-model history blocked... Please start a new session... Model=xxx”（2026-08-20 初始为 `deepseek-v4-flash-free/mimo-v2.5-free`，2026-08-21 由 §18/19 替换为 ox-alpha/hy3，见 proxy 日志 `_SEARCH_FALSE_MODELS`）
 - 记忆模型：`~/.codex-deepseek/config.toml` `memories.extract_model`/`consolidation_model` 由 `deepseek-v4-flash-go` → `mimo-v2.5-go`（用户指定，与默认对话模型 `deepseek-v4-flash-go` 分离）
 - 副作用：仅长搜索历史切无搜索模型时硬拦截需手动新开会话，短/无搜索历史的日常切换无感；官方直连不受影响
 
 ### 18. Ox Alpha Free 限时接入与 Zen 双 ID 分叉（2026-08-21，用户指定 ox-alpha-go）
 - 背景：`Ox Alpha Free` 为 stealth 限时免费模型（OpenRouter 标 `1,048,576-token context`，`glm-5.3-Vision` 猜测），`opencode.ai` 同时暴露但 **ID 分叉**：`Zen x-preview-f-free`（`https://opencode.ai/zen/v1/chat/completions`）与 `Go ox-alpha-free`（`https://opencode.ai/zen/go/v1/chat/completions`，`Go models list` 实测含 `ox-alpha-free`，`Zen ox-alpha-free → 401`，`Go x-preview-f-free → 401`）。用户要求删 2 个 Zen 套餐（`mimo/DeepSeek free` 日常 429 且 `_SEARCH_FALSE` 残留）并以 `ox-alpha-go` 友好别名接入 Go
 - 核对：`Go ox-alpha-free` 直连 `200`（`reasoning_content` 正常），`reasoning_effort` 仅 `low/high/max` 合法（`medium/xhigh → 400 [1210] please use low, high, or max`），与 `deepseek-v4-flash` 同档；`supports_search_tool` 需 `false`（chat 适配路径，`web_search` 必 400，`SKILL.md:6` 同 `glm/mimo`）
-- 接入：`models.json` 新增 `ox-alpha-go`（`priority 13` 置尾，`context 1048576` 对齐 OpenRouter，`reasoning low/high/max` 三档，`input_modalities text+image` 走代理视觉描述，`supports_search_tool=false` 无 `web_search_tool_type`），`glm-5.3-go` 模板；`vision_proxy.py:_rewrite_go_model` 新增 `GO_ALIASES={"ox-alpha":"ox-alpha-free"}`、`_rewrite_zen_model` 加 `ZEN_ALIASES={"ox-alpha":"x-preview-f-free"}`，`_SEARCH_FALSE_MODELS` 由 `deepseek-v4-flash-free/mimo-v2.5-free` 替换为 `ox-alpha/ox-alpha-free/x-preview-f-free`（三 ID 兜底，避免裸/Go/Zen 形态漏拦截）
+- 接入：`models.json` 新增 `ox-alpha-go`（`priority 13` 置尾，`context 1048576` 对齐 OpenRouter，`reasoning low/high/max` 三档，`input_modalities text+image` 走代理视觉描述，`supports_search_tool=false` 无 `web_search_tool_type`），`glm-5.3-go` 模板；`relay.py:_rewrite_go_model` 新增 `GO_ALIASES={"ox-alpha":"ox-alpha-free"}`、`_rewrite_zen_model` 加 `ZEN_ALIASES={"ox-alpha":"x-preview-f-free"}`，`_SEARCH_FALSE_MODELS` 由 `deepseek-v4-flash-free/mimo-v2.5-free` 替换为 `ox-alpha/ox-alpha-free/x-preview-f-free`（三 ID 兜底，避免裸/Go/Zen 形态漏拦截）
 - 验证：经 `127.0.0.1:19100/v1/responses` 单条 `200 OK`、SSE 含 `response.created/item_id/delta` 补全（`SKILL.md:8` 同 `glm/mimo`）、二轮带 `assistant content 数组` 合并后 `200`、`web_search` 剥离后 `200`、含 `web_search_call` 历史被 `400 Cross-model history blocked` 拦截（与 §17 同）；删除 Zen 模型后 `models.json` 13 模型日需重启 Codex 刷新选择器
 - 教训：限时 free 模型跨 `Zen/Go` ID 不一致需别名层兜底；未来此类模型默认 `search=false` + `priority` 置尾，结束免费后直接删条目与别名即可
 
 ### 19. Hy3 接入（2026-08-21，原生 responses，无搜索，本地工具可用）
 - 背景：用户评估 Hy3 能否像 DeepSeek 无缝适配；实测 `hy3`/`hy3-preview` 已在 `Go models list`（`https://opencode.ai/zen/go/v1/models`），按 Responses 原生接入，无需别名
 - 核对：Go `https://opencode.ai/zen/go/v1/responses` 直连：`hy3` 带 `reasoning_effort` 全档 `minimal/low/medium/high/max/xhigh/ultra/none/不传` 均 `200`（无 `ox-alpha` 的 `[1210] low/high/max` 限制，比 DeepSeek 宽松），响应无显式 `reasoning` item（隐式思考）；`context 262144/max 128000/text->text/295B MoE 21B active`（OpenRouter `tencent/hy3`）；`tools:web_search` 直连必 `400 [400002] missing field name`（`_strip_web_search_tool` 需保持剥离），`function`（`apply_patch`/`echo`）直连 `200 stop_reason: tool_call` -> 本地工具可用
-- 接入：`models.json` 新增 `hy3-go`（`priority 14` 置尾，`context 262144`，`reasoning low/medium/high/xhigh/max` 五档对齐 Codex `enabled-reasoning-efforts`，`supports_search_tool=false` 无 `web_search_tool_type`，`input_modalities text+image` 走代理视觉描述），复用 `ox-alpha-go` 模板；`vision_proxy.py:_SEARCH_FALSE_MODELS` 新增 `hy3/hy3-preview`（拦截含 `web_search_call` 的历史切入，复用 §17 `400 Cross-model history blocked` 文案），`_strip_web_search_tool` 保持剥离（无需白名单），`_rewrite_go_model` 无需别名（Go id 即 `hy3`），`hy3-preview` 仅作拦截不建模（偶发 `Model is unavailable`）
+- 接入：`models.json` 新增 `hy3-go`（`priority 14` 置尾，`context 262144`，`reasoning low/medium/high/xhigh/max` 五档对齐 Codex `enabled-reasoning-efforts`，`supports_search_tool=false` 无 `web_search_tool_type`，`input_modalities text+image` 走代理视觉描述），复用 `ox-alpha-go` 模板；`relay.py:_SEARCH_FALSE_MODELS` 新增 `hy3/hy3-preview`（拦截含 `web_search_call` 的历史切入，复用 §17 `400 Cross-model history blocked` 文案），`_strip_web_search_tool` 保持剥离（无需白名单），`_rewrite_go_model` 无需别名（Go id 即 `hy3`），`hy3-preview` 仅作拦截不建模（偶发 `Model is unavailable`）
 - 验证：经 `127.0.0.1:19100/v1/responses`（带鉴权 `sk-92e1c...`）单条 `200`（`1+1=2` 469 tokens）、`web_search` 剥离后 `200`、二轮 `assistant content 数组` 合并 `200`、`apply_patch` function `200`、含 `web_search_call` 历史被 `400 Cross-model history blocked` 拦截（与 §17/18 同）；`Go models list` 含 `hy3`/`hy3-preview`，`hy3` 单条/工具均稳，`hy3-preview` 偶发不可用故不建模
 - 教训：原生 responses 模型即使无搜索也无需 SSE 补全（自带 `response.created`），与 DeepSeek/Luna/Muse 同档；无搜索模型一律 `search=false` + 进 `_SEARCH_FALSE`，搜索任务切 `deepseek-*/luna/muse` 即可
 
@@ -254,7 +254,7 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 症状：Codex 副本选 `ox-alpha-go`（及 `glm-5.3-go`）执行任何需要工具的任务（联网搜索、跑命令）时 UI 永远转圈"卡住"。会话 rollout 里出现上百次连续 `exec_command` 空参数/坏参数调用，每次输出都是 `failed to parse function arguments: expected value at line 1 column 1`；proxy 日志请求体每轮精确 +373 字节（一对坏 function_call+output 的序列化尺寸）无限重试。纯文本聊天完全正常。
 根因：**上游 opencode.ai Go 网关的 chat→responses 流式适配器对 ox-alpha-free / glm-5.3 吞掉工具参数流的前两个字符 `{`+引号**：delta 首块为 `cmd":"` 而非 `{"cmd":"`，最终 done 帧 `cmd":"pwd"}`。Codex 收到非法 JSON → 执行报错 → 模型重试 → 死循环。**非流式模式完全正常**，mimo/hy3 走同一适配器也正常——是该两模型模板专属 bug。
 影响面审查（2026-08-23 全量实测 14 模型流式 run_cmd 工具调用）：仅 `ox-alpha-go`、`glm-5.3-go` 中招；glm-5.2/5.1/5-go 已被网关切原生 responses（native_created=True）不受影响；官方 DeepSeek×2、deepseek-go×3、luna/muse 原生路径正常；mimo×2 chat 路径正常。hy3-go 正常。
-修复（vision_proxy.py，备份 .bak.20260823224856）：
+修复（relay.py，备份 .bak.20260823224856）：
 - 新增 `_repair_json_object_args(s)`：先 json.loads 校验（健康参数字节级透传），失败则按裸键模式 `^[A-Za-z_]\w*\s*"?\s*:` 补 `{"` 前缀 + 括号候选组合兜底，全失败返回原文
 - 新增 `_fc_args_broken(args)` 判定
 - 流式侧三处改写（仅无 response.created 的 chat 适配流生效，原生路径首帧短路零接触）：`close_function_call()` 合成帧用修复后参数；`response.function_call_arguments.done` 帧 arguments 修复改写；`response.output_item.done`（function_call）item.arguments 修复改写。**delta 保持逐字透传不缓冲**——codex-rs 从 output_item.done 取完整 item 执行工具，done 帧修好即可，避免缓冲延迟/并行调用分桶复杂度
@@ -283,7 +283,7 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 
 ### 22. responses→chat 自动降级桥：网关转换层崩溃的本地兜底（2026-08-25 实施，commit b3d39c6）
 背景：§21 矩阵确认 Go 网关 `/v1/responses` 对全部非 deepseek 模型系统性 500 而 chat 端点存活，用户选择本地桥接方案（而非等上游）。luna/muse 403/401 经用户确认为未挂 VPN 所致，非下线。
-实现（vision_proxy.py，备份 .bak.20260825144457）：
+实现（relay.py，备份 .bak.20260825144457）：
 - `RESPONSES_FALLBACK_MODELS = {mimo-v2.5/pro, glm-5/5.1/5.2/5.3, ox-alpha-free}` + `_RESPONSES_BROKEN_UNTIL` TTL 缓存（300s）
 - handle() 中 go_route + `/responses` 路径 + 命中模型时：先探测 responses；`>=500` 或 TTL 内 → 关闭原响应，`_responses_request_to_chat()` 转换后 POST `/v1/chat/completions`；chat 成功则记 TTL 并经 `_send_chat_bridge()` 回写 Responses 协议，chat 也失败则返回带双状态码说明的 502（ox 上游间歇 503 时即此表现）
 - 请求侧映射：instructions→system、input message→messages（assistant content 数组天然拍平=免 §10）、reasoning/web_search_call 丢弃、function_call(+output)→assistant.tool_calls/role=tool（同轮多 call 合并）、input_image→image_url 数组、扁平 tools→嵌套 function、reasoning.effort→reasoning_effort；**max_output_tokens 不透传**（防截断思考）
@@ -328,7 +328,7 @@ rm -rf ~/Library/Application\ Support/Codex-Patched/GPUCache ~/Library/Applicati
 - **P3 流式**：新 `ChatBridgeTranslator` 类取代全缓冲——chat delta 逐块映射 output_text.delta/function_call_arguments.delta，done 帧仍过 `_sanitize_fc_args`（§20 保险）。实测 mimo 长回答正文 268 增量均匀铺满 12s（旧版单 blob）；glm 短诗 72 块/1.4s 属模型生成快，非攒批
 - **P4 reasoning 可见**：chat 的 reasoning_content/reasoning delta → reasoning item（summary_part/text added/delta/done 链），实测思考 83 块从 0s 实时流出
 - **P5 内存闸门**：累计文本 16MB 预算（超限 graceful 截断 incomplete）、非流式体 64MB 上限
-- **P6-lite 附赠**：`_upstream_headers` 清洗 python-urllib UA（CF error 1010 实锤拦截该 UA；本地脚本经 proxy 全 403 即此因）→ 替换为 vision-proxy/1.0
+- **P6-lite 附赠**：`_upstream_headers` 清洗 python-urllib UA（CF error 1010 实锤拦截该 UA；本地脚本经 proxy 全 403 即此因）→ 替换为 agent-relay/1.0
 - 排障工具箱新增：直连 vs 经 proxy 的 delta 到达时间分布对照法（判别攒批在哪层）；readline 按 JSON 解析判 delta 类型（grep 字节串会漏转义形态）
 - **搜索边车决策（2026-08-25，用户拍板：不做）**：评估过 opencodex 式方案（剥离托管 web_search → 合成 `web_search(query)` function → proxy 内部用可联网后端（候选 luna-go）跑 agentic 循环代搜，≤3 次/turn）。机制可行但①带托管搜索的调用消耗 Go 订阅额度极快（$12/5h 上限）②proxy 需从单发转发升级为有状态循环(~250 行)③§17 历史拦截需适配合成工具历史。维持现状:搜索任务手动切 deepseek/luna/muse,mimo/glm/ox 保持无搜索+§17 拦截保护
 
@@ -359,7 +359,7 @@ rm -rf ~/Library/Application\ Support/Codex-Patched/GPUCache ~/Library/Applicati
 ### 28. 原生支持全开（2026-09-01 4，本地实测纠错）
 
 背景：线上盲审 6/27 漏把 `muse` 与 `grok` 判 `false`。本地直打 `https://opencode.ai/zen/go/v1/responses`：`muse-spark-1.2-contributor` 带 `web_search` `200`（Meta 官博 `built-in web search grounding, $0.00825/搜`，`api.meta.ai` 原生）、`grok-4.6` 带 `web_search` `200`（`docs.x.ai/tools/web_search`，`grok-4.6 500k` 原生），`glm-5` 等 `500 Internal` 仍不通，`qwen/kimi/minimax/nemotron` `401 not supported for format openai`。
-处置：`resources/templates/models.json` 与 `~/.codex-deepseek/models.json` 把 `muse-spark-1.2-contributor-free-zen/go` 与 `grok-4.6-go` 改回 `supports_search_tool=true + web_search_tool_type=text`，现 `✓ 有搜 9 个`（`deepseek×4 + vision×2 + gpt-5.6-luna-go + muse×2 + grok`），`✗ 无搜 24 个`（`glm×4, kimi×3, qwen×5, hy×2, mimo×3, minimax×2, longcat, ling, nemotron×2, big-pickle`，新加的 `qwen3.8/hy3` 等才真没有）；`vision_proxy.py:924` `_SEARCH_TRUE_PREFIXES` 加 `"grok-"`，`setup.command:7` 的 `MCP websearch` 保持仅 24 个无搜用，6→9 的 `muse/grok` 切回原生无需 MCP。
+处置：`resources/templates/models.json` 与 `~/.codex-deepseek/models.json` 把 `muse-spark-1.2-contributor-free-zen/go` 与 `grok-4.6-go` 改回 `supports_search_tool=true + web_search_tool_type=text`，现 `✓ 有搜 9 个`（`deepseek×4 + vision×2 + gpt-5.6-luna-go + muse×2 + grok`），`✗ 无搜 24 个`（`glm×4, kimi×3, qwen×5, hy×2, mimo×3, minimax×2, longcat, ling, nemotron×2, big-pickle`，新加的 `qwen3.8/hy3` 等才真没有）；`relay.py:924` `_SEARCH_TRUE_PREFIXES` 加 `"grok-"`，`setup.command:7` 的 `MCP websearch` 保持仅 24 个无搜用，6→9 的 `muse/grok` 切回原生无需 MCP。
 教训：不能只看 `models.json` 标 `false` 就判原生不支持，需按 `provider` 官文档（`developer.meta.com / docs.x.ai`）+ `zen/go/responses` 直打验证；新模默认 `false` 是对的，但 `muse/grok` 是老模已支持。
 
 ### 29. Union Alpha Free：Anthropic Messages 通道 + x-opencode-session 强制（2026-09-17）
@@ -381,7 +381,7 @@ rm -rf ~/Library/Application\ Support/Codex-Patched/GPUCache ~/Library/Applicati
 ### 30. 「另一台电脑点配置」全链路体检（2026-09-17 3）
 
 方法：假 HOME + 假 launchctl（桩）跑**应用包里**的 `codex-oneclick-setup.command`，再跟本机逐字段比对。两条路各测一遍：干净安装（`--install`）、旧机更新（`--update`，预埋一份陈旧目录：删掉 union-alpha/hy4-preview/grok-4.6、glm-5.3-go 上下文改 99999 且档位写 medium、deepseek-v4-flash-go 档位写 low、hy3-go 上下文写 200000、塞两个假模型 ox-alpha-go / ghost-model-go、vision 文件新旧 mtime 混合）。
-结论（干净安装 **完全一致**）：38 个模型、顺序一致、逐字段差异 **0**（context / max_context / input_modalities / default_reasoning_level / supports_search_tool / apply_patch_tool_type / display_name / supported_reasoning_levels）；`vision_proxy.py`、`model_discovery.py`、`reasoning_registry.json`、`reasoning_overrides.json`、`probe-new-model.sh` 五份 SHA-256 全一致；两个 launchd plist（代理 + 发现，6h/RunAtLoad）按假 HOME 路径正确落盘。
+结论（干净安装 **完全一致**）：38 个模型、顺序一致、逐字段差异 **0**（context / max_context / input_modalities / default_reasoning_level / supports_search_tool / apply_patch_tool_type / display_name / supported_reasoning_levels）；`relay.py`、`model_discovery.py`、`reasoning_registry.json`、`reasoning_overrides.json`、`probe-new-model.sh` 五份 SHA-256 全一致；两个 launchd plist（代理 + 发现，6h/RunAtLoad）按假 HOME 路径正确落盘。
 更新路径实测：新模型自动补回（union-alpha-go / grok-4.6-go / hy4-preview-go，37→40）、上下文纠回（hy3-go 200000→262144）、模态/显示名按 models.dev 纠正、陈旧代码文件按 mtime 覆盖、假模型进 prune-grace（12h 后下架）。
 **本次修掉的真缺口**：目录里已存在、且覆盖层有手工实测档位的模型，同步时被 `if not (_reg.get(...))` 跳过 → 老机器上的错档位永远修不回来，而 `reasoning_registry.json` 是按目录生成的，等于**错目录反压手工覆盖层**（实测 glm-5.3-go 卡在 `['medium']`、deepseek-v4-flash-go 卡在 `['low']`，一致性检查还打印「以目录为准」）。现在抽出 `_effective_levels()`，优先级固定为**覆盖层 > models.dev > opencodex**，目录跟覆盖层不一致就纠回并打日志（`档位 xxx: [...] -> [...] (覆盖层纠回)`），一致性检查文案同步改成「覆盖层优先」。回归用例 `t_effective_levels_precedence` + `t_sync_heals_stale_levels`（用假 CODEX_HOME/CACHE_DIR 驱动整个 `sync()`）。
 教训：跑任何会让 `model_discovery.sync()` 落盘的测试，必须同时 patch `CODEX_HOME`、`MODELS_JSON`、`CACHE_DIR` 及派生常量——第一次只 patch 了后两者，`sync_desktop_whitelist` 和 backup 步骤去写了真机 `~/.codex-deepseek/config.toml`，把白名单里的 `max` 抹掉了（已从备份还原，测试现已断言真机文件哈希前后一致）。

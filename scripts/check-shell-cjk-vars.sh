@@ -8,7 +8,9 @@ python3 - <<'PYEOF'
 import glob, re, sys
 pat = re.compile(r'(?<![{A-Za-z0-9_])\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]')
 files = (sorted(glob.glob('scripts/*.sh'))
-         + ['Resources/codex/vision/ensure-proxy.sh']
+         + ['Resources/codex/relay/ensure-relay.sh']
+         # 2026-10-06：随包分发的脚本目录（迁移脚本曾漏检 → 变量后面紧跟"（"时没加花括号，运行期 unbound）
+         + sorted(glob.glob('Resources/codex/scripts/*.sh'))
          + sorted(glob.glob('Resources/codex/setup/steps/*.sh'))
          + ['Resources/codex/codex-oneclick-setup.command'])
 hits = [(p, i, l.strip()) for p in files if p

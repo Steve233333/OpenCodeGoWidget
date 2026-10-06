@@ -50,17 +50,17 @@ PY
 fi
 
 sync_one "$HOME_DIR/.codex-deepseek/models.json" "$WIDGET_DIR/Resources/codex/templates/models.json"
-sync_one "$HOME_DIR/.local/share/agent-vision-toolkit/vision_proxy.py" "$WIDGET_DIR/Resources/codex/vision/vision_proxy.py"
-# 2026-09-10：档位三层机制上线，这几份也要一起同步（以前只同步 vision_proxy.py，会悄悄漂移）
-sync_one "$HOME_DIR/.local/share/agent-vision-toolkit/model_discovery.py" "$WIDGET_DIR/Resources/codex/vision/model_discovery.py"
-sync_one "$HOME_DIR/.local/share/agent-vision-toolkit/reasoning_registry.json" "$WIDGET_DIR/Resources/codex/vision/reasoning_registry.json"
-sync_one "$HOME_DIR/.local/share/agent-vision-toolkit/reasoning_overrides.json" "$WIDGET_DIR/Resources/codex/vision/reasoning_overrides.json"
-sync_one "$HOME_DIR/.local/share/agent-vision-toolkit/probe-new-model.sh" "$WIDGET_DIR/Resources/codex/vision/probe-new-model.sh"
-if [ -d "$HOME_DIR/.local/share/agent-vision-toolkit/tests" ]; then
-  mkdir -p "$WIDGET_DIR/Resources/codex/vision/tests"
-  for _t in "$HOME_DIR/.local/share/agent-vision-toolkit/tests/"*.py; do
+sync_one "$HOME_DIR/.local/share/agent-relay/relay.py" "$WIDGET_DIR/Resources/codex/relay/relay.py"
+# 2026-09-10：档位三层机制上线，这几份也要一起同步（以前只同步 relay.py，会悄悄漂移）
+sync_one "$HOME_DIR/.local/share/agent-relay/model_discovery.py" "$WIDGET_DIR/Resources/codex/relay/model_discovery.py"
+sync_one "$HOME_DIR/.local/share/agent-relay/reasoning_registry.json" "$WIDGET_DIR/Resources/codex/relay/reasoning_registry.json"
+sync_one "$HOME_DIR/.local/share/agent-relay/reasoning_overrides.json" "$WIDGET_DIR/Resources/codex/relay/reasoning_overrides.json"
+sync_one "$HOME_DIR/.local/share/agent-relay/probe-new-model.sh" "$WIDGET_DIR/Resources/codex/relay/probe-new-model.sh"
+if [ -d "$HOME_DIR/.local/share/agent-relay/tests" ]; then
+  mkdir -p "$WIDGET_DIR/Resources/codex/relay/tests"
+  for _t in "$HOME_DIR/.local/share/agent-relay/tests/"*.py; do
     [ -f "$_t" ] || continue
-    cp -p "$_t" "$WIDGET_DIR/Resources/codex/vision/tests/$(basename "$_t")" && echo "已抄：$_t"
+    cp -p "$_t" "$WIDGET_DIR/Resources/codex/relay/tests/$(basename "$_t")" && echo "已抄：$_t"
   done
 fi
 sync_one "$HOME_DIR/.codex-deepseek/scripts/archive-large-rollouts.sh" "$WIDGET_DIR/Resources/codex/scripts/archive-large-rollouts.sh"

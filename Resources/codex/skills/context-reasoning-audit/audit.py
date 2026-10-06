@@ -3,7 +3,7 @@
 import argparse, json, pathlib, sys
 HOME = pathlib.Path.home()
 MODELS_JSON = HOME / ".codex-deepseek/models.json"
-REG_PATH = HOME / ".local/share/agent-vision-toolkit/reasoning_registry.json"
+REG_PATH = HOME / ".local/share/agent-relay/reasoning_registry.json"
 
 def load():
     mj = json.loads(MODELS_JSON.read_text())

@@ -13,9 +13,9 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-PROXY = os.environ.get("VISION_PROXY_URL", "http://127.0.0.1:19100")
-ENV_FILE = os.environ.get("VISION_ENV_FILE",
-                          os.path.join(os.path.expanduser("~"), ".config/agent-vision-toolkit/env"))
+PROXY = os.environ.get("RELAY_URL", "http://127.0.0.1:19100")
+ENV_FILE = os.environ.get("RELAY_ENV_FILE",
+                          os.path.join(os.path.expanduser("~"), ".config/agent-relay/env"))
 
 PASS, FAIL = [], []
 

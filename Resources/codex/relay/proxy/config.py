@@ -30,6 +30,28 @@ CODEX_HEADERS = {"originator", "session-id", "thread-id", "user-agent"}
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def relay_env(name: str, default=None):
+    """读 `RELAY_*`；没设就回落到旧的 `VISION_*` 名字（2026-10-06 改名过渡用）。
+
+    vision_proxy → agent-relay 改名时，老机器上的 env 文件里还是 VISION_* 三行，
+    迁移脚本会改写它们，但这个兜底保证「代码先更新、env 还没改」的窗口也不会坏。
+    """
+    suffix = name[len("RELAY_"):] if name.startswith("RELAY_") else ""
+    legacy_names = []
+    if suffix:
+        legacy_names.append("VISION_" + suffix)
+        # Muse 那几个开关旧名带一个多余的前缀：VISION_PROXY_MUSE_*
+        if suffix.startswith("MUSE_"):
+            legacy_names.append("VISION_PROXY_" + suffix)
+    for key in [name, *legacy_names]:
+        if not key:
+            continue
+        value = os.environ.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
 def load_env_file(path):
     """把 env 文件里的键值灌进 os.environ。
 
@@ -55,7 +77,7 @@ def load_env_file(path):
             os.environ[key] = value
 
 
-_REASONING_REGISTRY_PATH = os.path.expanduser("~/.local/share/agent-vision-toolkit/reasoning_registry.json")
+_REASONING_REGISTRY_PATH = os.path.expanduser("~/.local/share/agent-relay/reasoning_registry.json")
 
 
 _REASONING_CACHE = None
@@ -100,7 +122,7 @@ def _clamp_reasoning_effort(model, effort):
         if mapped is None:
             return effort
         if mapped in allowed:
-            _log(f"[vision-proxy] reasoning clamp {model} {effort} -> {mapped} (alias)")
+            _log(f"[relay] reasoning clamp {model} {effort} -> {mapped} (alias)")
             return mapped
         effort = mapped
         if effort in allowed:
@@ -109,17 +131,17 @@ def _clamp_reasoning_effort(model, effort):
     ORDER = ["low","medium","high","xhigh","max"]
     # map high->xhigh for qwen style where high not in allowed but xhigh is
     if effort == "high" and "xhigh" in allowed and "high" not in allowed:
-        _log(f"[vision-proxy] reasoning clamp {model} high -> xhigh (qwen)")
+        _log(f"[relay] reasoning clamp {model} high -> xhigh (qwen)")
         return "xhigh"
     if effort == "xhigh" and "high" in allowed and "xhigh" not in allowed:
-        _log(f"[vision-proxy] reasoning clamp {model} xhigh -> high")
+        _log(f"[relay] reasoning clamp {model} xhigh -> high")
         return "high"
     try:
         req_idx = ORDER.index(effort)
     except ValueError:
         # unknown effort, fallback to high or first
         if "high" in allowed:
-            _log(f"[vision-proxy] reasoning clamp {model} {effort} -> high (unknown)")
+            _log(f"[relay] reasoning clamp {model} {effort} -> high (unknown)")
             return "high"
         return allowed[0] if allowed else effort
     # find nearest allowed by rank distance, prefer higher on tie
@@ -137,7 +159,7 @@ def _clamp_reasoning_effort(model, effort):
             best = a
             best_dist = dist
             best_rank = a_idx
-    _log(f"[vision-proxy] reasoning clamp {model} {effort} -> {best} (registry {allowed})")
+    _log(f"[relay] reasoning clamp {model} {effort} -> {best} (registry {allowed})")
     return best
 
 
@@ -250,7 +272,7 @@ _MUSE_RETRY_HISTORY = {}
 
 
 def _log(message):
-    path = os.environ.get("VISION_LOG_FILE", "")
+    path = relay_env("RELAY_LOG_FILE", "")
     if not message.startswith("[20"):  # already timestamped
         message = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
     if path:

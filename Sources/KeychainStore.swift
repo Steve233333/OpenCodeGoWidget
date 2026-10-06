@@ -55,7 +55,7 @@ enum KeychainStore {
     // Fallback: read from env file written by codex-oneclick installer
     static func loadFromEnvFile() -> String? {
         let candidates = [
-            NSString(string: "~/.config/agent-vision-toolkit/env").expandingTildeInPath,
+            NSString(string: "~/.config/agent-relay/env").expandingTildeInPath,
             NSString(string: "~/.config/opencode/auth.json").expandingTildeInPath
         ]
         for path in candidates {

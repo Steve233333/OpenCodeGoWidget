@@ -78,7 +78,7 @@ def _coerce_float_ints_in_args_str(args):
         fixed = json.dumps(obj, ensure_ascii=False)
     except Exception:
         return args
-    _log("[vision-proxy] coerced float->int in tool-call arguments for Codex u64 params")
+    _log("[relay] coerced float->int in tool-call arguments for Codex u64 params")
     return fixed
 
 
@@ -159,7 +159,7 @@ def _repair_history_args(args):
                 return base + suffix
             except Exception:
                 continue
-    _log(f"[vision-proxy] unrecoverable history arguments, replaced with {{}}: {args[:60]!r}")
+    _log(f"[relay] unrecoverable history arguments, replaced with {{}}: {args[:60]!r}")
     return "{}"
 
 
@@ -193,7 +193,7 @@ def _normalize_fc_args_history(parsed):
                 item["arguments"] = coerced
                 changed = True
     if changed:
-        _log("[vision-proxy] repaired malformed function_call arguments in zen/go request history")
+        _log("[relay] repaired malformed function_call arguments in zen/go request history")
     return changed
 
 
@@ -223,7 +223,7 @@ def _sanitize_input_ids(parsed):
     ]
     if len(filtered) != orig_len:
         parsed["input"] = filtered
-        _log(f"[vision-proxy] dropped {orig_len - len(filtered)} input item(s) with ':' or rs_ prefix in id for Zen/Go store=false 400")
+        _log(f"[relay] dropped {orig_len - len(filtered)} input item(s) with ':' or rs_ prefix in id for Zen/Go store=false 400")
         return True
     return False
 
@@ -269,7 +269,7 @@ def _fix_tool_required(parsed):
                     req.append("limit")
                     changed = True
     if changed:
-        _log("[vision-proxy] patched tool required[] to include limit for Zen/Go strict 400")
+        _log("[relay] patched tool required[] to include limit for Zen/Go strict 400")
     return changed
 
 
@@ -355,7 +355,7 @@ def parse_mimo_tool_markup(text, tool_param_types=None):
         cursor = end + len("</tool_call>")
     clean_text = "".join(clean)
     if calls:
-        _log(f"[vision-proxy] MiMo XML 工具调用已从正文摘出 {len(calls)} 个：{[c['name'] for c in calls]}")
+        _log(f"[relay] MiMo XML 工具调用已从正文摘出 {len(calls)} 个：{[c['name'] for c in calls]}")
     return clean_text, calls
 
 

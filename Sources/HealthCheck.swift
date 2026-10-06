@@ -24,7 +24,7 @@ struct HealthItem: Identifiable {
 /// 每项都带证据（状态码、文件路径、版本号），坏机器上点一下就能把报告贴出来。
 enum HealthCheck {
     static let home = FileManager.default.homeDirectoryForCurrentUser
-    static let envFile = home.appendingPathComponent(".config/agent-vision-toolkit/env")
+    static let envFile = home.appendingPathComponent(".config/agent-relay/env")
     static let codexHome = home.appendingPathComponent(".codex-deepseek")
 
     static func run() async -> [HealthItem] {
@@ -50,7 +50,7 @@ enum HealthCheck {
         // ---- 1. 本地代理：三态（未加载 / 加载了但没进程 / 进程在但端口不通）+ 用的哪个解释器 ----
         // 2026-09-23：macOS 27 升级那次就是"加载了但没起来"，以前只报"没响应"，看不出是哪一步。
         let proxyAlive = await proxyResponds()
-        let proxyJob = launchctlJobState("com.agent-vision-toolkit.proxy")
+        let proxyJob = launchctlJobState("com.agent-relay")
         let runtime = proxyRuntimeInfo()
         let interpText = runtime["interpreter"].flatMap { $0.isEmpty ? nil : $0 } ?? ""
         let verText = runtime["version"] ?? ""
@@ -62,7 +62,7 @@ enum HealthCheck {
         } else if proxyJob.loaded && !proxyAlive {
             let exit = proxyJob.lastExit.map { "launchctl 最后退出码 \($0)" } ?? "launchctl 没给退出码"
             items.append(HealthItem(level: .fail, title: "本地代理",
-                detail: "任务已加载但进程没起来（\(exit)）→ 点「修复本地代理」；再不行重跑「配置」。日志：~/.local/share/agent-vision-toolkit/ensure-proxy.log" + suffix))
+                detail: "任务已加载但进程没起来（\(exit)）→ 点「修复本地代理」；再不行重跑「配置」。日志：~/.local/share/agent-relay/ensure-relay.log" + suffix))
         } else if !proxyJob.loaded && proxyAlive {
             items.append(HealthItem(level: .warn, title: "本地代理", detail: "端口有响应，但 launchd 里没有这个任务（重启后会消失）→ 点「修复本地代理」" + suffix))
         } else {
@@ -171,7 +171,7 @@ enum HealthCheck {
                                     : "来源：\(widgetLoad.source)"))
 
         // ---- 10. 代理最近一次报错：502 的真正原因就写在这儿 ----
-        let logPath = home.appendingPathComponent(".local/share/agent-vision-toolkit/proxy.err.log")
+        let logPath = home.appendingPathComponent(".local/share/agent-relay/relay.err.log")
         if let text = try? String(contentsOf: logPath, encoding: .utf8) {
             let recent = text.split(separator: "\n", omittingEmptySubsequences: true).suffix(600).filter {
                 $0.contains("handler error") || $0.contains("Upstream network error")
@@ -287,10 +287,10 @@ enum HealthCheck {
         return state
     }
 
-    /// ensure-proxy.sh 写的状态文件（key=value）：当前解释器 / 上次修复时间
+    /// ensure-relay.sh 写的状态文件（key=value）：当前解释器 / 上次修复时间
     static func proxyRuntimeInfo() -> [String: String] {
         let path = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/share/agent-vision-toolkit/proxy-runtime")
+            .appendingPathComponent(".local/share/agent-relay/relay-runtime")
         guard let text = try? String(contentsOf: path, encoding: .utf8) else { return [:] }
         var map: [String: String] = [:]
         for line in text.split(separator: "\n") {

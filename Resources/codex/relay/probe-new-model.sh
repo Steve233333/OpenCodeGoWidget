@@ -12,7 +12,7 @@ GO_KEY="${2:-}"
 if [ -z "$MODEL" ]; then echo "用法：$0 <网关模型id> [--go-key KEY]"; exit 1; fi
 if [[ "$GO_KEY" == "--go-key" ]]; then GO_KEY="${3:-}"; fi
 if [ -z "$GO_KEY" ]; then
-  GO_KEY="$(grep '^ZEN_API_KEY=' "$HOME/.config/agent-vision-toolkit/env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'")"
+  GO_KEY="$(grep '^ZEN_API_KEY=' "$HOME/.config/agent-relay/env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'")"
 fi
 [ -z "$GO_KEY" ] && { echo "找不到 ZEN_API_KEY"; exit 1; }
 

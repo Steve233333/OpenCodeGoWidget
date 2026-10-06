@@ -19,12 +19,13 @@ from .config import (
     _MUSE_RETRY_LIMIT,
     _MUSE_RETRY_WINDOW,
     _log,
+    relay_env,
 )
 
 
 def _muse_flag(name, default=True):
     """env 开关（从 env 文件灌进 os.environ）：1/true/yes/on 开，0/false/no/off 关。"""
-    raw = os.environ.get(name)
+    raw = relay_env(name)
     if raw is None:
         return default
     return str(raw).strip().lower() not in ("", "0", "false", "no", "off")
@@ -204,7 +205,7 @@ def _sanitize_muse_tool_schemas(parsed):
     """
     if not isinstance(parsed, dict) or not _is_muse_model(parsed.get("model")):
         return False
-    if not _muse_flag("VISION_PROXY_MUSE_SCHEMA_FIX"):
+    if not _muse_flag("RELAY_MUSE_SCHEMA_FIX"):
         return False
     tools = parsed.get("tools")
     if not isinstance(tools, list):
@@ -223,13 +224,13 @@ def _sanitize_muse_tool_schemas(parsed):
                 before = len(json.dumps(params, ensure_ascii=False))
                 if _repair_muse_schema_stubs(params):
                     changed = True
-                if _muse_flag("VISION_PROXY_MUSE_SCHEMA_REF_FIX"):
+                if _muse_flag("RELAY_MUSE_SCHEMA_REF_FIX"):
                     expanded, ref_changed = _inline_local_refs(params, params)
                     if ref_changed:
                         after = len(json.dumps(expanded, ensure_ascii=False))
                         # 展开后爆量的宁可跳过（好过把请求撑爆）：>3 倍且 +200KB 以上就放弃
                         if after > before * 3 and after - before > 200 * 1024:
-                            _log(f"[vision-proxy] muse $ref inline skipped tool={entry.get('name')} {before}->{after}")
+                            _log(f"[relay] muse $ref inline skipped tool={entry.get('name')} {before}->{after}")
                         else:
                             entry["parameters"] = expanded
                             params = expanded
@@ -242,7 +243,7 @@ def _sanitize_muse_tool_schemas(parsed):
                 entry["strict"] = False
                 changed = True
     if changed:
-        _log(f"[vision-proxy] muse tool schema sanitized tools={len(tools)}")
+        _log(f"[relay] muse tool schema sanitized tools={len(tools)}")
     return changed
 
 
@@ -250,13 +251,13 @@ def _inject_muse_no_preamble(parsed):
     """Muse 专属：instructions 里补一条「要么工具调用要么最终答复」的硬约束（幂等）。"""
     if not isinstance(parsed, dict) or not _is_muse_model(parsed.get("model")):
         return False
-    if not _muse_flag("VISION_PROXY_MUSE_NO_PREAMBLE"):
+    if not _muse_flag("RELAY_MUSE_NO_PREAMBLE"):
         return False
     instructions = parsed.get("instructions")
     if not isinstance(instructions, str) or MUSE_NO_PREAMBLE_INSTRUCTION in instructions:
         return False
     parsed["instructions"] = instructions.rstrip() + "\n\n" + MUSE_NO_PREAMBLE_INSTRUCTION
-    _log("[vision-proxy] muse no-preamble constraint appended to instructions")
+    _log("[relay] muse no-preamble constraint appended to instructions")
     return True
 
 
@@ -264,7 +265,7 @@ def _inject_muse_tool_first(parsed):
     """Muse 专属：input 末尾（模型最后读到的地方）再压一条工具优先约束（幂等）。"""
     if not isinstance(parsed, dict) or not _is_muse_model(parsed.get("model")):
         return False
-    if not _muse_flag("VISION_PROXY_MUSE_NO_PREAMBLE"):
+    if not _muse_flag("RELAY_MUSE_NO_PREAMBLE"):
         return False
     items = parsed.get("input")
     if not isinstance(items, list):
@@ -281,7 +282,7 @@ def _inject_muse_tool_first(parsed):
         "role": "developer",
         "content": [{"type": "input_text", "text": MUSE_TOOL_FIRST_INSTRUCTION}],
     })
-    _log("[vision-proxy] muse tool-first constraint appended to input")
+    _log("[relay] muse tool-first constraint appended to input")
     return True
 
 

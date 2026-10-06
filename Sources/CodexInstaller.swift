@@ -61,11 +61,11 @@ final class CodexInstaller: ObservableObject {
     // 路径常量
     static var home: String { FileManager.default.homeDirectoryForCurrentUser.path }
     static var codexHome: String { (home as NSString).appendingPathComponent(".codex-deepseek") }
-    static var envFile: String { (home as NSString).appendingPathComponent(".config/agent-vision-toolkit/env") }
+    static var envFile: String { (home as NSString).appendingPathComponent(".config/agent-relay/env") }
     static var patchBase: String { (home as NSString).appendingPathComponent(".codex/picker-patch") }
     static var passFile: String { (patchBase as NSString).appendingPathComponent(".keychain-pass") }
     static var logFile: String { (home as NSString).appendingPathComponent("Library/Logs/codex-oneclick-setup.log") }
-    static var proxyPlist: String { (home as NSString).appendingPathComponent("Library/LaunchAgents/com.agent-vision-toolkit.proxy.plist") }
+    static var proxyPlist: String { (home as NSString).appendingPathComponent("Library/LaunchAgents/com.agent-relay.plist") }
     static var discoveryPlist: String { (home as NSString).appendingPathComponent("Library/LaunchAgents/com.steve233.go-model-discovery.plist") }
 
     // MARK: - 资源定位

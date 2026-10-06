@@ -91,15 +91,15 @@ do
   fi
 done
 
-# 3a. 代理目录（2026-09-23 Phase 3 拆成 vision_proxy.py + proxy/ 包）：整目录递归比
-VISION_REPO="$WIDGET_DIR/Resources/codex/vision"
-VISION_HOME="$HOME/.local/share/agent-vision-toolkit"
-if [ -d "$VISION_REPO" ]; then
+# 3a. 代理目录（2026-09-23 Phase 3 拆成 relay.py + proxy/ 包）：整目录递归比
+RELAY_REPO="$WIDGET_DIR/Resources/codex/relay"
+RELAY_HOME="$HOME/.local/share/agent-relay"
+if [ -d "$RELAY_REPO" ]; then
   vision_missing=0
   vision_drift=0
   while IFS= read -r rel; do
-    repo_file="$VISION_REPO/$rel"
-    home_file="$VISION_HOME/$rel"
+    repo_file="$RELAY_REPO/$rel"
+    home_file="$RELAY_HOME/$rel"
     case "$rel" in __pycache__/*|*/__pycache__/*|*.pyc) continue ;; esac
     if [ ! -f "$home_file" ]; then
       echo "   电脑上缺：$rel"
@@ -110,7 +110,7 @@ if [ -d "$VISION_REPO" ]; then
       echo "   不一样：$rel"
       vision_drift=$((vision_drift + 1))
     fi
-  done < <(cd "$VISION_REPO" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)
+  done < <(cd "$RELAY_REPO" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)
   if [ "$vision_missing" = "0" ] && [ "$vision_drift" = "0" ]; then
     say_ok "vision 目录（含 proxy/ 子目录）跟电脑上一样"
   elif [ "$vision_drift" -le 2 ] && [ "$vision_missing" = "0" ]; then
@@ -120,7 +120,7 @@ if [ -d "$VISION_REPO" ]; then
     echo "   跑 sync-from-home.sh 同步一下，或让安装器重新同步"
   fi
 else
-  say_bad "找不到 Resources/codex/vision"
+  say_bad "找不到 Resources/codex/relay"
 fi
 
 # 3b. 视觉链路已下线（2026-09-10）：这两个东西不该再出现，出现说明回退了
@@ -132,7 +132,7 @@ for gone in "vision/vision_client.py" "vision/bin"; do
   fi
 done
 
-# 3c. 安装器里不该再有 GLM / VISION_API_KEY 询问
+# 3c. 安装器里不该再有 GLM / RELAY_API_KEY 询问
 INSTALLER_CHK="$WIDGET_DIR/Resources/codex/codex-oneclick-setup.command"
 if [ -f "$INSTALLER_CHK" ]; then
   # 同上：现在要看主脚本 + setup/steps/*.sh 合起来
@@ -141,7 +141,7 @@ if [ -f "$INSTALLER_CHK" ]; then
   if [ -d "$STEPS_DIR" ]; then
     cat "$STEPS_DIR"/*.sh >> "$INSTALLER_CHK_ALL" 2>/dev/null || true
   fi
-  if grep -q "VISION_API_KEY=%s\|智谱 GLM 视觉 Key" "$INSTALLER_CHK_ALL"; then
+  if grep -q "RELAY_API_KEY=%s\|智谱 GLM 视觉 Key" "$INSTALLER_CHK_ALL"; then
     say_bad "安装器里还有 GLM 视觉 Key 询问（视觉链路已下线）"
   else
     say_ok "安装器已无 GLM 视觉 Key 询问"
