@@ -110,6 +110,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 2026-09-23：看护本地代理 —— 系统升级/重启后 launchd 任务可能没挂上，
         // 以前只能靠用户再点一次「配置」（macOS 27 升级后 Codex 就是这样卡住的）。
         ProxyWatchdog.shared.start()
+        // 2026-10-07：默认开启「静默自动更新」——每 6 小时查一次，有新版本直接下载+替换+重启
+        UpdateChecker.shared.startSilentLoop()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

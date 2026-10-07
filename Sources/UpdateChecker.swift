@@ -49,6 +49,43 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "-"
     }
 
+    // MARK: - 静默自动更新（2026-10-07，默认开）
+
+    /// 用户可在设置里关掉；没设过就是**开**。
+    static let silentUpdateKey = "silentAutoUpdate"
+    static var silentUpdateEnabled: Bool {
+        let d = UserDefaults.standard
+        return d.object(forKey: silentUpdateKey) == nil ? true : d.bool(forKey: silentUpdateKey)
+    }
+    private var silentTimer: Timer?
+
+    static func logSilent(_ msg: String) {
+        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(msg)\n"
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Logs/opencodego-update.log")
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
+        } else {
+            try? line.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// App 一跑起来就挂上（幂等）：每 6 小时静默查一次
+    func startSilentLoop() {
+        guard Self.silentUpdateEnabled, silentTimer == nil else { return }
+        silentTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
+            self?.check(force: true)
+        }
+        Self.logSilent("静默自动更新：已启用（每 6 小时查一次，当前 \(Self.currentVersion)）")
+    }
+
+    private func autoInstallIfSilent(_ info: UpdateInfo) {
+        guard Self.silentUpdateEnabled else { return }
+        guard case .available = state else { return }
+        Self.logSilent("发现新版本 \(info.version)（当前 \(Self.currentVersion)）→ 开始静默下载")
+        install()
+    }
+
     /// 打开设置页时调用：24 小时内只自动查一次
     func checkIfNeeded() {
         let last = UserDefaults.standard.double(forKey: Self.lastCheckKey)
@@ -95,6 +132,7 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
             DispatchQueue.main.async {
                 UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastCheckKey)
                 self.state = Self.isNewer(version, than: Self.currentVersion) ? .available(info) : .upToDate(Self.currentVersion)
+                if case .available(let found) = self.state { self.autoInstallIfSilent(found) }
             }
         }.resume()
     }
@@ -127,6 +165,7 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
             DispatchQueue.main.async {
                 UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastCheckKey)
                 self.state = Self.isNewer(version, than: Self.currentVersion) ? .available(info) : .upToDate(Self.currentVersion)
+                if case .available(let found) = self.state { self.autoInstallIfSilent(found) }
             }
         }.resume()
     }
@@ -242,6 +281,7 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
             }
             return
         }
+        Self.logSilent("新版本 \(ver) 已下载并校验通过 → 交给替换脚本（旧版 \(Self.currentVersion)）")
         launchSwapScript(newApp: newApp.path, appPath: appPath, oldVersion: Self.currentVersion)
     }
 

@@ -87,19 +87,19 @@ final class AccountSession: ObservableObject {
         phase = .fetching
         statusText = "正在从 opencode.ai 拉取密钥…"
         do {
-            let html = try await OpenCodeKeyFetcher.fetchKeysHTML(workspaceID: workspaceID, authCookie: cookie)
-            let keys = OpenCodeKeyFetcher.parseKeys(from: html)
+            let session = defaults?.string(forKey: "consoleSession") ?? ""
+            let keys = try await OpenCodeKeyFetcher.fetchServiceAccounts(
+                workspaceID: workspaceID, authCookie: cookie, consoleSession: session)
             remoteKeys = keys
             if keys.isEmpty {
-                let expired = html.contains("/github/authorize") || html.contains("Continue with GitHub")
-                phase = .error(expired ? "登录已过期，请在下方浏览器重新登录" : "没有解析到密钥，可在下方浏览器里创建")
+                phase = .error("没读到密钥（可能登录态过期）→ 在下方浏览器里打开一次控制台页面")
                 statusText = ""
             } else {
-                statusText = "发现 \(keys.count) 个密钥"
                 phase = .loggedIn
-                if autoApply, let pick = autoPick(keys) {
-                    applyKey(pick)
-                }
+                // 2026-10-07：新控制台不再提供完整密钥，这里只能列出名字/提示手动粘贴（绝不覆盖已存 Key）
+                let names = keys.prefix(3).map { $0.name.isEmpty ? $0.display : $0.name }.joined(separator: "、")
+                statusText = "发现 \(keys.count) 个密钥（\(names)）· 完整密钥官方只在创建时展示 → 请到控制台新建后粘贴（workspace 与凭据已自动填好）"
+                _ = autoApply
             }
         } catch {
             phase = .error((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
@@ -222,6 +222,18 @@ struct LoginWebView: NSViewRepresentable {
             let ws = OpenCodeKeyFetcher.workspaceID(fromURL: url)
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
                 guard let self else { return }
+                // 2026-10-07：新控制台还要 __Host-console_session（面板里的「workspace 凭据」）。
+                // 以前只存 auth，所以那一格永远是空的、费用图/按 Key 视图也起不来。
+                if let sess = cookies.first(where: {
+                    $0.name == "__Host-console_session" && $0.domain.contains("opencode.ai") && !$0.value.isEmpty
+                }) {
+                    let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+                    if suite?.string(forKey: "consoleSession") != sess.value {
+                        suite?.set(sess.value, forKey: "consoleSession")
+                        suite?.synchronize()
+                        NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
+                    }
+                }
                 guard let auth = cookies.first(where: {
                     $0.name == "auth" && $0.domain.contains("opencode.ai") && !$0.value.isEmpty
                 }) else { return }
