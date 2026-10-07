@@ -401,11 +401,14 @@ int main(int argc, char **argv) {
     char bin[1100];
     snprintf(ud, sizeof(ud), "--user-data-dir=%s/Library/Application Support/Codex-Patched", home);
     snprintf(bin, sizeof(bin), "%s/Applications/ChatGPT-Patched.app/Contents/MacOS/ChatGPT.bin", home);
-    int n = argc + 1;
+    int n = argc + 3;
     char **newargv = malloc(sizeof(char*) * (n + 1));
     newargv[0] = bin;
     newargv[1] = ud;
-    for (int i = 1; i < argc; i++) newargv[i + 1] = argv[i];
+    /* 2026-10-07：离线启动别退回英文 —— 语言是联网时从账号取的，这里把 zh-CN 钉死在启动参数里 */
+    newargv[2] = "--lang=zh-CN";
+    newargv[3] = "--accept-lang=zh-CN,zh;q=0.9";
+    for (int i = 1; i < argc; i++) newargv[i + 3] = argv[i];
     newargv[n] = NULL;
     execv(bin, newargv);
     perror("execv");
@@ -421,7 +424,10 @@ EOF
   # 启动器，否则主可执行文件缺失 → 系统报"应用程序可能已损坏或不完整"。
   launcher_ok=""
   if command -v clang >/dev/null 2>&1 && clang --version >/dev/null 2>&1; then
-    if clang -O2 -o "$bindir/ChatGPT" "$BASE/scripts/launcher.c" >> "$LOG" 2>&1 && [ -s "$bindir/ChatGPT" ]; then
+    local xc_sdk=""
+    xc_sdk="$(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+    [ -d "$xc_sdk" ] || xc_sdk=""
+    if clang -O2 ${xc_sdk:+-isysroot "$xc_sdk"} -o "$bindir/ChatGPT" "$BASE/scripts/launcher.c" >> "$LOG" 2>&1 && [ -s "$bindir/ChatGPT" ]; then
       launcher_ok=1
       log "launcher compiled with clang"
     else
@@ -474,6 +480,18 @@ EOF
 
   printf '{"sourceVersion":"%s","builtAt":"%s"}\n' "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MARKER"
   log "marker written: $version"
+  # 2026-10-07：离线启动别退回英文 —— 种一份 Chromium locale（账号语言只在联网时可取）
+  python3 - "$HOME" << 'PYEOF' || true
+import json, os, sys
+p = os.path.join(sys.argv[1], "Library/Application Support/Codex-Patched/Local State")
+try:
+    d = json.load(open(p)) if os.path.exists(p) else {}
+except Exception:
+    d = {}
+d.setdefault("intl", {}).update({"app_locale": "zh-CN", "accept_languages": "zh-CN,zh,en-US,en"})
+os.makedirs(os.path.dirname(p), exist_ok=True)
+json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
+PYEOF
 
   # 每次重建顺手维护 CLI 软链：官方再改布局，手机端 ccpocket 桥也不会断
   ensure_cli_symlink

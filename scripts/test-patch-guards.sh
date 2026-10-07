@@ -55,7 +55,11 @@ else
       echo 'log() { echo "$*" >> "$LOG"; }'
       echo "$clang_def"
       echo "$prep"
+      # 2026-10-07：这段在 patch.sh 里是函数内的（含 local）→ 抠出来也要包成函数再跑
+      echo 'f() {'
       cat "$WORK/block.sh"
+      echo '}'
+      echo 'f'
     } > "$dir/harness.sh"
     bash "$dir/harness.sh" >> "$dir/log" 2>&1
     echo $? > "$dir/rc"

@@ -2,6 +2,22 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.53 — 副本维护两处加固：Xcode SDK 编译回退 + 启动器强制 zh-CN
+
+**① 修「26.930 重建变砖」的根**：patch.sh 编译启动器时改用 **Xcode 的 SDK**
+（`DEVELOPER_DIR=/Applications/Xcode.app/... xcrun --sdk macosx --show-sdk-path` + `-isysroot`）。
+起因：本机 CommandLineTools 的 SDK 坏了（`libSystem.B.tbd: unknown architecture`），clang 链接必然失败 →
+旧逻辑只能回退预编译启动器（26.930 那次副本"可能已损坏"正是这么来的）。现在只要装了 Xcode 就能正常编译。
+
+**② 启动器注入 `--lang=zh-CN` + `--accept-lang=zh-CN,zh;q=0.9`**，并在重建后自动往副本的
+`Local State` 种一份 Chromium locale。**实测结论**：这个 app 的界面语言**完全来自服务端账号偏好** ——
+`--lang` 已确认传进进程参数（`ChatGPT.bin … --lang=zh-CN`）界面仍是英文；profile 里翻遍
+`Local Storage`/`Session Storage`/`IndexedDB` **零个**语言字段；我种的 `intl.app_locale` 重启后被 app 重置为 `null`。
+所以**离线启动回退英文属上游行为，本地无解**（官方仓库 #24741「i18n is disabled by default」、#48028/#46206 同类问题一堆）；
+实用绕过是**启动时联一下网**，语言即切回中文。**语言相关的改动是"钉住 Chromium 层"，不改动也不会坏事。**
+
+版本 **1.1.11.53 (93)**。
+
 ### v1.1.11.52 — 修「浏览器登录自动获取」失效 + 小组件默认静默自动更新
 
 **① 自动填充为什么失效（上游 9 月新控制台的连带伤害，三条独立问题）**
