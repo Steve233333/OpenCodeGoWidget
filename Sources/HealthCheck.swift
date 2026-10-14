@@ -461,7 +461,12 @@ enum HealthCheck {
             let t = line.trimmingCharacters(in: .whitespaces)
             guard t.hasPrefix("experimental_bearer_token") else { continue }
             let parts = t.split(separator: "\"")
-            if parts.count >= 2 { return String(parts[1]) }
+            if parts.count >= 2 {
+                let v = String(parts[1])
+                // 2026-10-14：中继占位凭据不算用户的 DeepSeek Key（否则自检会拿它去打官方接口报 401）
+                if v == "sk-relay-placeholder" { return nil }
+                return v
+            }
         }
         return nil
     }

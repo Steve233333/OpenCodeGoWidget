@@ -318,13 +318,18 @@ struct LoginSheetView: View {
                         Text(key.name.isEmpty ? "未命名" : key.name).font(.caption)
                         Text(key.display).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                         if !key.isUsable {
-                            Text("（他人密钥，只能看到缩写；可在官网删除/新建）")
-                                .font(.system(size: 9)).foregroundStyle(.orange)
+                            // 2026-10-14：官方新控制台只在创建时展示完整值，任何 Key 都只能看到缩写 ——
+                            // 以前这里写"他人密钥"，会让人以为是自己权限不够，属误导。
+                            Text("（官方只在创建时展示完整值，这里只能看到缩写）")
+                                .font(.system(size: 9)).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button("使用此 Key") { session.applyKey(key) }
-                            .controlSize(.small)
-                            .disabled(!key.isUsable)
+                        Button("去官网新建") {
+                            let ws = session.workspaceID
+                            let raw = ws.isEmpty ? "https://opencode.ai/console" : "https://opencode.ai/console/\(ws)/service-accounts"
+                            if let u = URL(string: raw) { NSWorkspace.shared.open(u) }
+                        }
+                        .controlSize(.small)
                     }
                     .padding(.horizontal, 12).padding(.vertical, 5)
                     if key.id != session.remoteKeys.last?.id { Divider().padding(.leading, 32) }
@@ -335,7 +340,7 @@ struct LoginSheetView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            Text("登录后自动获取：Go Key（本人密钥才有完整值）、workspace、Cookie。推荐用 GitHub 登录；Google 可能拒绝内嵌浏览器。DeepSeek Key 官方只在创建时展示一次，请到 DeepSeek 控制台创建后复制。")
+            Text("登录后自动填写：workspace 与 workspace 凭据（Cookie）。Go Key 与 DeepSeek Key 官方都只在创建时展示完整值 → 请到各自控制台新建后粘贴到这里。推荐用 GitHub 登录；Google 可能拒绝内嵌浏览器。")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
             Spacer()
             Button("打开 DeepSeek 控制台") {

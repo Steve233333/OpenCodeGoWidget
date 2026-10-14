@@ -235,7 +235,9 @@ final class CodexInstaller: ObservableObject {
               m.numberOfRanges >= 2 else { return nil }
         let r = m.range(at: 1)
         let v = ns.substring(with: r)
-        return v.isEmpty ? nil : v
+        // 2026-10-14：占位凭据（给中继用的）不算"用户的 DeepSeek Key"
+        if v.isEmpty || v == "sk-relay-placeholder" { return nil }
+        return v
     }
 
     static func existingPass() -> String {

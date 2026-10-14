@@ -9,6 +9,8 @@
 # ---------------------------------------------------------------------------
 EXISTING_GO="$(grep '^ZEN_API_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
 EXISTING_DS="$(awk -F'"' '/^experimental_bearer_token *=/{print $2}' "$CODEX_HOME/config.toml" 2>/dev/null | head -1 || true)"
+# 2026-10-14：sk-relay-placeholder 是"给中继用的占位"，不是用户的 DeepSeek Key
+[[ "$EXISTING_DS" == "sk-relay-placeholder" ]] && EXISTING_DS=""
 
 GO_KEY=""
 DS_KEY=""

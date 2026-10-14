@@ -59,7 +59,12 @@ fi
 if [[ "$HAS_DS" -eq 1 ]]; then
   BEARER="$DS_KEY"
 else
-  BEARER="$GO_KEY"
+  # 2026-10-14：以前这里拿 Go Key 顶替 → 写进 experimental_bearer_token 后
+  # ① 配置页把它当成"用户的 DeepSeek Key"显示出来（用户看到"莫名其妙多了个 key"）；
+  # ② HAS_DS 被误判为真 → 官方直连模型不会被剔除，清掉 key 后下拉框里还在。
+  # 现在写一个**可识别的占位**：中继会把 Authorization 换成真实 key，Codex 只要有个凭据就够；
+  # 配置页 / 自检见到这个占位一律当"未设置"。
+  BEARER="sk-relay-placeholder"
 fi
 
 python3 - "$RES_DIR/templates/config.toml" "$CODEX_HOME/config.toml" \

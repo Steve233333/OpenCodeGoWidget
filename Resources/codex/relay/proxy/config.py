@@ -198,7 +198,12 @@ def normalize_route_model(model):
 # （2026-09-23 收敛：以前这里躺着 3 份平行名单 + 2 份学习缓存，和 server.py 里的判断互相打架。）
 
 
-_UPSTREAM_TRANSIENT_STATUS = frozenset({500, 502, 503, 504})
+# 2026-10-14：Go 网关把「瞬时不可用」也能用 403 表达（正文 Endpoint is unavailable）——
+# 实测 cat-jam-free 直接打上游三种模式全 200，但经桥第一次撞 403 就被判失败 → 用户看到 502。
+# 这里把 403 一并当瞬时重试；真·权限/额度 403 只是多试几次，最终结果与以前一致。
+# 2026-10-14：免费模型被上游限流时回 429（实测 step-5-preview-free 4/4 组合都 429）——
+# 属于等一会儿就好的类型，同样退避重试。
+_UPSTREAM_TRANSIENT_STATUS = frozenset({403, 429, 500, 502, 503, 504})
 
 
 _ANTHROPIC_VERSION = "2023-06-01"

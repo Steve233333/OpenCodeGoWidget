@@ -33,15 +33,22 @@ else:
 
 MODELS=("$@")
 if [ "${#MODELS[@]}" -eq 0 ]; then
-  MODELS=(deepseek-v4.1-flash-go mimo-v2.6-flash-go muse-spark-1.3-contributor-go glm-5.3-go)
+  # 2026-10-14：muse-spark-1.3 的免费额度在账号侧用完 → 网关恒回 403（不是代码问题），
+  # 它继续留在代理单测里（muse 兼容 8 例），但不再当部署门禁的硬指标；要测就显式传参。
+  MODELS=(deepseek-v4.1-flash-go mimo-v2.6-flash-go glm-5.3-go)
 fi
 
 fail=0
 for m in "${MODELS[@]}"; do
   out="$(mktemp)"
   payload=$(printf '{"model":"%s","stream":true,"max_output_tokens":3000,"input":"用一句话说明：换手机电池前要做什么？"}' "$m")
-  code="$(curl -s -o "$out" -w '%{http_code}' --max-time 180 -X POST "$PROXY/v1/responses" \
-           -H 'Authorization: Bearer dummy' -H 'Content-Type: application/json' -d "$payload")"
+  code=""
+  for _try in 1 2; do   # 2026-10-14：上游偶发 Endpoint is unavailable，重试一次再判失败
+    code="$(curl -s -o "$out" -w '%{http_code}' --max-time 180 -X POST "$PROXY/v1/responses" \
+             -H 'Authorization: Bearer dummy' -H 'Content-Type: application/json' -d "$payload")"
+    [ "$code" = "200" ] && break
+    sleep 3
+  done
   chars="$(python3 -c "$COUNT_TEXT" "$out" 2>/dev/null || echo 0)"
   markup="$(grep -c '<tool_call>' "$out" 2>/dev/null || true)"
   [ -z "$markup" ] && markup=0
