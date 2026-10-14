@@ -2,6 +2,22 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.56 — 模型悬停提示改中文一行（顺手修掉历史残字）
+
+Codex 把 `models.json` 里每个模型的 `description` 当**悬停提示**显示 —— 而它一直是发现脚本写的英文样板
+（`OpenCode Go model (x), routed via opencode.ai Zen/Go proxy. auto-discovered <日期>`，10 个老条目还带被截断的残字
+`…proxy. n`），于是模型列表里每个模型都挂着一个信息量很低的黑框。现在改成**中文一行**：
+
+```
+Claude-Haiku-5.5 (Go) · 上下文 1M · 档位 low/medium/high/xhigh/max
+LongCat-2.5-Preview-Free (Go) · 上下文 1M · 档位 high
+```
+
+数据全部取自模型条目自身（`display_name` / `context_window` / `supported_reasoning_levels`），不额外请求任何接口；
+发现脚本每轮结束会**统一归一化**（新模型 + 老条目一起），所以以后不会再有英文样板或残字。
+
+版本 **1.1.11.56 (96)**。
+
 ### v1.1.11.55 — 收尾三件：密钥面板说人话 + 429 也重试 + 仓库 tag 修正
 
 - **密钥面板不再误导**：「他人密钥，只能看到缩写」→「**官方只在创建时展示完整值，这里只能看到缩写**」；

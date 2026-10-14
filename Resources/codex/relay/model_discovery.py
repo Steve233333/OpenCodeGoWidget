@@ -184,6 +184,50 @@ DISPLAY_TO_ID = {
 def _norm_display(s):
     return re.sub(r"\s+", " ", s.strip().lower().replace("-", " ").replace("–", " ")).strip()
 
+def _ctx_text(ctx):
+    """上下文长度 → 人话（1000000 → 1M，262144 → 262K，缺了就不显示）"""
+    if not isinstance(ctx, int) or ctx <= 0:
+        return ""
+    return f"{ctx/1_000_000:.0f}M" if ctx >= 1_000_000 else f"{ctx//1000}K"
+
+
+def _describe_entry(e):
+    """模型悬停提示（Codex 把 description 当 tooltip）。
+
+    2026-10-14：以前每个模型都写 "OpenCode Go model (...), routed via opencode.ai Zen/Go proxy.
+    auto-discovered <日期>" —— 纯英文样板、信息量低，用户看到一串黑框。现在给中文一行：
+    「显示名 · Go/Zen · 上下文 1M · 档位 low/high/max」。
+    """
+    slug = e.get("slug") or ""
+    name = e.get("display_name") or slug
+    kind = "Zen" if slug.endswith("-zen") else "Go"
+    if slug.endswith("-free") and kind == "Zen":
+        kind = "Zen 免费"
+    bits = [name]
+    if "(go)" not in name.lower() and "(zen)" not in name.lower():
+        bits.append(kind)   # 显示名里已带 (Go)/(Zen) 就别重复
+    ctx = _ctx_text(e.get("context_window") or e.get("max_context_window"))
+    if ctx:
+        bits.append(f"上下文 {ctx}")
+    levels = [lv.get("effort") for lv in (e.get("supported_reasoning_levels") or [])
+              if isinstance(lv, dict) and lv.get("effort")]
+    if levels:
+        bits.append("档位 " + "/".join(levels))
+    return " · ".join(bits)
+
+
+def normalize_descriptions(models):
+    """把每个模型的 description 重写成上面那种中文一行（顺带修掉历史上被截断的残字）。"""
+    n = 0
+    for e in models or []:
+        if not isinstance(e, dict):
+            continue
+        new = _describe_entry(e)
+        if e.get("description") != new:
+            e["description"] = new
+            n += 1
+    return n
+
 def _modelsdev_id_index():
     """models.dev 的「归一显示名 / 官方 id」-> 官方 id。用于把文档表格行名归一到网关真 id。"""
     idx = {}
@@ -428,6 +472,10 @@ def save_cache(ids):
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     j = {"ids": ids, "fetchedAt": int(time.time()), "fetchedAtStr": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     tmp = CACHE_FILE.with_suffix(".tmp")
+    try:
+        normalize_descriptions(j.get("models"))
+    except Exception:
+        pass
     tmp.write_text(json.dumps(j, ensure_ascii=False, indent=2))
     tmp.replace(CACHE_FILE)
 
@@ -749,7 +797,7 @@ def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=
     e["slug"] = slug
     # 官方 name 只在按真 id 命中时采信（避免拿非 free 条目的名字去命名 free 模型）
     e["display_name"] = _display_name_for(remote_id, suffix, (md[3] if (md and len(md) > 3 and remote_id in modelsdev_map) else None))
-    e["description"] = f"OpenCode {'Zen Free' if is_zen else 'Go'} model ({remote_id}), routed via opencode.ai {'Zen' if is_zen else 'Zen/Go'} proxy. auto-discovered {time.strftime('%Y-%m-%d')}"
+    e["description"] = _describe_entry(e)   # 2026-10-14：改中文一行（旧的英文样板见 _describe_entry 注释）
     e["priority"] = priority
     e["visibility"] = "list"
     if not is_zen and remote_id.startswith(("deepseek-", "gpt-5.6-luna", "muse-spark")):
