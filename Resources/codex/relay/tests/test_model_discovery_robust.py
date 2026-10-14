@@ -504,6 +504,82 @@ def t_sync_heals_stale_levels():
         assert reg["glm-5.3"] == ["low", "medium", "high"], reg.get("glm-5.3")
 
 
+# ---------- 悬停提示：存量条目也要归一化（2026-10-14）----------
+
+def t_sync_normalizes_all_descriptions():
+    """旧英文样板（"OpenCode Go model (...), routed via ... auto-discovered ..."）
+    必须被改写成中文一行，且是**每一轮 sync 都归一化**。
+
+    2026-10-14 的坑：normalize_descriptions 原来只作用在「缓存文件」和「本轮新建的
+    条目」上，写 models.json 的那条路径根本没调用它 —— 结果 37 个模型里只有 4 个
+    （这两天新加的）是中文提示，其余 33 个还是英文样板，选择器里两种风格混着。
+    这条测试锁死：一轮 sync 之后目录里一个英文样板都不许剩。
+    同时它还是「提前 return」的回归锁：数据源全部喂成与目录相同的值（除描述外没有
+    任何字段该变），如果归一化没被算作变化，脚本会提前 return 不写盘，断言立刻红。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        td = pathlib.Path(td)
+        cache = td / "cache"
+        cache.mkdir(parents=True)
+        codex_home = td / "codex-home"
+        codex_home.mkdir(parents=True)
+        (codex_home / "config.toml").write_text(
+            '[desktop]\nenabled-reasoning-efforts = ["low", "high"]\n')
+        models_path = codex_home / "models.json"
+        seed = {"models": [
+            {"slug": "glm-5.3-go", "display_name": "GLM-5.3 (Go)", "priority": 1,
+             "context_window": 1000000, "max_context_window": 1000000,
+             "description": ("OpenCode Go subscription model (glm-5.3), routed via "
+                             "opencode.ai Zen/Go proxy. new, $15/mo"),
+             "supported_reasoning_levels": [{"effort": "low", "description": "x"},
+                                            {"effort": "high", "description": "y"}],
+             "default_reasoning_level": "low", "input_modalities": ["text"]},
+            {"slug": "kimi-k3-go", "display_name": "Kimi-K3 (Go)", "priority": 2,
+             "context_window": 1048576, "max_context_window": 1048576,
+             "description": ("OpenCode Go model (kimi-k3), routed via opencode.ai "
+                             "Zen/Go proxy. auto-discovered 2026-09-11"),
+             "supported_reasoning_levels": [{"effort": "high", "description": "z"}],
+             "default_reasoning_level": "high", "input_modalities": ["text"]},
+        ]}
+        models_path.write_text(json.dumps(seed, ensure_ascii=False))
+        saved = {k: getattr(md, k) for k in
+                 ("CODEX_HOME", "MODELS_JSON", "CACHE_DIR", "CACHE_FILE", "QUOTA_CACHE_FILE",
+                  "ZEN_CACHE_FILE", "MODELSDEV_CACHE", "PRUNE_PENDING_FILE",
+                  "fetch_quota_ids", "fetch_remote_ids", "fetch_zen_free_ids",
+                  "fetch_upstream_details", "fetch_modelsdev")}
+        try:
+            md.CODEX_HOME = codex_home
+            md.MODELS_JSON = models_path
+            md.CACHE_DIR = cache
+            md.CACHE_FILE = cache / "go_models_cache.json"
+            md.QUOTA_CACHE_FILE = cache / "go_quota_cache.json"
+            md.ZEN_CACHE_FILE = cache / "zen_models_cache.json"
+            md.MODELSDEV_CACHE = cache / "modelsdev_cache.json"
+            md.PRUNE_PENDING_FILE = cache / "prune_pending.json"
+            md.fetch_quota_ids = lambda timeout=None: ["glm-5.3", "kimi-k3"]
+            md.fetch_remote_ids = lambda: []
+            md.fetch_zen_free_ids = lambda: []
+            md.fetch_upstream_details = lambda: {}
+            md.fetch_modelsdev = lambda: {
+                "glm-5.3": (1000000, ["low", "high"], {"input": ["text"]}, "GLM 5.3", "opencode-go"),
+                "kimi-k3": (1048576, ["high"], {"input": ["text"]}, "Kimi K3", "opencode-go"),
+            }
+            md.sync(force=True)
+        finally:
+            for k, v in saved.items():
+                setattr(md, k, v)
+
+        out = {m["slug"]: m for m in json.loads(models_path.read_text())["models"]}
+        assert len(out) == 2, out.keys()
+        for slug, m in out.items():
+            d = m["description"]
+            assert d.startswith(m["display_name"] + " · "), (slug, d, m["display_name"])
+            assert "上下文 " in d and "档位 " in d, (slug, d)
+            assert "routed via" not in d and "auto-discovered" not in d, (slug, d)
+        assert "上下文 1M" in out["glm-5.3-go"]["description"], out["glm-5.3-go"]["description"]
+        assert "档位 low/high" in out["glm-5.3-go"]["description"], out["glm-5.3-go"]["description"]
+
+
 # ---------- 显示名：GPT 前缀（2026-09-24）----------
 
 def t_display_name_gpt_prefix_safe():

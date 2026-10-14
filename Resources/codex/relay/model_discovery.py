@@ -1030,19 +1030,22 @@ def sync(force=False, dry_run=False):
         if updated:
             _log(f"auto context/reasoning updated {updated} fields (models.dev/registry)")
 
+    # 悬停提示统一（2026-10-14 修）：以前只有「本轮新建的模型」走 _describe_entry，
+    # 存量条目一直留着旧的英文样板（选择器里两种风格混着，用户看到一串无意义的
+    # "auto-discovered …"）。现在每轮把目录里所有条目都归一化一遍，顺便修掉历史上
+    # 被截断的残字；归一化也要算作「有变化」，否则下面会提前 return 不写盘。
+    desc_norm = normalize_descriptions(to_keep + to_add)
+    if desc_norm:
+        _log(f"description normalized for {desc_norm} models（悬停提示统一为中文一行）")
+
     # 三层档位一致：目录 -> 代理档位表 + 桌面端档位白名单（2026-09-10 加）
     # 放在刷新之后：即使模型没增删、只有档位变化，这两层也会跟着同步。
     sync_derived(to_keep + to_add, dry_run=dry_run)
 
     if not to_add and not pruned:
-        # 即使无增删，也可能有上下文/档位更新
-        try:
-            if 'updated' in locals() and updated > 0:
-                pass
-            else:
-                _log("no new models to add and no prune")
-                return 0
-        except:
+        # 即使无增删，也可能有上下文/档位更新或悬停提示归一化
+        changed_fields = locals().get("updated", 0) or 0
+        if changed_fields == 0 and desc_norm == 0:
             _log("no new models to add and no prune")
             return 0
 

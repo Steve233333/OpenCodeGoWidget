@@ -2,6 +2,30 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.57 — 悬停提示不再"只填一半"：存量条目也归一化（顺手修掉提前 return）
+
+**现象**：上一版说好悬停提示统一成中文一行，实际只有 4 个（这两天新加的）是中文，另外 **33 个仍是旧的英文样板**
+（`OpenCode Go model (gpt-6-luna), routed via opencode.ai Zen/Go proxy. auto-discovered 2026-09-24`），
+选择器里两种风格混着 —— 看起来像"只填了一半"。
+
+**根因（两处，缺一不可）**：
+
+1. `normalize_descriptions` 只挂在两个地方 —— 缓存文件（`save_cache`）和**本轮新建的条目**（`build_entry`）；
+   写 `models.json` 的主流程从来没调用它，所以存量条目永远保持旧文本，只有新模型才拿到中文一行。
+2. 主流程末尾还有"没有新增、没有剪枝就 **提前 return**"的短路 —— 即使补上归一化，只要这轮没有新模型，
+   也会直接返回不写盘，"只有描述需要修"这种情况永远修不好。
+
+**修法**：主流程每轮对 `to_keep + to_add` 跑一次 `normalize_descriptions`，并把归一化条数计入"有变化"，
+不再提前返回。新增回归锁 `t_sync_normalizes_all_descriptions`：种两个旧英文条目 → 跑一轮 sync →
+断言一个英文样板都不剩、且格式是「显示名 · Go · 上下文 … · 档位 …」（代理测试 19 → 20 条）。
+
+**实测**：本机 17:55:40 跑 `model_discovery.py --sync` → 日志 `description normalized for 38 models`，
+38/38 全部中文一行，且档位照各模型真实支持列：`GLM-5.1 (Go) · 上下文 204K · 档位 high/max`、
+`Qwen3.7-Max (Go) · 上下文 1M · 档位 high`、`Space-Bunny-Free (Go) · 档位 low/medium/high/xhigh/max`。
+（要看到新提示需重启副本 —— Codex 只在启动时读 `models.json`。）
+
+版本 **1.1.11.57 (97)**。
+
 ### v1.1.11.56 — 模型悬停提示改中文一行（顺手修掉历史残字）
 
 Codex 把 `models.json` 里每个模型的 `description` 当**悬停提示**显示 —— 而它一直是发现脚本写的英文样板
