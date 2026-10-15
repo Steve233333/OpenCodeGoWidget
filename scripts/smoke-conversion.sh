@@ -100,6 +100,32 @@ for m in mimo-v2.6-flash-go glm-5.3-go; do
 done
 rm -f "$HISTORY_JSON"
 
+# ---------- 第 6 类：跨模型 reasoning 历史 -> GPT 家族 ----------
+# 真机事故：input[158].content = [{"type":"reasoning_text",...}] 被 GPT 6 Luna
+# 判成 array_above_max_length。GPT 5.6 / 6 共用 Responses 输入约束，一起验。
+REASONING_JSON="$(mktemp)"
+cat > "$REASONING_JSON" <<'JSON'
+{"stream":false,"max_output_tokens":128,"store":false,"input":[
+ {"type":"reasoning","id":"rs_smoke","summary":[],
+  "content":[{"type":"reasoning_text","text":"先检查历史格式"}],
+  "encrypted_content":null,"signature":"third-party-signature"},
+ {"type":"message","role":"user","content":[{"type":"input_text","text":"回答：OK"}]}]}
+JSON
+for m in gpt-5.6-luna-go gpt-6-luna-go; do
+  out="$(mktemp)"
+  payload="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); p["model"]=sys.argv[2]; print(json.dumps(p,ensure_ascii=False))' "$REASONING_JSON" "$m")"
+  code="$(curl -s -o "$out" -w '%{http_code}' --max-time 180 -X POST "$PROXY/v1/responses" \
+           -H 'Authorization: Bearer dummy' -H 'Content-Type: application/json' -d "$payload")"
+  if [ "$code" = "200" ] && ! grep -q "array too long\|array_above_max_length" "$out"; then
+    echo "  ✅ reasoning 历史 ${m}：HTTP 200 · content/signature 已清洗"
+  else
+    echo "  ❌ reasoning 历史 ${m}：HTTP ${code} · $(head -c 220 "$out")"
+    fail=1
+  fi
+  rm -f "$out"
+done
+rm -f "$REASONING_JSON"
+
 if [ "$fail" = 0 ]; then
   echo "冒烟全绿 ✅"
   exit 0

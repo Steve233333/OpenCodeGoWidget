@@ -2,6 +2,32 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.58 — 模型目录不再被临时漏列清掉 + GPT 家族 reasoning 历史兼容
+
+**现象**：官网配额表偶尔漏列模型，或 `models.json` 被覆盖后，Codex 选择器里的模型会突然消失；
+另一个会话从其他模型切到 GPT 6 Luna 后固定 400：`Invalid 'input[158].content': array too long`。
+
+**根因**：目录同步把“本轮官方表没列”直接等同于“模型下架”，即使已有 12 小时保护，也没有
+last-known-good 文件可在目录被外部覆盖后自愈；跨模型历史里的 `reasoning.content` 又把第三方
+`reasoning_text` 数组原样发给 GPT Responses，而该输入字段最大长度是 0。
+
+**修法**：
+- `model_discovery.py` 每轮保存目录基线；`models.json` 空/损坏/漏行时自动恢复并把显式条目恢复为
+  `visibility=list`。只有**实时官网抓取有效**且模型连续缺席满 12 小时才移除；抓取失败或走缓存
+  只观察不删，官网重新出现立即清掉缺席计时。日志统一为 `catalog add/restored/observe/remove`。
+- `toolfix.py` 新增统一 reasoning 历史清洗：`content[].reasoning_text` 合并进合法 `summary_text`，
+  删除 `content` 和跨模型不可验证的 `signature`，保留 `id / summary / encrypted_content`。
+  该清洗位于所有上游请求的公共入口，覆盖 GPT 5.6 Luna、GPT 6 Luna 及未来全部 GPT 模型。
+- 真机冒烟顺带核到上游第二条规则：reasoning 的 `id` 必须以 `rs` 开头，否则
+  `Invalid 'input[0].id' … invalid_value`（连 content 都还没轮到校验）。清洗里一并摘掉不合规 id，
+  管线顺序改为「先清洗后过滤」，避免被网关的 `rs_`/`:` 整条丢弃规则抢先。
+
+**回归**：目录新增 4 个边界用例（11h59m/12h01m、无效抓取不删、空目录自愈、重新出现清计时）；
+请求侧新增 6 个 reasoning 用例（GPT 6 同形状、GPT 家族公共路径、encrypted 保留、空条目、跨模型回放、
+非 `rs` id 校正、管线顺序）。策略 golden 与 SSE golden 原样通过，全量 144 用例绿。
+
+版本 **1.1.11.58 (98)**。
+
 ### v1.1.11.57 — 悬停提示不再"只填一半"：存量条目也归一化（顺手修掉提前 return）
 
 **现象**：上一版说好悬停提示统一成中文一行，实际只有 4 个（这两天新加的）是中文，另外 **33 个仍是旧的英文样板**

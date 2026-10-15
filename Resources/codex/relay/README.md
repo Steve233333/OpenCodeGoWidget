@@ -65,6 +65,7 @@ Codex ──▶ relay.py（薄入口 + 兼容 re-export）
 | 正文一次闪出来 | 上游把整段一次 flush（直连网关也这样）；本层只做平滑，不改内容 |
 | 工具调用没执行 / 正文冒出 `<tool_call>` | MiMo XML 解析是否命中：日志 `MiMo XML 工具调用已转成 function_call` |
 | 换模型接着聊被 400 拦（Cross-model history） | 已不该出现：历史里的 `web_search_call` 会翻成 `web_search` 调用 + 占位结果，日志写 `history replay: translated N web_search_call, dropped M reasoning items`；若又冒出来说明桥里的 `_translate_history` 被绕过 |
+| GPT 报 `input[N].content: array too long` | 看日志是否出现 `normalized incompatible reasoning history`；该清洗对所有 GPT / Responses 上游生效，把第三方 `reasoning.content` 合并进 `summary_text` |
 
 ## 测试与门槛
 

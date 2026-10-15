@@ -228,6 +228,80 @@ def _sanitize_input_ids(parsed):
     return False
 
 
+def _normalize_reasoning_history(parsed):
+    """Make replayed reasoning items valid Responses input history.
+
+    Third-party Responses adapters have persisted `reasoning.content` as a
+    reasoning_text array.  Strict GPT responses backends accept only an empty
+    content array on input and reject the item with `array_above_max_length`.
+    Fold the visible text into `summary_text`, then remove `content` and the
+    provider-specific `signature`; `encrypted_content` remains untouched for
+    same-provider continuation.  An item with no id, summary, or encrypted
+    content carries no replayable state and is dropped.
+    """
+    input_items = parsed.get("input") if isinstance(parsed, dict) else None
+    if not isinstance(input_items, list):
+        return False
+    changed = False
+    kept = []
+    for item in input_items:
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            kept.append(item)
+            continue
+
+        original = item
+        item = dict(item)
+        summary_parts = []
+        summary = item.get("summary")
+        if isinstance(summary, str):
+            if summary.strip():
+                summary_parts.append(summary.strip())
+        elif isinstance(summary, list):
+            for part in summary:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if isinstance(text, str) and text.strip():
+                        summary_parts.append(text.strip())
+        rid = item.get("id")
+        if isinstance(rid, str) and rid and not rid.startswith("rs"):
+            # GPT responses requires reasoning ids to start with "rs"; Codex and
+            # third-party adapters sometimes write a "reasoning_*" id that then
+            # fails with invalid_value before validation even reaches content.
+            _log(f"[relay] dropped reasoning id {rid[:40]!r} (not rs_ prefixed) for Responses replay")
+            changed = True
+            item.pop("id", None)
+        content = item.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") in ("reasoning_text", "summary_text"):
+                    text = part.get("text")
+                    if isinstance(text, str) and text.strip():
+                        summary_parts.append(text.strip())
+        elif isinstance(content, str) and content.strip():
+            summary_parts.append(content.strip())
+
+        summary_parts = list(dict.fromkeys(summary_parts))
+        normalized_summary = [{"type": "summary_text", "text": text}
+                              for text in summary_parts]
+        item.pop("content", None)
+        item.pop("signature", None)
+        item["summary"] = normalized_summary
+        has_encrypted = bool(item.get("encrypted_content"))
+        has_identity = bool(item.get("id"))
+        if not normalized_summary and not has_encrypted and not has_identity:
+            changed = True
+            continue
+        if item != original:
+            changed = True
+        kept.append(item)
+    if changed:
+        parsed["input"] = kept
+        _log("[relay] normalized incompatible reasoning history for Responses replay")
+    return changed
+
+
 def _fix_tool_required(parsed):
     """Fix Zen/Go gateway 400 for strict JSON-schema validation.
 

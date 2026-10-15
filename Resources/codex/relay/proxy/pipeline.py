@@ -25,7 +25,8 @@ from .policy import (NATIVE_PROBES, ROUTE_BRIDGE, ROUTE_MESSAGES, ROUTE_NATIVE_O
                      has_native_search, policy_for, protocol_unsupported_error)
 from .search_sidecar import (_inject_synthetic_web_search, _is_web_search_tool_call,
                              _normalize_web_search_call, _perform_web_search)
-from .toolfix import (_fix_tool_required, _normalize_fc_args_history, _sanitize_input_ids)
+from .toolfix import (_fix_tool_required, _normalize_fc_args_history,
+                      _normalize_reasoning_history, _sanitize_input_ids)
 
 
 
@@ -180,6 +181,12 @@ class RequestPipelineMixin:
             wsc_changed = (zen_changed or go_changed) and _normalize_web_search_call(parsed)
             ac_changed = (zen_changed or go_changed) and _normalize_assistant_content(parsed)
             fca_changed = (zen_changed or go_changed) and _normalize_fc_args_history(parsed)
+            # GPT/official Responses rejects third-party reasoning.content.
+            # Normalize for every upstream, including all GPT models and future
+            # native models; bridges drop reasoning anyway. Runs before
+            # _sanitize_input_ids so an rs_ id with ":" stays long enough to be
+            # normalized, and a non-rs id is corrected before GPT validates it.
+            reasoning_history_changed = _normalize_reasoning_history(parsed)
             id_changed = (zen_changed or go_changed) and _sanitize_input_ids(parsed)
             req_changed = (zen_changed or go_changed) and _fix_tool_required(parsed)
             # 2026-09-20：Muse(Meta 后端) 专属兼容（muse-codex-compat skill）。
@@ -204,7 +211,11 @@ class RequestPipelineMixin:
                     if clamped != eff:
                         parsed["reasoning"]["effort"] = clamped
                         reasoning_changed = True
-            if model_changed or zen_changed or go_changed or tools_changed or synth_changed or proactive_changed or wsc_changed or ac_changed or fca_changed or id_changed or req_changed or reasoning_changed or muse_schema_changed or muse_preamble_changed or muse_first_changed:
+            if (model_changed or zen_changed or go_changed or tools_changed
+                    or synth_changed or proactive_changed or wsc_changed or ac_changed
+                    or fca_changed or id_changed or reasoning_history_changed
+                    or req_changed or reasoning_changed or muse_schema_changed
+                    or muse_preamble_changed or muse_first_changed):
                 body = bytearray(json.dumps(parsed).encode())
             # 2026-09-30：请求体减肥 —— 历史里累积的 base64（截图/工具输出）会把 body 顶到
             # ~48MB，上游随机 413；超 45MB 时按"从旧到新"丢弃（图片优先），只改发出去这一份。

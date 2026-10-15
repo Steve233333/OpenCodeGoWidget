@@ -332,6 +332,120 @@ def t_sanitize_input_ids_fuzz():
     # should have dropped 2 (colon and rs_)
     assert len(parsed["input"]) == 2 or len(parsed["input"]) <= 3
 
+def _assert_reasoning_replay_valid(items):
+    for item in items:
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            continue
+        assert "content" not in item, item
+        assert "signature" not in item, item
+        summary = item.get("summary", [])
+        assert isinstance(summary, list), item
+        assert all(isinstance(part, dict) and part.get("type") == "summary_text"
+                   and isinstance(part.get("text"), str) for part in summary), item
+
+def t_reasoning_history_gpt_input158_shape():
+    """GPT 6 Luna 的 input[158] 同形状：content 必须翻进 summary_text。"""
+    parsed = {"model": "gpt-6-luna-go", "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        {"type": "reasoning", "id": "rs_158", "summary": [],
+         "content": [{"type": "reasoning_text", "text": "先核对请求历史"}],
+         "encrypted_content": None, "signature": "provider-signature"},
+    ]}
+    assert vp._normalize_reasoning_history(parsed) is True
+    reasoning = parsed["input"][1]
+    assert reasoning["summary"] == [{"type": "summary_text", "text": "先核对请求历史"}]
+    assert reasoning["encrypted_content"] is None
+    _assert_reasoning_replay_valid(parsed["input"])
+
+def t_reasoning_history_drops_non_rs_id():
+    """实测上游：reasoning.id 不以 rs 开头直接 400 invalid_value（content 还没轮到校验）。"""
+    parsed = {"model": "gpt-6-luna-go", "input": [
+        {"type": "reasoning", "id": "reason_smoke", "summary": [],
+         "content": [{"type": "reasoning_text", "text": "t"}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]}
+    assert vp._normalize_reasoning_history(parsed) is True
+    assert "id" not in parsed["input"][0]
+    assert parsed["input"][0]["summary"] == [{"type": "summary_text", "text": "t"}]
+    _assert_reasoning_replay_valid(parsed["input"])
+
+def t_reasoning_history_normalizes_all_gpt_models():
+    """GPT 家族走同一个公共清洗口；5.6/6 Luna 及未来 gpt-* 不各写规则。"""
+    for model in ("gpt-5.6-luna-go", "gpt-6-luna-go", "gpt-7-future-go"):
+        parsed = {"model": model, "stream": True, "input": [
+            {"type": "reasoning", "id": "reasoning_1", "summary": [],
+             "content": [{"type": "reasoning_text", "text": "old provider thinking"}],
+             "signature": "opaque"},
+            {"type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "hello"}]},
+        ]}
+        __import__("asyncio").run(vp.RequestPipelineMixin()._prepare_parsed_request(parsed, b""))
+        _assert_reasoning_replay_valid(parsed["input"])
+        assert "old provider thinking" in json.dumps(parsed["input"], ensure_ascii=False)
+
+def t_reasoning_history_pipeline_drops_invalid_ids_only():
+    """管线顺序锁：先清洗后过滤 —— 任何残留 reasoning 都不许带 content/signature。
+
+    真实 id 形态有三种：GPT 合法的 rs_、网关会整条丢掉的带冒号 rs_、以及会被 GPT
+    判 invalid_value 的 reasoning_*（清洗时摘掉 id，留下合规的 summary）。
+    """
+    for model in ("gpt-5.6-luna-go", "gpt-6-luna-go"):
+        for label, rsid in (("rs", "rs_1"), ("rs-colon", "rs_a:rs_b"), ("reason", "reasoning_1")):
+            parsed = {"model": model, "stream": True, "input": [
+                {"type": "reasoning", "id": rsid, "summary": [],
+                 "content": [{"type": "reasoning_text", "text": "thinking"}],
+                 "signature": "sig"},
+                {"type": "message", "role": "user",
+                 "content": [{"type": "input_text", "text": "hi"}]},
+            ]}
+            __import__("asyncio").run(vp.RequestPipelineMixin()._prepare_parsed_request(parsed, b""))
+            reasoning_items = [i for i in parsed["input"] if i.get("type") == "reasoning"]
+            if label == "reason":
+                assert len(reasoning_items) == 1, (model, label, reasoning_items)
+                assert "id" not in reasoning_items[0], (model, label, reasoning_items)
+                assert reasoning_items[0]["summary"] == [
+                    {"type": "summary_text", "text": "thinking"}], (model, label, reasoning_items)
+            else:
+                assert reasoning_items == [], (model, label, reasoning_items)
+            assert [i.get("type") for i in parsed["input"]][-1] == "message", (model, label, parsed["input"])
+
+def t_reasoning_history_preserves_encrypted_content():
+    parsed = {"input": [
+        {"type": "reasoning", "id": "rs_enc", "summary": [],
+         "content": [], "encrypted_content": "opaque-state", "signature": "drop-me"},
+        {"type": "reasoning", "id": "rs_summary", "summary": [
+            {"type": "summary_text", "text": "existing"}],
+         "content": [{"type": "reasoning_text", "text": "extra"}]},
+    ]}
+    assert vp._normalize_reasoning_history(parsed) is True
+    assert parsed["input"][0]["encrypted_content"] == "opaque-state"
+    assert [p["text"] for p in parsed["input"][1]["summary"]] == ["existing", "extra"]
+    _assert_reasoning_replay_valid(parsed["input"])
+
+def t_reasoning_history_empty_items():
+    parsed = {"input": [
+        {"type": "reasoning", "summary": [], "content": [], "signature": "x"},
+        {"type": "reasoning", "id": "rs_keep", "summary": []},
+        {"type": "reasoning", "summary": [], "encrypted_content": "keep-state"},
+    ]}
+    assert vp._normalize_reasoning_history(parsed) is True
+    assert [item.get("id") for item in parsed["input"]] == ["rs_keep", None]
+    assert parsed["input"][1]["encrypted_content"] == "keep-state"
+
+def t_reasoning_history_cross_model_replay():
+    for model in ("deepseek-v4.1-flash-go", "mimo-v2.6-pro-go", "gpt-6-luna-go"):
+        parsed = {"model": model, "input": [
+            {"type": "reasoning", "id": "rs_cross", "summary": [],
+             "content": [{"type": "reasoning_text", "text": "cross-model state"}],
+             "signature": "signed-by-other-provider"},
+            {"type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "continue"}]},
+        ]}
+        vp._normalize_reasoning_history(parsed)
+        _assert_reasoning_replay_valid(parsed["input"])
+        chat = vp._responses_request_to_chat(parsed)
+        assert chat["messages"] == [{"role": "user", "content": "continue"}]
+
 # 2026-09-23：t_intercept_unsupported_history_fuzz 退役（400 拦截已删，改翻译）。
 # 下面这批测试锁的是新行为：历史里的 web_search_call 必须被翻成工具调用 + 诚实占位结果。
 

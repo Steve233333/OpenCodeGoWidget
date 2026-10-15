@@ -77,6 +77,7 @@ REASONING_REGISTRY = CACHE_DIR / "reasoning_registry.json"
 # 才真剪。上游改文档/页面截断/正则撞车都不会再当场删掉能用的模型。
 PRUNE_PENDING_FILE = CACHE_DIR / "prune_pending.json"
 PRUNE_GRACE_SECONDS = 12 * 3600  # 两轮（launchd 每 6 小时跑一次）
+CATALOG_BASELINE_NAME = "models_catalog_baseline.json"
 GENERIC_REASONING = ["high"]
 
 # 手工锁定的显示名 base（不含 "(Go)"/"(Zen)" 后缀）：
@@ -272,6 +273,7 @@ QUOTA_CACHE_FILE = CACHE_DIR / "go_quota_cache.json"
 # 最近一次成功抓到的配额页（剥标签、只留字母数字的归一化文本）。
 # 用途：剪枝前的安全闸——文档里还写着这个模型，就说明是解析漏行而不是上游下架。
 LAST_QUOTA_PAGE = ""
+LAST_QUOTA_FETCH_VALID = False
 
 _TAG_RE = re.compile(r"<[^>]*>")
 
@@ -340,9 +342,62 @@ def _save_prune_pending(d):
     except Exception as e:
         _log(f"prune_pending 写失败: {e!r}")
 
+def _catalog_baseline_path():
+    # Derive this from CACHE_DIR so isolated tests never touch the real baseline.
+    return CACHE_DIR / CATALOG_BASELINE_NAME
+
+def _load_catalog_baseline():
+    data = _read_json(_catalog_baseline_path(), {})
+    models = data.get("models") if isinstance(data, dict) else None
+    return [copy.deepcopy(m) for m in models or []
+            if isinstance(m, dict) and isinstance(m.get("slug"), str)]
+
+def _save_catalog_baseline(models, allow_shrink=True):
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        final_models = copy.deepcopy(models or [])
+        if not allow_shrink:
+            by_slug = {m.get("slug") for m in final_models
+                       if isinstance(m, dict) and isinstance(m.get("slug"), str)}
+            for entry in _load_catalog_baseline():
+                if entry.get("slug") not in by_slug:
+                    final_models.append(entry)
+                    by_slug.add(entry.get("slug"))
+        payload = {"models": final_models}
+        path = _catalog_baseline_path()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        tmp.replace(path)
+    except Exception as e:
+        _log(f"catalog baseline 写失败: {e!r}")
+
+def _catalog_heal_from_baseline(models):
+    """Restore rows lost by a partial/external models.json overwrite."""
+    baseline = _load_catalog_baseline()
+    if not baseline:
+        return models or [], []
+    models = models or []
+    by_slug = {m.get("slug"): m for m in models
+               if isinstance(m, dict) and isinstance(m.get("slug"), str)}
+    restored = []
+    for entry in baseline:
+        slug = entry.get("slug")
+        if slug in by_slug:
+            if by_slug[slug].get("visibility") != "list":
+                by_slug[slug]["visibility"] = "list"
+                restored.append(slug)
+            continue
+        restored_entry = copy.deepcopy(entry)
+        restored_entry["visibility"] = "list"
+        models.append(restored_entry)
+        by_slug[slug] = restored_entry
+        restored.append(slug)
+    return models, restored
+
 def fetch_quota_ids(timeout=TIMEOUT):
     """Fetch Go quota table as ids; auto-detect free rows (三列全 -/限免 => free) like Widget."""
-    global LAST_QUOTA_PAGE
+    global LAST_QUOTA_PAGE, LAST_QUOTA_FETCH_VALID
+    LAST_QUOTA_FETCH_VALID = False
     for url in GO_DOCS_URLS:
         try:
             req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0","Accept":"*/*"})
@@ -389,6 +444,7 @@ def fetch_quota_ids(timeout=TIMEOUT):
                     ids.append(rid)
             if len(ids) >= 10:
                 LAST_QUOTA_PAGE = page_key
+                LAST_QUOTA_FETCH_VALID = True
                 # 与上次成功抓取对比：少了谁、少的那个是不是还在页面上（=解析漏行）
                 prev_ids = []
                 try:
@@ -486,9 +542,26 @@ def is_cache_fresh(cache):
     return age < TTL_SECONDS
 
 def load_models_json():
-    if not MODELS_JSON.exists():
-        return {"models": []}
-    return json.loads(MODELS_JSON.read_text())
+    """Load models.json, recovering missing rows from the last-known-good baseline."""
+    models = []
+    parse_error = None
+    if MODELS_JSON.exists():
+        try:
+            data = json.loads(MODELS_JSON.read_text())
+            raw_models = data.get("models") if isinstance(data, dict) else None
+            if isinstance(raw_models, list):
+                models = [m for m in raw_models
+                          if isinstance(m, dict) and isinstance(m.get("slug"), str)]
+            else:
+                parse_error = "models 不是数组"
+        except Exception as e:
+            parse_error = repr(e)
+    if parse_error:
+        _log(f"models.json 损坏（{parse_error}），按 last-known-good 基线恢复")
+    models, restored = _catalog_heal_from_baseline(models)
+    if restored:
+        _log(f"catalog restored {len(restored)} model(s): {restored}")
+    return {"models": models, "_catalog_recovered": restored}
 
 def _reasoning_registry_path():
     return CACHE_DIR / "reasoning_registry.json"
@@ -849,6 +922,7 @@ def sync(force=False, dry_run=False):
     # quota table is the source of truth (限免 + 三段配额), not /v1/models
     # 返回 None = 抓不到表，这时用上次成功的 24 缓存顶着，绝不回退到 31 野名单
     qids = fetch_quota_ids()
+    quota_fetch_valid = bool(qids) and LAST_QUOTA_FETCH_VALID
     if qids:
         ids = qids
         _log(f"quota source {len(ids)} ids")
@@ -888,6 +962,7 @@ def sync(force=False, dry_run=False):
     zen_slugs = {i + "-zen" if i != "big-pickle" else "big-pickle-zen" for i in zen_ids}
     # treat Zen ids for template lookup (map to same)
     j = load_models_json()
+    catalog_recovered = j.pop("_catalog_recovered", [])
     models = j.get("models", [])
     existing_slugs = {m["slug"] for m in models}
     max_prio = max((m.get("priority", 0) for m in models), default=0)
@@ -943,6 +1018,9 @@ def sync(force=False, dry_run=False):
             to_keep.append(m)
             continue
         bare = slug[:-3]
+        if not quota_fetch_valid:
+            to_keep.append(m)
+            continue
         if bare in quota_bare:
             pending.pop(bare, None)
             to_keep.append(m)
@@ -965,9 +1043,9 @@ def sync(force=False, dry_run=False):
     if held:
         _log(f"safety-hold 文档里仍提到但没进配额表，判为解析漏行、本次不剪: {held}")
     if graced:
-        _log(f"prune-grace 首次缺席（未满 {PRUNE_GRACE_SECONDS // 3600}h），先挂起不剪: {graced}")
+        _log(f"catalog observe（未满 {PRUNE_GRACE_SECONDS // 3600}h，先不剪）: {graced}")
     if pruned:
-        _log(f"prune wild not in quota/zen: {pruned}")
+        _log(f"catalog remove（连续缺席满 {PRUNE_GRACE_SECONDS // 3600}h）: {pruned}")
     if not dry_run:
         _save_prune_pending(pending)
 
@@ -1042,15 +1120,22 @@ def sync(force=False, dry_run=False):
     # 放在刷新之后：即使模型没增删、只有档位变化，这两层也会跟着同步。
     sync_derived(to_keep + to_add, dry_run=dry_run)
 
+    final_models = to_keep + to_add
+    if not dry_run and final_models:
+        # A shrink is trusted only after a live quota observation completed the
+        # 12-hour grace period.  Partial files and fetch fallbacks never erase
+        # the last-known-good baseline.
+        _save_catalog_baseline(final_models, allow_shrink=bool(pruned))
+
     if not to_add and not pruned:
         # 即使无增删，也可能有上下文/档位更新或悬停提示归一化
         changed_fields = locals().get("updated", 0) or 0
-        if changed_fields == 0 and desc_norm == 0:
+        if changed_fields == 0 and desc_norm == 0 and not catalog_recovered:
             _log("no new models to add and no prune")
             return 0
 
     if to_add:
-        _log(f"will add {len(to_add)} models:")
+        _log(f"catalog add {len(to_add)} model(s):")
         for e in to_add:
             _log(f"  + {e['slug']} (priority {e['priority']}) vis={e['visibility']}")
 

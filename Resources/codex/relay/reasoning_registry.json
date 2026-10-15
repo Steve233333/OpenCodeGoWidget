@@ -240,5 +240,36 @@
  ],
  "longcat-2.5-preview-free": [
   "high"
+ ],
+ "step-5-preview-free": [
+  "low",
+  "medium",
+  "high"
+ ],
+ "cat-jam-free": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
+ "space-bunny": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
+ "claude-haiku-5-5": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
+ "gemini-4-argon-contributor": [
+  "low",
+  "medium",
+  "high"
  ]
 }

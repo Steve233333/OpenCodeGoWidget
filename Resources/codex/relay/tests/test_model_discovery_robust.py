@@ -293,6 +293,116 @@ def t_find_template_fallback():
 
 # ---------- sync with temp HOME ----------
 
+def _setup_catalog_env(td, models, quota_ids, live=True, pending=None):
+    """Isolate every model-discovery write target and network-ish dependency."""
+    home = pathlib.Path(td)
+    codex_home = home / ".codex-deepseek"
+    cache = home / ".local/share/agent-relay"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    cache.mkdir(parents=True, exist_ok=True)
+    (codex_home / "config.toml").write_text(
+        '[desktop]\nenabled-reasoning-efforts = ["low", "medium", "high"]\n')
+    (codex_home / "models.json").write_text(json.dumps({"models": models}, ensure_ascii=False))
+    (cache / "prune_pending.json").write_text(json.dumps(pending or {}))
+    saved = {k: getattr(md, k) for k in (
+        "CODEX_HOME", "MODELS_JSON", "CACHE_DIR", "CACHE_FILE", "QUOTA_CACHE_FILE",
+        "ZEN_CACHE_FILE", "MODELSDEV_CACHE", "UPSTREAM_CACHE", "PRUNE_PENDING_FILE",
+        "REASONING_REGISTRY", "REASONING_OVERRIDES", "LAST_QUOTA_PAGE",
+        "LAST_QUOTA_FETCH_VALID", "fetch_quota_ids", "fetch_remote_ids",
+        "fetch_zen_free_ids", "fetch_upstream_details", "fetch_modelsdev")}
+    md.CODEX_HOME = codex_home
+    md.MODELS_JSON = codex_home / "models.json"
+    md.CACHE_DIR = cache
+    md.CACHE_FILE = cache / "go_models_cache.json"
+    md.QUOTA_CACHE_FILE = cache / "go_quota_cache.json"
+    md.ZEN_CACHE_FILE = cache / "zen_models_cache.json"
+    md.MODELSDEV_CACHE = cache / "modelsdev_cache.json"
+    md.UPSTREAM_CACHE = cache / "upstream_context_cache.json"
+    md.PRUNE_PENDING_FILE = cache / "prune_pending.json"
+    md.REASONING_REGISTRY = cache / "reasoning_registry.json"
+    md.REASONING_OVERRIDES = cache / "reasoning_overrides.json"
+    md.LAST_QUOTA_PAGE = ""
+    md.LAST_QUOTA_FETCH_VALID = bool(live)
+    md.fetch_quota_ids = lambda timeout=10: list(quota_ids or []) if live else None
+    md.fetch_remote_ids = lambda timeout=10: []
+    md.fetch_zen_free_ids = lambda timeout=10: []
+    md.fetch_upstream_details = lambda timeout=10: {}
+    md.fetch_modelsdev = lambda timeout=10: {}
+    return saved
+
+def _restore_catalog_env(saved):
+    for key, value in saved.items():
+        setattr(md, key, value)
+
+def _catalog_model(slug):
+    return {"slug": slug, "priority": 1, "display_name": slug, "description": "",
+            "visibility": "list", "context_window": 1048576,
+            "max_context_window": 1048576,
+            "supported_reasoning_levels": [{"effort": "high", "description": "high"}],
+            "default_reasoning_level": "high", "input_modalities": ["text"]}
+
+def t_catalog_prune_grace_boundary():
+    now = int(time.time())
+    for age, should_remove in ((md.PRUNE_GRACE_SECONDS - 60, False),
+                               (md.PRUNE_GRACE_SECONDS + 60, True)):
+        with tempfile.TemporaryDirectory() as td:
+            saved = _setup_catalog_env(
+                td, [_catalog_model("mimo-v2.6-flash-go")], ["other-model"],
+                pending={"mimo-v2.6-flash": now - age})
+            try:
+                md.sync(force=True)
+                slugs = {m["slug"] for m in md.load_models_json()["models"]}
+                assert ("mimo-v2.6-flash-go" in slugs) is (not should_remove), (age, slugs)
+            finally:
+                _restore_catalog_env(saved)
+
+def t_catalog_invalid_source_never_removes():
+    now = int(time.time())
+    for live, quota_ids in ((False, ["other-model"]), (False, None)):
+        with tempfile.TemporaryDirectory() as td:
+            saved = _setup_catalog_env(
+                td, [_catalog_model("mimo-v2.6-flash-go")], quota_ids, live=live,
+                pending={"mimo-v2.6-flash": now - md.PRUNE_GRACE_SECONDS - 60})
+            try:
+                if quota_ids:
+                    md.QUOTA_CACHE_FILE.write_text(json.dumps({
+                        "ids": quota_ids, "fetchedAt": now, "page_norm": "cached-page"}))
+                md.sync(force=True)
+                out = json.loads(md.MODELS_JSON.read_text())
+                assert [m["slug"] for m in out["models"]] == ["mimo-v2.6-flash-go"]
+                pending = json.loads(md.PRUNE_PENDING_FILE.read_text())
+                assert "mimo-v2.6-flash" in pending
+            finally:
+                _restore_catalog_env(saved)
+
+def t_catalog_empty_models_self_heals():
+    entry = _catalog_model("mimo-v2.6-flash-go")
+    entry["visibility"] = "hide"
+    with tempfile.TemporaryDirectory() as td:
+        saved = _setup_catalog_env(td, [], ["mimo-v2.6-flash"], live=True)
+        try:
+            md._save_catalog_baseline([entry], allow_shrink=True)
+            md.MODELS_JSON.write_text('{"models": []}')
+            md.sync(force=True)
+            out = json.loads(md.MODELS_JSON.read_text())
+            assert out["models"][0]["slug"] == "mimo-v2.6-flash-go"
+            assert out["models"][0]["visibility"] == "list"
+        finally:
+            _restore_catalog_env(saved)
+
+def t_catalog_reappearing_model_clears_grace():
+    now = int(time.time())
+    with tempfile.TemporaryDirectory() as td:
+        saved = _setup_catalog_env(
+            td, [_catalog_model("mimo-v2.6-flash-go")], ["mimo-v2.6-flash"],
+            pending={"mimo-v2.6-flash": now - 60})
+        try:
+            md.sync(force=True)
+            pending = json.loads(md.PRUNE_PENDING_FILE.read_text())
+            assert pending == {}, pending
+        finally:
+            _restore_catalog_env(saved)
+
 def t_sync_with_fake_quota():
     # use temp dir as HOME to not touch real models.json
     with tempfile.TemporaryDirectory() as td:
