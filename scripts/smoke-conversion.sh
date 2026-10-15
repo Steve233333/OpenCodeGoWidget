@@ -101,8 +101,13 @@ done
 rm -f "$HISTORY_JSON"
 
 # ---------- 第 6 类：跨模型 reasoning 历史 -> GPT 家族 ----------
-# 真机事故：input[158].content = [{"type":"reasoning_text",...}] 被 GPT 6 Luna
-# 判成 array_above_max_length。GPT 5.6 / 6 共用 Responses 输入约束，一起验。
+# 真机事故之一：input[158].content = [{"type":"reasoning_text",...}] 被 GPT 6 Luna
+# 判成 array_above_max_length。
+# 真机事故之二：带上 id 的 reasoning 被判 "Item with id 'rs_…' not found"（网关
+# store=false 从不持久化），带上第三方 encrypted_content 被判
+# invalid_encrypted_content（那份加密态是别的厂商写的，GPT 解不开）。
+# 实测结论（2026-10-15，8 个模型）：reasoning 只留 summary 才是普适合法的形状，
+# 所以这三样都必须被剥掉。
 REASONING_JSON="$(mktemp)"
 cat > "$REASONING_JSON" <<'JSON'
 {"stream":false,"max_output_tokens":128,"store":false,"input":[
@@ -116,8 +121,8 @@ for m in gpt-5.6-luna-go gpt-6-luna-go; do
   payload="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); p["model"]=sys.argv[2]; print(json.dumps(p,ensure_ascii=False))' "$REASONING_JSON" "$m")"
   code="$(curl -s -o "$out" -w '%{http_code}' --max-time 180 -X POST "$PROXY/v1/responses" \
            -H 'Authorization: Bearer dummy' -H 'Content-Type: application/json' -d "$payload")"
-  if [ "$code" = "200" ] && ! grep -q "array too long\|array_above_max_length" "$out"; then
-    echo "  ✅ reasoning 历史 ${m}：HTTP 200 · content/signature 已清洗"
+  if [ "$code" = "200" ] && ! grep -q "array too long\|array_above_max_length\|not found\|invalid_encrypted_content" "$out"; then
+    echo "  ✅ reasoning 历史 ${m}：HTTP 200 · content/signature/id/加密块 均已清洗"
   else
     echo "  ❌ reasoning 历史 ${m}：HTTP ${code} · $(head -c 220 "$out")"
     fail=1

@@ -2,6 +2,35 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.59 — 跨模型历史切到 GPT：把上游真正在拒的三类形状全部剥掉
+
+上一版（1.1.11.58）只处理了 `reasoning.content`，真机复放发现还有三类被拒，这一版按实测逐条修完。
+
+**真机复现链路**（用你那条 2000+ 条历史的线程复放，每次只把上一层错误消掉，直到 200）：
+
+| 报错 | 真实原因 |
+| --- | --- |
+| `input[158].content: array too long` | 第三方把可见推理写成 `reasoning_text` 数组，而 GPT 输入侧该字段最大长度 0 |
+| `input[2522].id: 'fc_…' Expected 'ctc'` | apply_patch 把 `function_call` 改写成 `custom_tool_call` 时留下了旧 id 前缀 |
+| `Item with id 'rs_…' not found` | 网关 `store=false` 从不持久化，任何回放的历史 id 都无法解析 |
+| `invalid_encrypted_content` | 第三方写的那份"加密态"只有 38 字节占位（`c6911d90-…-0`），GPT 解不开 |
+
+**修法**（全部先实测、后落码，不猜）：
+
+1. **reasoning 一律只留 summary**：`content` 的文字折进 `summary_text`，然后连同 `signature`、`id`、
+   `encrypted_content` 一起摘掉；什么都没剩下的整条丢弃。八个模型（gpt-6/gpt-5.6/deepseek/muse/mimo/glm/kimi/space-bunny）
+   实测 summary-only 全部 200，而 id+加密块在 GPT 上是 400。
+2. **id 前缀按条目类型校正**（不是按 id 原本长什么样）：`function_call`/`_output` → `fc`、
+   `custom_tool_call` → `ctc`、`custom_tool_call_output` → `ctco`、`reasoning` → `rs`、
+   `tool_search_call` → `tsc`、`tool_search_output` → `tso`、`message` → `msg`。
+   复合 id（`rs_a:rs_b`）取首段并归一，处理后幂等。
+3. 清洗挂在**所有上游请求的公共入口**，GPT 5.6 Luna、GPT 6 Luna、以及以后任何 GPT 型号一并生效。
+
+**实测**：用你那条线程真实的 2022 条历史（373 条跨模型推理、851 个待校正 id、87 条 apply_patch、2 条工具搜索）
+复放 → **HTTP 200 · status=completed · 有正文**。冒烟 7 项全绿，代理回归 57 条，全量门槛 **150 用例**。
+
+版本 **1.1.11.59 (99)**。
+
 ### v1.1.11.58 — 模型目录不再被临时漏列清掉 + GPT 家族 reasoning 历史兼容
 
 **现象**：官网配额表偶尔漏列模型，或 `models.json` 被覆盖后，Codex 选择器里的模型会突然消失；

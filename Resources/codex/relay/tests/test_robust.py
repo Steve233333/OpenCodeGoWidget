@@ -333,11 +333,19 @@ def t_sanitize_input_ids_fuzz():
     assert len(parsed["input"]) == 2 or len(parsed["input"]) <= 3
 
 def _assert_reasoning_replay_valid(items):
+    """实测（2026-10-15，网关 store=false）：reasoning 必须只剩 summary。
+
+    带 id -> "Item with id 'rs_…' not found"；带 encrypted_content -> GPT 报
+    invalid_encrypted_content；带 content -> array_above_max_length。
+    八个模型上 summary-only 都是 200，所以这三样都必须摘掉。
+    """
     for item in items:
         if not isinstance(item, dict) or item.get("type") != "reasoning":
             continue
         assert "content" not in item, item
         assert "signature" not in item, item
+        assert "id" not in item, item
+        assert "encrypted_content" not in item, item
         summary = item.get("summary", [])
         assert isinstance(summary, list), item
         assert all(isinstance(part, dict) and part.get("type") == "summary_text"
@@ -354,11 +362,10 @@ def t_reasoning_history_gpt_input158_shape():
     assert vp._normalize_reasoning_history(parsed) is True
     reasoning = parsed["input"][1]
     assert reasoning["summary"] == [{"type": "summary_text", "text": "先核对请求历史"}]
-    assert reasoning["encrypted_content"] is None
     _assert_reasoning_replay_valid(parsed["input"])
 
-def t_reasoning_history_drops_non_rs_id():
-    """实测上游：reasoning.id 不以 rs 开头直接 400 invalid_value（content 还没轮到校验）。"""
+def t_reasoning_history_non_rs_id_gets_reprefixed():
+    """实测上游：reasoning.id 不以 rs 开头直接 400 invalid_value；现在由统一前缀校正补 rs_。"""
     parsed = {"model": "gpt-6-luna-go", "input": [
         {"type": "reasoning", "id": "reason_smoke", "summary": [],
          "content": [{"type": "reasoning_text", "text": "t"}]},
@@ -368,6 +375,7 @@ def t_reasoning_history_drops_non_rs_id():
     assert "id" not in parsed["input"][0]
     assert parsed["input"][0]["summary"] == [{"type": "summary_text", "text": "t"}]
     _assert_reasoning_replay_valid(parsed["input"])
+    _assert_input_item_ids_valid(parsed["input"])
 
 def t_reasoning_history_normalizes_all_gpt_models():
     """GPT 家族走同一个公共清洗口；5.6/6 Luna 及未来 gpt-* 不各写规则。"""
@@ -381,16 +389,19 @@ def t_reasoning_history_normalizes_all_gpt_models():
         ]}
         __import__("asyncio").run(vp.RequestPipelineMixin()._prepare_parsed_request(parsed, b""))
         _assert_reasoning_replay_valid(parsed["input"])
+        _assert_input_item_ids_valid(parsed["input"])
         assert "old provider thinking" in json.dumps(parsed["input"], ensure_ascii=False)
 
-def t_reasoning_history_pipeline_drops_invalid_ids_only():
-    """管线顺序锁：先清洗后过滤 —— 任何残留 reasoning 都不许带 content/signature。
+def t_reasoning_history_native_vs_bridge_policy():
+    """管线顺序 + 策略分流：原生模型保留 reasoning，chat 桥模型照旧丢弃。
 
-    真实 id 形态有三种：GPT 合法的 rs_、网关会整条丢掉的带冒号 rs_、以及会被 GPT
-    判 invalid_value 的 reasoning_*（清洗时摘掉 id，留下合规的 summary）。
+    2026-10-15：原来的"看到 rs_ 就丢"规则对 GPT 是错的 —— gpt-5.6/6 luna 走原生
+    Responses，rs_ 正是它要的形状，丢光等于每次切模型都丢整段推理历史。
     """
     for model in ("gpt-5.6-luna-go", "gpt-6-luna-go"):
-        for label, rsid in (("rs", "rs_1"), ("rs-colon", "rs_a:rs_b"), ("reason", "reasoning_1")):
+        # 原生：三种 id 形态都要留下，且都是合法 rs_ 前缀、无 content/signature
+        for label, rsid in (("rs", "rs_1"), ("rs-colon", "rs_a:rs_b"),
+                            ("reason", "reasoning_1"), ("uuid", "uuid-1234")):
             parsed = {"model": model, "stream": True, "input": [
                 {"type": "reasoning", "id": rsid, "summary": [],
                  "content": [{"type": "reasoning_text", "text": "thinking"}],
@@ -399,17 +410,29 @@ def t_reasoning_history_pipeline_drops_invalid_ids_only():
                  "content": [{"type": "input_text", "text": "hi"}]},
             ]}
             __import__("asyncio").run(vp.RequestPipelineMixin()._prepare_parsed_request(parsed, b""))
-            reasoning_items = [i for i in parsed["input"] if i.get("type") == "reasoning"]
-            if label == "reason":
-                assert len(reasoning_items) == 1, (model, label, reasoning_items)
-                assert "id" not in reasoning_items[0], (model, label, reasoning_items)
-                assert reasoning_items[0]["summary"] == [
-                    {"type": "summary_text", "text": "thinking"}], (model, label, reasoning_items)
-            else:
-                assert reasoning_items == [], (model, label, reasoning_items)
-            assert [i.get("type") for i in parsed["input"]][-1] == "message", (model, label, parsed["input"])
+            items = [i for i in parsed["input"] if i.get("type") == "reasoning"]
+            assert len(items) == 1, (model, label, items)
+            assert items[0]["summary"] == [
+                {"type": "summary_text", "text": "thinking"}], (model, label, items)
+            _assert_reasoning_replay_valid(parsed["input"])
+            _assert_input_item_ids_valid(parsed["input"])
+    # 桥接族同样保留 summary-only（实测 mimo/glm/space-bunny 都接受 200），
+    # 但绝不能带 id / encrypted_content —— 那才是 "expired reasoning" 400 的来源。
+    for model in ("mimo-v2.6-pro-go", "glm-5.3-go", "space-bunny-go", "deepseek-v4.1-flash-go"):
+        parsed = {"model": model, "stream": True, "input": [
+            {"type": "reasoning", "id": "rs_1", "summary": [],
+             "content": [{"type": "reasoning_text", "text": "thinking"}]},
+            {"type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "hi"}]},
+        ]}
+        __import__("asyncio").run(vp.RequestPipelineMixin()._prepare_parsed_request(parsed, b""))
+        items = [i for i in parsed["input"] if i.get("type") == "reasoning"]
+        assert len(items) == 1, (model, items)
+        assert "id" not in items[0] and "encrypted_content" not in items[0], (model, items)
+        _assert_reasoning_replay_valid(parsed["input"])
 
-def t_reasoning_history_preserves_encrypted_content():
+def t_reasoning_history_drops_unverifiable_state():
+    """带 opaque encrypted_content 的条目只留 summary；纯加密无文字的条目整条丢弃。"""
     parsed = {"input": [
         {"type": "reasoning", "id": "rs_enc", "summary": [],
          "content": [], "encrypted_content": "opaque-state", "signature": "drop-me"},
@@ -418,19 +441,21 @@ def t_reasoning_history_preserves_encrypted_content():
          "content": [{"type": "reasoning_text", "text": "extra"}]},
     ]}
     assert vp._normalize_reasoning_history(parsed) is True
-    assert parsed["input"][0]["encrypted_content"] == "opaque-state"
-    assert [p["text"] for p in parsed["input"][1]["summary"]] == ["existing", "extra"]
+    # 只有加密态、没有可见文字 -> 没有任何可回放内容，整条丢弃
+    assert [i["type"] for i in parsed["input"]] == ["reasoning"]
+    assert [p["text"] for p in parsed["input"][0]["summary"]] == ["existing", "extra"]
     _assert_reasoning_replay_valid(parsed["input"])
 
 def t_reasoning_history_empty_items():
+    """没有可见文字、只剩 id 或加密态的条目一律丢弃（网关 store=false 无法解析）。"""
     parsed = {"input": [
         {"type": "reasoning", "summary": [], "content": [], "signature": "x"},
         {"type": "reasoning", "id": "rs_keep", "summary": []},
         {"type": "reasoning", "summary": [], "encrypted_content": "keep-state"},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
     ]}
     assert vp._normalize_reasoning_history(parsed) is True
-    assert [item.get("id") for item in parsed["input"]] == ["rs_keep", None]
-    assert parsed["input"][1]["encrypted_content"] == "keep-state"
+    assert [item["type"] for item in parsed["input"]] == ["message"]
 
 def t_reasoning_history_cross_model_replay():
     for model in ("deepseek-v4.1-flash-go", "mimo-v2.6-pro-go", "gpt-6-luna-go"):
@@ -445,6 +470,126 @@ def t_reasoning_history_cross_model_replay():
         _assert_reasoning_replay_valid(parsed["input"])
         chat = vp._responses_request_to_chat(parsed)
         assert chat["messages"] == [{"role": "user", "content": "continue"}]
+
+def _assert_input_item_ids_valid(items):
+    """上游实测（2026-10-15）：id 前缀由条目类型决定，不是 id 原本长什么样。
+    function_call/function_call_output -> fc；custom_tool_call -> ctc；
+    custom_tool_call_output -> ctco；reasoning -> rs；message -> msg。
+    """
+    prefix_by_type = {
+        "function_call": "fc", "function_call_output": "fc",
+        "custom_tool_call": "ctc", "custom_tool_call_output": "ctco",
+        "reasoning": "rs", "message": "msg",
+        "tool_search_call": "tsc", "tool_search_output": "tso",
+    }
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        want = prefix_by_type.get(item.get("type"))
+        rid = item.get("id")
+        if want and isinstance(rid, str) and rid:
+            assert rid.startswith(want), (item.get("type"), rid, want)
+
+
+def t_input_item_ids_reprefixed_by_type():
+    """真机事故 input[2522].id 'fc_…' 期望 'ctc'：apply_patch 改写留下了旧前缀。"""
+    parsed = {"model": "gpt-6-luna-go", "input": [
+        {"type": "reasoning", "id": "b68f6c28-978e-4ea6-9d45-642b6b580a85", "summary": [],
+         "content": [{"type": "reasoning_text", "text": "thinking"}]},
+        {"type": "function_call", "id": "fc_dd7f8c3b", "call_id": "c1",
+         "name": "exec_command", "arguments": "{}"},
+        {"type": "function_call_output", "id": "fco_01a11977", "call_id": "c1", "output": "ok"},
+        {"type": "custom_tool_call", "id": "fc_dd7f8c3b", "call_id": "c2",
+         "name": "apply_patch", "input": "*** Begin Patch"},
+        {"type": "custom_tool_call_output", "id": "ctco_01a11977", "call_id": "c2", "output": "ok"},
+        {"type": "message", "id": "msg_01a116aa", "role": "user",
+         "content": [{"type": "input_text", "text": "hi"}]},
+    ]}
+    assert vp._normalize_input_item_ids(parsed) is True
+    ids = {i["type"]: i["id"] for i in parsed["input"] if isinstance(i, dict) and "id" in i}
+    assert ids["custom_tool_call"].startswith("ctc_"), ids
+    assert not ids["reasoning"].startswith("rs_rs_"), ids
+    assert not ids["custom_tool_call"].startswith("ctc_fc_"), ids
+    assert ids["custom_tool_call_output"].startswith("ctco_"), ids
+    assert ids["reasoning"].startswith("rs_"), ids
+    assert ids["function_call"].startswith("fc_"), ids
+    # 实测 fco_ 原样通过（上游只要求以 fc 开头），所以不该被改写成 fc_fco_
+    assert ids["function_call_output"] == "fco_01a11977", ids
+    assert ids["message"].startswith("msg_"), ids
+    _assert_input_item_ids_valid(parsed["input"])
+
+
+def t_input_item_ids_tool_search_prefixes():
+    """真机复放命中：tool_search_call 的 UUID id 期望 'tsc'、输出期望 'tso'。"""
+    parsed = {"input": [
+        {"type": "tool_search_call", "id": "def647da-5587-4909-bf34-807d8e02948c",
+         "call_id": "call_a", "execution": "client", "arguments": {"query": "web search"}},
+        {"type": "tool_search_output", "id": "01a11adc-8230-7ec0-ae1b-646f4bfb6e07",
+         "call_id": "call_a", "tools": []},
+        {"type": "tool_search_call", "id": "tsc_ok", "call_id": "c", "execution": "client"},
+        {"type": "tool_search_output", "id": "tso_ok", "call_id": "c", "tools": []},
+    ]}
+    assert vp._normalize_input_item_ids(parsed) is True
+    ids = [i["id"] for i in parsed["input"]]
+    assert ids[0] == "tsc_def647da-5587-4909-bf34-807d8e02948c", ids
+    assert ids[1] == "tso_01a11adc-8230-7ec0-ae1b-646f4bfb6e07", ids
+    assert ids[2] == "tsc_ok", ids            # 幂等：合法 id 不动
+    assert ids[3] == "tso_ok", ids
+    _assert_input_item_ids_valid(parsed["input"])
+
+
+def t_input_item_ids_idempotent_and_compound():
+    """合法 id 原样不动（幂等）；Codex 复合 id "rs_a:rs_b" 取首段并补正确前缀。"""
+    parsed = {"input": [
+        {"type": "function_call", "id": "fc_ok", "name": "x", "arguments": "{}"},
+        {"type": "custom_tool_call", "id": "ctc_ok", "name": "apply_patch", "input": "x"},
+        {"type": "reasoning", "id": "rs_a:rs_b", "summary": []},
+        {"type": "function_call", "id": "uuid-1234", "name": "y", "arguments": "{}"},
+        {"type": "message", "role": "user", "content": "no id"},
+    ]}
+    vp._normalize_input_item_ids(parsed)
+    ids = [i.get("id") for i in parsed["input"] if isinstance(i, dict)]
+    assert ids[0] == "fc_ok", ids
+    assert ids[1] == "ctc_ok", ids
+    assert ids[2] == "rs_a", ids          # 复合 id "rs_a:rs_b" 取首段 rs_a
+    assert ids[3] == "fc_uuid-1234", ids
+    assert ids[4] is None, ids
+    assert vp._normalize_input_item_ids(parsed) is False, "第二次必须幂等"
+
+
+def t_input_item_ids_fuzz():
+    """随机 id 形状不许崩，且处理后一定满足类型前缀规则。"""
+    kinds = ["fc", "ctc", "ctco", "fco", "rs", "msg", "uuid", "", "with:colon", "tool_00"]
+    types = ["function_call", "function_call_output", "custom_tool_call",
+             "custom_tool_call_output", "reasoning", "message"]
+    for _ in range(60):
+        items = []
+        for _ in range(random.randint(1, 6)):
+            t = random.choice(types)
+            rid = random.choice(kinds) + "_" + _rand_str(4)
+            item = {"type": t, "id": rid}
+            if t == "message":
+                item["role"] = "user"
+                item["content"] = "hi"
+            items.append(item)
+        parsed = {"input": items}
+        try:
+            vp._normalize_input_item_ids(parsed)
+        except Exception as exc:
+            assert False, f"crash on {items}: {exc}"
+        _assert_input_item_ids_valid(parsed["input"])
+
+
+def t_input_item_ids_applied_for_every_upstream():
+    """公共入口：非 Go/Zen 路由（官方直连等）也必须校正 id 前缀。"""
+    parsed = {"model": "gpt-6-luna-go", "stream": True, "input": [
+        {"type": "custom_tool_call", "id": "fc_dd7f8c3b", "call_id": "c2",
+         "name": "apply_patch", "input": "*** Begin Patch"},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]}
+    __import__("asyncio").run(vp.RequestPipelineMixin()._prepare_parsed_request(parsed, b""))
+    _assert_input_item_ids_valid(parsed["input"])
+
 
 # 2026-09-23：t_intercept_unsupported_history_fuzz 退役（400 拦截已删，改翻译）。
 # 下面这批测试锁的是新行为：历史里的 web_search_call 必须被翻成工具调用 + 诚实占位结果。

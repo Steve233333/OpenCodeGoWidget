@@ -204,26 +204,28 @@ def _sanitize_input_ids(parsed):
     summaries are replayed. OpenAI accepts it; opencode.ai Go/Zen gateway validates
     id as ^[a-zA-Z0-9_-]+$ and rejects ':' with 400, or with 'Referenced reasoning
     item ... was not found or has expired' when the encrypted reasoning item has
-    expired (store=false). The safest fix is to drop the entire input item.
-    Previously Go-only; 2026-09-02 expanded to Zen (muse-spark-free-zen same 400).
-    Losing one reasoning history item is negligible vs 400.
+    expired (store=false). The safest fix for those gateways is to drop the item.
+
+    2026-10-15: reasoning items are no longer in scope here — _normalize_reasoning_history
+    strips their id/encrypted_content outright because the gateway never persists
+    items with store=false, so any replayed reasoning id is unresolvable. This
+    filter now only catches other item types carrying compound ':' or rs_ ids.
     """
     input_items = parsed.get("input")
     if not isinstance(input_items, list):
         return False
     orig_len = len(input_items)
-    filtered = [
-        it
-        for it in input_items
-        if not (
-            isinstance(it, dict)
-            and isinstance(it.get("id"), str)
-            and (":" in it["id"] or it["id"].startswith("rs_"))
-        )
-    ]
+
+    def _drop(it):
+        if not (isinstance(it, dict) and isinstance(it.get("id"), str)):
+            return False
+        return ":" in it["id"] or it["id"].startswith("rs_")
+
+    filtered = [it for it in input_items if not _drop(it)]
     if len(filtered) != orig_len:
         parsed["input"] = filtered
-        _log(f"[relay] dropped {orig_len - len(filtered)} input item(s) with ':' or rs_ prefix in id for Zen/Go store=false 400")
+        _log(f"[relay] dropped {orig_len - len(filtered)} input item(s) with compound ':' "
+             f"or rs_ prefix in id for Zen/Go store=false 400")
         return True
     return False
 
@@ -231,13 +233,23 @@ def _sanitize_input_ids(parsed):
 def _normalize_reasoning_history(parsed):
     """Make replayed reasoning items valid Responses input history.
 
-    Third-party Responses adapters have persisted `reasoning.content` as a
-    reasoning_text array.  Strict GPT responses backends accept only an empty
-    content array on input and reject the item with `array_above_max_length`.
-    Fold the visible text into `summary_text`, then remove `content` and the
-    provider-specific `signature`; `encrypted_content` remains untouched for
-    same-provider continuation.  An item with no id, summary, or encrypted
-    content carries no replayable state and is dropped.
+    Two live measurements (2026-10-15, opencode.ai Go gateway, store=false):
+
+    1. `content` must be empty.  Third-party adapters persist the visible
+       reasoning as a `reasoning_text` array, and GPT rejects it with
+       `array_above_max_length` ("Expected an array with maximum length 0").
+       The text is folded into `summary_text` instead.
+    2. `id` and `encrypted_content` must go.  The gateway never persists items
+       when `store` is false, so a replayed id can never resolve ("Item with id
+       'rs_...' not found"), and the `encrypted_content` third-party providers
+       write is a short placeholder that GPT rejects with
+       `invalid_encrypted_content`.  Measured on gpt-6-luna, gpt-5.6-luna,
+       deepseek-v4.1-flash, muse-spark-1.3, mimo-v2.6-pro, glm-5.3, kimi-k3 and
+       space-bunny: summary-only is 200 on all eight, id+encrypted_content is a
+       400 on the two GPT models.
+
+    Items that end up with no summary at all carry nothing to replay and are
+    dropped.  Only the outgoing request is touched; rollout files are untouched.
     """
     input_items = parsed.get("input") if isinstance(parsed, dict) else None
     if not isinstance(input_items, list):
@@ -262,14 +274,6 @@ def _normalize_reasoning_history(parsed):
                     text = part.get("text")
                     if isinstance(text, str) and text.strip():
                         summary_parts.append(text.strip())
-        rid = item.get("id")
-        if isinstance(rid, str) and rid and not rid.startswith("rs"):
-            # GPT responses requires reasoning ids to start with "rs"; Codex and
-            # third-party adapters sometimes write a "reasoning_*" id that then
-            # fails with invalid_value before validation even reaches content.
-            _log(f"[relay] dropped reasoning id {rid[:40]!r} (not rs_ prefixed) for Responses replay")
-            changed = True
-            item.pop("id", None)
         content = item.get("content")
         if isinstance(content, list):
             for part in content:
@@ -283,14 +287,12 @@ def _normalize_reasoning_history(parsed):
             summary_parts.append(content.strip())
 
         summary_parts = list(dict.fromkeys(summary_parts))
-        normalized_summary = [{"type": "summary_text", "text": text}
-                              for text in summary_parts]
-        item.pop("content", None)
-        item.pop("signature", None)
-        item["summary"] = normalized_summary
-        has_encrypted = bool(item.get("encrypted_content"))
-        has_identity = bool(item.get("id"))
-        if not normalized_summary and not has_encrypted and not has_identity:
+        for key in ("content", "signature", "id", "encrypted_content"):
+            item.pop(key, None)
+        item["summary"] = [{"type": "summary_text", "text": text}
+                           for text in summary_parts]
+        if not summary_parts:
+            # Nothing replayable (no id, no encrypted state, no text) -> drop.
             changed = True
             continue
         if item != original:
@@ -300,6 +302,56 @@ def _normalize_reasoning_history(parsed):
         parsed["input"] = kept
         _log("[relay] normalized incompatible reasoning history for Responses replay")
     return changed
+
+
+# item type -> required id prefix.  Measured against the live gateway (2026-10-15):
+#   function_call / function_call_output       -> "fc"
+#   custom_tool_call / custom_tool_call_output -> "ctc" / "ctco"
+#   reasoning                                  -> "rs"
+# Codex writes UUID ids for some items, and the apply_patch response rewrite turns a
+# `fc_...` call into a `custom_tool_call` while keeping the old id, so a cross-model
+# replay hit "Expected an ID that begins with 'ctc'".  Re-prefixing keeps the item's
+# identity instead of dropping it.
+_INPUT_ID_PREFIX = {
+    "function_call": "fc",
+    "function_call_output": "fc",
+    "custom_tool_call": "ctc",
+    "custom_tool_call_output": "ctco",
+    "reasoning": "rs",
+    "message": "msg",
+    "tool_search_call": "tsc",
+    "tool_search_output": "tso",
+}
+
+
+def _normalize_input_item_ids(parsed):
+    """Re-prefix replayed input item ids to the prefix their item type requires."""
+    input_items = parsed.get("input") if isinstance(parsed, dict) else None
+    if not isinstance(input_items, list):
+        return False
+    changed = 0
+    for item in input_items:
+        if not isinstance(item, dict):
+            continue
+        prefix = _INPUT_ID_PREFIX.get(item.get("type"))
+        rid = item.get("id")
+        if not prefix or not isinstance(rid, str) or not rid:
+            continue
+        if rid.startswith(prefix) and ":" not in rid:
+            continue
+        # Keep the tail so ids stay traceable; only the leading marker changes.
+        # ":rs_a:rs_b" (Codex compound ids) collapses to its first segment, and a
+        # stale foreign marker ("fc_x" -> "ctc_x") is stripped instead of stacked.
+        tail = rid.split(":", 1)[0]
+        for known in ("fc", "fco", "ctc", "ctco", "rs", "msg", "tsc", "tso"):
+            if tail == known or tail.startswith(known + "_"):
+                tail = tail[len(known):].lstrip("_")
+                break
+        item["id"] = prefix + "_" + tail if tail else prefix
+        changed += 1
+    if changed:
+        _log(f"[relay] re-prefixed {changed} replayed input item id(s) for Responses validation")
+    return bool(changed)
 
 
 def _fix_tool_required(parsed):
