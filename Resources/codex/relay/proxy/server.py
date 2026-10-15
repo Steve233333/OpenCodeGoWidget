@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import os
+import select
 import signal
 import socket
 import time
@@ -217,6 +218,34 @@ def _inject_reasoning_summaries(text):
                 block = "event: response.output_item.done\ndata: " + json.dumps(fixed, ensure_ascii=False)
         output.append(block)
     return "\n\n".join(output)
+
+
+def _wait_readable(sock, timeout):
+    """SSE 空闲判定：等底层 socket 可读，最多 timeout 秒。
+
+    2026-10-15：以前这里用 `sock.settimeout(5)` + 读超时判"上游空闲"。但 CPython 的
+    socket 文件对象**超时一次就永久作废** —— 之后每次读都直接抛
+    `OSError: cannot read from timed out object`。于是"空闲 5s"的第二轮读把整条流打崩：
+    终止帧没发出去，Codex 只看到 `stream closed before response.completed`，然后无限
+    重连（实测日志 198 次，最早 2026-10-06）。改成 select 等可读：不碰 socket 超时，
+    空闲判定和"继续等"才能同时成立。
+
+    返回 True = 现在读不会阻塞（有数据 / 判断不了，交给读路径）；
+    返回 False = 空闲满 timeout 秒。
+    """
+    if sock is None:
+        return True
+    try:
+        # TLS 已解密的缓冲：select 只看内核缓冲，pending() 才是真相
+        if hasattr(sock, "pending") and sock.pending() > 0:
+            return True
+    except Exception:
+        pass
+    try:
+        ready, _, _ = select.select([sock], [], [], timeout)
+        return bool(ready)
+    except Exception:
+        return True      # 判断不了就当可读（读路径自己会抛、由外层收尾）
 
 
 class Proxy(RequestPipelineMixin):
@@ -677,21 +706,36 @@ class Proxy(RequestPipelineMixin):
                     await asyncio.sleep(delay)
 
         # 2026-09-23：上游"挂着不发字节"时别让 Codex 一直转圈（muse 空转的另一半）。
-        # 给底层 socket 套一个空闲宽限：空闲到点且这一轮内容已完整 → 收尾补终止帧；
-        # 内容还没完整就继续等（长思考不能被掐），但连续空闲超过 TERMINAL_IDLE_MAX_ROUNDS 才算真死。
+        # 空闲宽限：空闲到点且这一轮内容已完整 → 收尾补终止帧；内容还没完整就继续等
+        # （长思考不能被掐），但连续空闲超过 TERMINAL_IDLE_MAX_ROUNDS 才算真死。
+        # 2026-10-15：空闲判定从 "sock.settimeout(grace) + 读超时" 换成 select 等可读 ——
+        # socket 文件对象超时一次就永久作废（后续读一律 OSError: cannot read from timed
+        # out object），第二轮读会把整条流打崩且不发终止帧（日志里 198 次）。
         idle_rounds = 0
         grace = pol.terminal_grace or TERMINAL_GRACE_SECONDS
         try:
             sock = response.fp.raw._sock          # urllib 响应的底层 socket
-            sock.settimeout(grace)
-            _log(f"[relay] SSE 空闲宽限 {grace:.0f}s 已启用")
         except Exception:
             sock = None
 
         while True:
+            if sock is not None and not await asyncio.to_thread(_wait_readable, sock, grace):
+                if sse_turn_looks_complete(state):
+                    _log(f"[relay] 上游空闲 {grace:.0f}s 且内容已完整 → 收尾"
+                         f"（trigger=idle model={state.get('compat', {}).get('model')}）")
+                    break
+                idle_rounds += 1
+                _log(f"[relay] SSE 空闲 {grace:.0f}s（第 {idle_rounds}/{TERMINAL_IDLE_MAX_ROUNDS} 轮，"
+                     f"内容未完整，继续等 model={state.get('compat', {}).get('model')}）")
+                if idle_rounds >= TERMINAL_IDLE_MAX_ROUNDS:
+                    _log(f"[relay] 上游连续空闲 {idle_rounds}×{grace:.0f}s 且内容不完整 → 收尾")
+                    break
+                continue
             try:
                 chunk = await asyncio.to_thread(read_chunk, IO_CHUNK_BYTES)
             except (socket.timeout, TimeoutError):
+                # 保留空闲计数语义（假上游/无法拿 socket 的连接仍走这条）。
+                # 真实 socket 超时一次后即作废，下一轮读会抛 OSError 由下面收尾。
                 if sse_turn_looks_complete(state):
                     _log(f"[relay] 上游空闲 {grace:.0f}s 且内容已完整 → 收尾"
                          f"（trigger=idle model={state.get('compat', {}).get('model')}）")
@@ -701,6 +745,14 @@ class Proxy(RequestPipelineMixin):
                     _log(f"[relay] 上游连续空闲 {idle_rounds}×{grace:.0f}s 且内容不完整 → 收尾")
                     break
                 continue
+            except OSError as exc:
+                # 2026-10-15 真机事故：socket 超时一次后永久作废，第二次读抛
+                # OSError("cannot read from timed out object")，以前这个异常逃逸出去
+                # 把整条流打崩、连终止帧都没发（Codex 只会看到 stream closed 后无限
+                # 重连，日志里 198 次）。现在一律按"流结束"收尾，交给下面的终止帧合成。
+                _log(f"[relay] SSE 读失败（{type(exc).__name__}: {exc}）→ 按流结束收尾"
+                     f"（model={state.get('compat', {}).get('model')}）")
+                break
             if not chunk:
                 break
             idle_rounds = 0        # 有数据就重置：计数只统计"连续"空闲，慢但活着的流不会被误掐

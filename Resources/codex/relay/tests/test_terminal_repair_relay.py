@@ -16,6 +16,8 @@ import json
 import os
 import socket
 import sys
+import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -125,6 +127,240 @@ def t_real_terminal_is_forwarded_untouched():
     assert out.count("response.completed") >= 1
     assert "response.failed" not in out
 
+
+
+# ---------- 2026-10-15：SSE 空闲判定从 socket 超时改成 select ----------
+# 真机事故：`sock.settimeout(5)` + 读超时判空闲，但 CPython 的 socket 文件对象
+# **超时一次就永久作废**，第二轮读抛 OSError("cannot read from timed out object")，
+# 异常逃逸把整条 SSE 流打崩且不发终止帧 —— Codex 只看到 stream closed before
+# response.completed，然后无限重连（日志里 198 次，最早 2026-10-06）。
+
+
+class PoisonedUpstream:
+    """还原真机顺序：先 5s 空闲读超时，再读立刻抛"作废对象"OSError。"""
+
+    def __init__(self, frames):
+        self.frames = b"".join(frames)
+        self.calls = 0
+
+        class _Sock:
+            def pending(self):
+                return 0
+
+        class _Raw:
+            _sock = _Sock()
+
+        class _Fp:
+            raw = _Raw()
+
+        self.fp = _Fp()
+
+    def read1(self, _n=65536):
+        self.calls += 1
+        if self.calls == 1:
+            raise socket.timeout("第一次空闲")
+        raise OSError("cannot read from timed out object")
+
+    read = read1
+
+
+def t_poisoned_socket_read_error_repairs_failed():
+    """socket 作废后的第二次读不许打崩整条流：必须收尾（失败也要有终止帧）。"""
+    proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+    writer = FakeWriter()
+    upstream = PoisonedUpstream([CREATED, ITEM_ADDED])
+    asyncio.run(proxy._send_response_sse(
+        writer, upstream, 200, [("Content-Type", "text/event-stream")],
+        retry=None, model="gpt-6-luna-go"))
+    out = writer.buf.decode("utf-8", errors="replace")
+    assert "response.failed" in out, out[-400:]
+    assert upstream.calls >= 2, upstream.calls
+
+
+class _GateFakeSelect:
+    """假 select：按预设序列回答"可读 / 不可读"，序列用完默认可读。"""
+
+    def __init__(self, sequence):
+        self.sequence = list(sequence)
+        self.calls = 0
+
+    def select(self, r, w, x, t):
+        self.calls += 1
+        ready = self.sequence.pop(0) if self.sequence else True
+        return (list(r) if ready else [], [], [])
+
+
+class GatedUpstream:
+    def __init__(self, parts):
+        self.parts = list(parts)
+        self.calls = 0
+
+        class _Sock:
+            def pending(self):
+                return 0
+
+        class _Raw:
+            _sock = _Sock()
+
+        class _Fp:
+            raw = _Raw()
+
+        self.fp = _Fp()
+
+    def read1(self, _n=65536):
+        self.calls += 1
+        return self.parts.pop(0) if self.parts else b""
+
+    read = read1
+
+
+def t_idle_round_does_not_break_the_stream():
+    """空闲一轮之后上游继续吐字节，流必须照常走完（select 判空闲的核心回归）。
+
+    以前空闲是靠 socket 超时：超时一次就作废，第二轮读直接 OSError 把流打崩，
+    后面的数据永远拿不到。现在空闲只问 select，不碰 socket，继续等就能读到。
+    """
+    import proxy.server as srv_mod
+    orig_select = srv_mod.select
+    srv_mod.select = _GateFakeSelect([True, False])   # 第 2 轮空闲一次，其余可读
+    try:
+        proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+        writer = FakeWriter()
+        upstream = GatedUpstream([b"".join([CREATED, ITEM_ADDED]), ITEM_DONE, b""])
+        asyncio.run(proxy._send_response_sse(
+            writer, upstream, 200, [("Content-Type", "text/event-stream")],
+            retry=None, model="deepseek-v4.1-flash-go"))
+    finally:
+        srv_mod.select = orig_select
+    out = writer.buf.decode("utf-8", errors="replace")
+    # SSE 帧里的中文是 JSON 转义过的（\u505a\u5b8c\u4e86），按转义形式比对
+    assert "做完了".encode("unicode_escape").decode() in out, out[-400:]
+    assert "response.failed" not in out, out[-400:]
+    assert upstream.calls == 3, upstream.calls          # 两段数据 + EOF，没多读
+
+
+class AlwaysIdleUpstream:
+    def read1(self, _n=65536):
+        raise socket.timeout("一直空闲")
+
+    read = read1
+
+
+def t_idle_round_cap_eventually_fails():
+    """连续空闲到上限（TERMINAL_IDLE_MAX_ROUNDS）就收尾，不许永远挂着。"""
+    proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+    writer = FakeWriter()
+    asyncio.run(proxy._send_response_sse(
+        writer, AlwaysIdleUpstream(), 200, [("Content-Type", "text/event-stream")],
+        retry=None, model="mimo-v2.6-pro-go"))
+    out = writer.buf.decode("utf-8", errors="replace")
+    assert "response.failed" in out, out[-400:]
+
+
+def t_wait_readable_helper():
+    """空闲判定帮助函数：拿不到 socket / TLS 有缓冲 / select 三态。"""
+    from proxy.server import _wait_readable
+    import proxy.server as srv_mod
+
+    assert _wait_readable(None, 0.01) is True          # 拿不到 socket：不判空闲
+
+    class PendingSock:
+        def pending(self):
+            return 7
+
+    assert _wait_readable(PendingSock(), 0.01) is True  # TLS 已解密缓冲里有数据
+
+    class PlainSock:
+        def pending(self):
+            return 0
+
+    orig = srv_mod.select
+
+    class NotReady:
+        @staticmethod
+        def select(r, w, x, t):
+            return ([], [], [])
+
+    class Ready:
+        @staticmethod
+        def select(r, w, x, t):
+            return (list(r), [], [])
+
+    class Broken:
+        @staticmethod
+        def select(r, w, x, t):
+            raise OSError("bad fd")
+
+    try:
+        srv_mod.select = NotReady
+        assert _wait_readable(PlainSock(), 0.01) is False
+        srv_mod.select = Ready
+        assert _wait_readable(PlainSock(), 0.01) is True
+        srv_mod.select = Broken
+        assert _wait_readable(PlainSock(), 0.01) is True   # 判断不了就当可读
+    finally:
+        srv_mod.select = orig
+
+
+def t_real_socket_idle_then_data_survives():
+    """真 socket 复现：沉默超过宽限后上游继续发数据，流必须照常走完。
+
+    这条刻意用**真 socketpair**（不是假对象）：旧实现用 sock.settimeout(5) 判空闲，
+    真 socket 一旦读超时就永久作废，第二轮读直接抛 OSError("cannot read from timed
+    out object") 把整条流打崩（日志里 210 次）。假的 socket 对象测不出这个行为，
+    所以必须用真 socket 钉住"空闲一轮之后还能继续读"。
+    """
+    import proxy.server as srv_mod
+
+    left, right = socket.socketpair()
+    # 关键：走 makefile() 的文件对象层 —— 和 urllib 响应的 fp 同一层。
+    # "超时一次就永久作废"的标记打在 SocketIO 文件对象上（裸 recv 是测不出来的）。
+    fobj = left.makefile("rb")
+    resp = type("RealSocketResponse", (), {})()
+    resp.read1 = lambda n=65536: fobj.read1(n)
+    resp.read = resp.read1
+
+    class _Raw:
+        pass
+
+    class _Fp:
+        pass
+
+    raw, fp = _Raw(), _Fp()
+    raw._sock = left
+    fp.raw = raw
+    resp.fp = fp
+
+    def feeder():
+        right.sendall(b"".join([CREATED, ITEM_ADDED]))
+        time.sleep(1.5)                            # 沉默 > 一轮宽限（下面压到 0.6s）
+        right.sendall(ITEM_DONE)
+        time.sleep(0.1)
+        right.close()
+
+    thread = threading.Thread(target=feeder, daemon=True)
+    thread.start()
+
+    orig_grace = srv_mod.TERMINAL_GRACE_SECONDS
+    srv_mod.TERMINAL_GRACE_SECONDS = 0.6           # 缩短宽限，测试别等 5s
+    try:
+        proxy = Proxy(0, "https://api.deepseek.com", "/dev/null")
+        writer = FakeWriter()
+        asyncio.run(proxy._send_response_sse(
+            writer, resp, 200, [("Content-Type", "text/event-stream")],
+            retry=None, model="deepseek-v4.1-flash-go"))
+    finally:
+        srv_mod.TERMINAL_GRACE_SECONDS = orig_grace
+        for closer in (fobj, left):
+            try:
+                closer.close()
+            except Exception:
+                pass
+    thread.join(timeout=1)
+    out = writer.buf.decode("utf-8", errors="replace")
+    assert "做完了".encode("unicode_escape").decode() in out, out[-400:]   # 沉默之后的数据拿到了
+    assert "response.completed" in out, out[-400:]
+    assert "response.failed" not in out, out[-400:]
 
 class SlowMuseUpstream:
     """模拟 muse：先发 reasoning，再发正文；每次 read 只给一块（用来验证"边流边转"）。"""

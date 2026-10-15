@@ -65,6 +65,7 @@ Codex ──▶ relay.py（薄入口 + 兼容 re-export）
 | 正文一次闪出来 | 上游把整段一次 flush（直连网关也这样）；本层只做平滑，不改内容 |
 | 工具调用没执行 / 正文冒出 `<tool_call>` | MiMo XML 解析是否命中：日志 `MiMo XML 工具调用已转成 function_call` |
 | 换模型接着聊被 400 拦（Cross-model history） | 已不该出现：历史里的 `web_search_call` 会翻成 `web_search` 调用 + 占位结果，日志写 `history replay: translated N web_search_call, dropped M reasoning items`；若又冒出来说明桥里的 `_translate_history` 被绕过 |
+| Codex 反复「正在重新连接」＋`stream closed before response.completed` | 看日志有没有 `SSE 读失败（OSError: cannot read from timed out object）`：那是旧版用 socket 超时判空闲的坑（超时一次即作废）。1.1.11.60 起空闲判定走 select，读错误也会补终止帧；日志里的 `SSE 空闲 5s（第 N/24 轮）` 表示上游在沉默但连接还活着 |
 | GPT 报 `input[N].content: array too long` / `Expected 'ctc'` / `not found` / `invalid_encrypted_content` | 看日志 `normalized incompatible reasoning history` 与 `re-prefixed N replayed input item id(s)`；前者把跨模型 reasoning 折成 summary-only（id/加密块一并摘掉，因为网关 store=false 从不持久化），后者按条目类型校正 id 前缀（fc/ctc/ctco/rs/tsc/tso/msg）。两类清洗都在公共入口，对所有上游生效 |
 
 ## 测试与门槛

@@ -2,6 +2,36 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.60 — 修「stream closed before response.completed」无限重连 + 压缩永远走不完
+
+**现象**：大线程（请求体 40MB+）里切模型或压缩时，Codex 反复显示
+「正在重新连接 1/5…5/5」＋「stream disconnected before completion: stream closed before
+response.completed」，「正在压缩上下文」永远转不完。
+
+**根因（一行 socket 超时用法）**：`_send_response_sse` 为了判"上游空闲"用了
+`sock.settimeout(5)` + 读超时。但 CPython 的 socket **文件对象**超时一次后会永久作废
+（SocketIO 打上 `_timeout_occurred` 标记），之后每次读都直接抛
+`OSError: cannot read from timed out object`。这个异常没被捕获，从流内部炸出去 ——
+终止帧没发、连接被掐，客户端只能看到"stream closed"，然后重连、重发、再炸。日志里
+**210 次**，最早 2026-10-06。大请求时上游"思考"超过 5 秒是常态，所以几乎必撞。
+
+**修法**：
+- 空闲判定改用 `select` 等可读（TLS 缓冲用 `sock.pending()` 兜住），不再碰 socket 超时；
+  "空闲到点且内容完整就收尾 / 没完整就继续等 / 连续空闲 24 轮才判失败"的设计原样保留，
+  而且这次是真的能工作（以前第二轮读就崩，根本轮不到"继续等"）。
+- 读路径任何超时 / `OSError` 一律按"流结束"收尾，交给既有的终止帧合成逻辑补
+  `response.completed` 或 `response.failed` —— 绝不再出现"没终止帧的裸断流"。
+- 空闲轮加一行日志（第 N/24 轮），下次从日志就能看出上游是不是在沉默。
+
+**实测**：
+- 真 socket 回归（走 `makefile()` 文件对象层，与线上同一层）：沉默一轮后继续发数据 → 流正常走完；
+  旧写法在同一条路径上必然抛 `cannot read from timed out object`。
+- 40MB 流式复放（真实线程历史）→ HTTP 200 · 55 帧 · `response.completed`；错误计数停在 210 不再增长。
+- 真机冒烟 7/7 绿（四家族 + 跨模型历史 + GPT 5.6/6 reasoning）。
+- 全量门槛 **155 用例**全绿（终止帧修补 12 → 13，新增真 socket 用例）。
+
+版本 **1.1.11.60 (100)**。
+
 ### v1.1.11.59 — 跨模型历史切到 GPT：把上游真正在拒的三类形状全部剥掉
 
 上一版（1.1.11.58）只处理了 `reasoning.content`，真机复放发现还有三类被拒，这一版按实测逐条修完。
