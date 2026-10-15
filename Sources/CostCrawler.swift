@@ -41,21 +41,39 @@ final class CostCrawler: @unchecked Sendable {
             .string(forKey: "consoleSession") ?? ""
         let cookie = Self.consoleCookieHeader(auth: authCookie, session: session)
 
-        // 2026-09-26：`cost-by-day` 改用**小时桶**（`&bucket=hour`）再按北京时间归日 ——
+        // 2026-09-26：`cost-by-day` 优先用**小时桶**（`&bucket=hour`）再按北京时间归日 ——
         // 老接口给的是 UTC 日，和我们的日界（北京 0 点）差 8 小时；小时桶能精确重分桶
         // （实测 9/25 日志合计 $0.278950 ↔ 重分桶 $0.2790）。它只当"那天没有明细"时的兜底。
-        guard let hoursData = await consoleFetch(path: "usage/cost-by-day", query: "range=30d&bucket=hour",
-                                                 cookie: cookie, ws: workspaceID),
-              let hoursJSON = try? JSONSerialization.jsonObject(with: hoursData) else {
-            return nil
+        //
+        // 2026-10-15 事故：上游把 `bucket=hour` 参数改坏了 —— 带它**必 500**（实测 5/5 失败，
+        // 每次耗 16s 才断），而它以前是这里的第一个 guard：一挂整轮刷新就被放弃、界面永远
+        // 停在旧快照（用户报"用了多少钱不会刷新了"）。现在改成三层候选 + **非致命**：
+        //   ① range=30d&bucket=hour —— 小时桶，能精确重分桶（上游恢复即自动用回）
+        //   ② range=30d            —— 按天（带 bucket 的那条坏掉时的第一兜底）
+        //   ③ 无参数                —— 全量按天，最后的兜底
+        // 三种全挂也不立刻放弃：request-logs 才是今天/近 30 天的真源，它活着这轮就该继续
+        // （历史天由 mergeDaily 的"只增不减"保住；真的一条数据都没有才在下面保留旧快照）。
+        let costByDay = await UsageRows.firstParsableCostByDay(
+            candidates: UsageRows.costByDayQueries,
+            attempt: { query in
+                guard let data = await consoleFetch(path: "usage/cost-by-day", query: query,
+                                                    cookie: cookie, ws: workspaceID),
+                      let json = try? JSONSerialization.jsonObject(with: data) else {
+                    logger.warning("CostCrawler: cost-by-day 口径 '\(query.isEmpty ? "(默认)" : query)' 没拿到响应，换下一个")
+                    return nil
+                }
+                return json
+            },
+            parse: { json in
+                let hourly = UsageRows.dailyFromHourlyCost(json)
+                return hourly.isEmpty ? Self.parseCostByDay(json) : hourly
+            })
+        var daily: [DailyCost] = costByDay?.daily ?? []
+        if let costByDay {
+            logger.info("CostCrawler: cost-by-day 口径 '\(costByDay.query.isEmpty ? "(默认)" : costByDay.query)' 解析出 \(costByDay.daily.count) 天")
         }
-        var daily = UsageRows.dailyFromHourlyCost(hoursJSON)
-        if daily.isEmpty {   // 小时桶解析不出来就退回按日（防御式，别让整轮白跑）
-            daily = Self.parseCostByDay(hoursJSON)
-        }
-        guard !daily.isEmpty else {
-            logger.warning("CostCrawler: cost-by-day(hour) 解析出 0 天：\(String(data: hoursData, encoding: .utf8)?.prefix(200) ?? "")")
-            return nil
+        if daily.isEmpty {
+            logger.warning("CostCrawler: cost-by-day 三个口径都不可用 → 继续走 request-logs（今天仍会更新）")
         }
         // 明细：`request-logs`（2026-09-26 起替代已下线的 `usage/rows`）每条带
         // serviceAPIKeyID + model + cost(美元) + startedAt(ms)。增量优先、今天整天窗口保完整。
@@ -160,6 +178,11 @@ final class CostCrawler: @unchecked Sendable {
         }
         // 一条日志都没拿到（接口退化）：今天仍要用 `usage/models` 的权威值重算，
         // 否则那次错误写入会被"只增不减"永久锁死。
+        guard !daily.isEmpty else {
+            // cost-by-day 三个口径全挂、明细也没拿到 —— 这轮什么都没有，保留旧快照
+            logger.warning("CostCrawler: cost-by-day 与 request-logs 本轮都不可用 → 保留旧快照")
+            return nil
+        }
         daily = Self.recomputeToday(daily, today: todayStr, logsToday: [:],
                                     officialToday: officialTodayModels, logWindowOK: false)
         return MonthlyCost(daily: daily, keys: [], dailyByKey: [:])

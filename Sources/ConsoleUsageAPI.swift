@@ -194,6 +194,10 @@ extension CostCrawler {
         // 新控制台的确定结构（2026-09-19 实测）：
         //   [{"date":"2026-09-19","totalCostMicroCents":"64094470","totalTokens":"…","totalRequests":"…"}]
         // 金额是「微美分」字符串，1 美元 = 100,000,000。
+        // 2026-10-15：确定形状的解析收敛到 UsageRows.parseCostByDayFlat（纯数据层，离线门禁可测），
+        // 这里只保留"形状认不出来时"的防御式搜索。
+        let known = UsageRows.parseCostByDayFlat(json)
+        if !known.isEmpty { return known }
         if let arr = json as? [[String: Any]],
            arr.contains(where: { $0["date"] != nil && $0["totalCostMicroCents"] != nil }) {
             let rows = arr.compactMap { item -> DailyCost? in

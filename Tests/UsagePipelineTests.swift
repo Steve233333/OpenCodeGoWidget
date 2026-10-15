@@ -9,6 +9,16 @@ import Foundation
 
 var failures: [String] = []
 
+/// 离线跑器是同步的；生产代码里的候选口径选择是 async（要发网络请求）。
+/// 这里把它桥接成同步调用，好让门禁能直接测真实实现。
+func runBlocking<T>(_ op: @escaping () async -> T) -> T {
+    let sem = DispatchSemaphore(value: 0)
+    var result: T?
+    Task { result = await op(); sem.signal() }
+    sem.wait()
+    return result!
+}
+
 func check(_ cond: Bool, _ label: String) {
     if cond { print("  ✅ \(label)") } else { failures.append(label); print("  ❌ \(label)") }
 }
@@ -254,6 +264,78 @@ func testHourlyCostToBeijingDay() {
     check(UsageRows.dailyFromHourlyCost("不是数组").isEmpty, "畸形输入返回空")
 }
 
+func testCostByDayFallbackChain() {
+    print("⑮ cost-by-day 候选口径的兜底链（2026-10-15 事故）")
+    // 上游把首选口径改坏（带 bucket=hour 必 500）：以前它是第一个 guard，一挂整轮刷新
+    // 被放弃、界面永远停在旧快照。现在必须按顺序往下兜，且首选可用时不多打请求。
+    check(UsageRows.costByDayQueries.count >= 2, "至少要有两个候选口径（首选 + 兜底）")
+    check(UsageRows.costByDayQueries.first == "range=30d&bucket=hour", "首选仍是小时桶（恢复后自动用回）")
+    check(UsageRows.costByDayQueries.last == "", "最后兜底是无参数（最不容易被改坏）")
+
+    // ① 首选可用 → 只用它，且不再请求后面的
+    let hourlyJSON: [[String: Any]] = [
+        ["date": "2026-09-22T16:00:00Z", "totalCostMicroCents": "20000000"],
+    ]
+    var tried: [String] = []
+    let pick1 = runBlocking { await UsageRows.firstParsableCostByDay(
+        candidates: UsageRows.costByDayQueries,
+        attempt: { q in tried.append(q); return q == "range=30d&bucket=hour" ? hourlyJSON : nil },
+        parse: { UsageRows.dailyFromHourlyCost($0) }) }
+    check(pick1?.query == "range=30d&bucket=hour", "首选可用时选它")
+    check(pick1?.daily.count == 1, "解析出 1 天")
+    check(tried == ["range=30d&bucket=hour"], "首选成功就停（不白打后面两个）")
+
+    // ② 首选 500（nil）→ 落到按天口径
+    let flatJSON: [[String: Any]] = [
+        ["date": "2026-09-22", "totalCostMicroCents": "30000000"],
+        ["date": "2026-09-23", "totalCostMicroCents": "10000000"],
+    ]
+    var tried2: [String] = []
+    let pick2 = runBlocking { await UsageRows.firstParsableCostByDay(
+        candidates: UsageRows.costByDayQueries,
+        attempt: { q in tried2.append(q); return q == "range=30d" ? flatJSON : nil },
+        parse: { json -> [DailyCost] in
+            let h = UsageRows.dailyFromHourlyCost(json)
+            return h.isEmpty ? UsageRows.parseCostByDayFlat(json) : h
+        }) }
+    check(pick2?.query == "range=30d", "首选挂了落到按天口径")
+    check(tried2 == ["range=30d&bucket=hour", "range=30d"], "不试第三个就够")
+
+    // ③ 首选能拿到响应但解析出 0 天（形状变了）→ 也要继续往下
+    var tried3: [String] = []
+    let pick3 = runBlocking { await UsageRows.firstParsableCostByDay(
+        candidates: UsageRows.costByDayQueries,
+        attempt: { q in tried3.append(q); return q.isEmpty ? flatJSON : "形状不对" },
+        parse: { json -> [DailyCost] in
+            let h = UsageRows.dailyFromHourlyCost(json)
+            return h.isEmpty ? UsageRows.parseCostByDayFlat(json) : h
+        }) }
+    check(pick3?.query == "", "解析不出来的口径要跳过，一路兜到无参数")
+    check(tried3.count == 3, "三个都试过才放弃")
+
+    // ④ 全挂 → nil（调用方保留旧快照，不许清空界面）
+    let pick4 = runBlocking { await UsageRows.firstParsableCostByDay(
+        candidates: UsageRows.costByDayQueries,
+        attempt: { _ in nil },
+        parse: { _ in [] }) }
+    check(pick4 == nil, "全挂返回 nil，交给调用方保留旧快照")
+}
+
+func testCostByDayFlatShape() {
+    print("⑯ 按天口径（无小时桶）的解析")
+    // 上游 2026-10-15 后只稳定支持 range=30d / 无参数：一天一条、date 是纯日期
+    let flat: [[String: Any]] = [
+        ["date": "2026-10-13", "totalCostMicroCents": "438348146"],
+        ["date": "2026-10-14", "totalCostMicroCents": "418000000"],
+        ["date": "2026-10-15", "totalCostMicroCents": "0"],
+    ]
+    let daily = UsageRows.parseCostByDayFlat(flat)
+    let map = Dictionary(uniqueKeysWithValues: daily.map { ($0.date, $0) })
+    check(near(map["2026-10-13"]?.total ?? 0, 4.38348146), "按天口径的金额要能解析")
+    check(map["2026-10-15"] == nil || (map["2026-10-15"]?.total ?? 0) >= 0, "0 金额的天允许被过滤")
+    check(UsageRows.parseCostByDayFlat("不是数组").isEmpty, "畸形输入返回空")
+}
+
 func testWindowSplitDecision() {
     print("⑪ 超 1000 条时的二分判据")
     let start = Date(timeIntervalSince1970: 1_790_000_000)
@@ -349,6 +431,8 @@ struct UsagePipelineTestRunner {
         testViewsAddUp()
         testLogRowMapping()
         testHourlyCostToBeijingDay()
+        testCostByDayFallbackChain()
+        testCostByDayFlatShape()
         testWindowSplitDecision()
         testTotalMismatchGuard()
         testLogsEndToEnd()

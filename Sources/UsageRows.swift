@@ -80,6 +80,59 @@ enum UsageRows {
     /// "只有总额、没有明细"的天用的占位模型名（沿用旧口径，界面靠它判断是否有明细）
     static let totalOnlyKey = "(total)"
 
+    /// `cost-by-day` 的候选查询口径（按优先级）。
+    ///
+    /// ① 小时桶能按北京时间精确重分桶（UTC 日差 8 小时的那个坑）；
+    /// ②③ 是它在 2026-10-15 被上游改坏（**带 `bucket=hour` 必 500**，实测 5/5、
+    ///     每次耗 16s）时的兜底：按天 / 默认。
+    ///
+    /// 放在这一层（而不是网络层）是为了让离线门禁能直接断言"兜底必须存在"——
+    /// 这次事故就是首选口径一挂、整轮刷新被放弃，界面永远停在旧快照。
+    static let costByDayQueries = ["range=30d&bucket=hour", "range=30d", ""]
+
+    /// 依次尝试候选口径，返回**第一个**能解析出天数的结果；全挂返回 nil。
+    ///
+    /// - `attempt`: 取某个口径的原始 JSON（拿不到就给 nil，例如 HTTP 500）
+    /// - `parse`:   把 JSON 解析成按天花费（解析不出来给空数组）
+    ///
+    /// 找到第一个可用口径就停（不会白白多打两次请求）；调用方在拿到 nil 时
+    /// 应保留旧快照，而不是把界面清空。
+    static func firstParsableCostByDay(
+        candidates: [String],
+        attempt: (String) async -> Any?,
+        parse: (Any) -> [DailyCost]
+    ) async -> (query: String, daily: [DailyCost])? {
+        for query in candidates {
+            guard let json = await attempt(query) else { continue }
+            let daily = parse(json)
+            if !daily.isEmpty { return (query, daily) }
+        }
+        return nil
+    }
+
+    /// 解析"按天"口径的 `cost-by-day`：一天一条、`date` 是纯日期、金额是微美分字符串。
+    ///
+    ///   [{"date":"2026-10-13","totalCostMicroCents":"438348146", ...}]
+    ///
+    /// 这是上游在 `bucket=hour` 被改坏后仍稳定支持的口径（`range=30d` / 无参数）。
+    /// 只认这一个确定形状；别的形状交给上层的防御式搜索（`CostCrawler.parseCostByDay`）。
+    /// 非正金额的天会被过滤（0 值的"空天"不需要占位）。
+    static func parseCostByDayFlat(_ json: Any) -> [DailyCost] {
+        guard let arr = json as? [[String: Any]],
+              arr.contains(where: { $0["date"] != nil && $0["totalCostMicroCents"] != nil }) else {
+            return []
+        }
+        var merged: [String: [String: Double]] = [:]
+        for item in arr {
+            guard let raw = item["date"] as? String else { continue }
+            let usd = microCents(item["totalCostMicroCents"]) / 100_000_000.0
+            guard usd > 0 else { continue }
+            let key = (item["model"] as? String) ?? totalOnlyKey
+            merged[String(raw.prefix(10)), default: [:]][key, default: 0] += usd
+        }
+        return merged.map { DailyCost(date: $0.key, entries: $0.value) }.sorted { $0.date < $1.date }
+    }
+
     /// 二分窗口的中点（`request-logs/export` 一次最多 1000 条，超了要按中点切开）。
     /// 太窄（<120s）就不再切，避免病态递归。
     static func windowMidpoint(start: Date, end: Date, minSpan: TimeInterval = 120) -> Date? {
