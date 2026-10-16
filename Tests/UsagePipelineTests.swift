@@ -264,6 +264,30 @@ func testHourlyCostToBeijingDay() {
     check(UsageRows.dailyFromHourlyCost("不是数组").isEmpty, "畸形输入返回空")
 }
 
+func testChartYAxisNoCeiling() {
+    print("⑰ 柱状图 Y 轴上界（2026-10-16 爆表事故）")
+    // 旧实现 `min(max(top, 2.5), 6.0)` 把上界写死 $6：单日 $7.05 的柱子冲出图外。
+    // 不变量：① 小用量有下限（别拉太高）；② 上界永远盖得住数据且留白；
+    //        ③ 没有天花板（数据多大轴就多高）。
+    check(ChartAxis.yUpperBound(maxDaily: 0) == 2.5, "没数据时用下限 $2.5")
+    check(ChartAxis.yUpperBound(maxDaily: 1.0) == 2.5, "小用量也被下限托住")
+    check(ChartAxis.yUpperBound(maxDaily: 4.0) == 5.0, "常规用量按 1.2 倍 + 0.5 取整（$4 → $5）")
+    // 爆表那天：$7.05 → 上界必须 > 7.05，而不是卡在 6
+    let big = ChartAxis.yUpperBound(maxDaily: 7.05)
+    check(big > 7.05, "单日 $7.05 时上界必须高过它（不能卡在 $6）")
+    check(near(big, 8.5), "$7.05 × 1.2 = 8.46 → 取整到 $8.5")
+    // 没有天花板：更大的数据继续把轴顶上去
+    let huge = ChartAxis.yUpperBound(maxDaily: 120.0)
+    check(huge > 120.0, "大用量时上界跟着长（$120 → $144）")
+    check(near(huge, 144.0), "$120 × 1.2 = $144")
+    // 每个刻度都盖得住：对一串真实量级逐条验证
+    for maxDaily in [0.5, 2.4, 6.0, 6.01, 7.05, 15.3, 99.9] {
+        let top = ChartAxis.yUpperBound(maxDaily: maxDaily)
+        check(top >= maxDaily, "上界 $\(top) 盖得住单日 $\(maxDaily)")
+    }
+    check(ChartAxis.yDomain(maxDaily: 7.05).lowerBound == 0, "范围从 0 起")
+}
+
 func testCostByDayFallbackChain() {
     print("⑮ cost-by-day 候选口径的兜底链（2026-10-15 事故）")
     // 上游把首选口径改坏（带 bucket=hour 必 500）：以前它是第一个 guard，一挂整轮刷新
@@ -431,6 +455,7 @@ struct UsagePipelineTestRunner {
         testViewsAddUp()
         testLogRowMapping()
         testHourlyCostToBeijingDay()
+        testChartYAxisNoCeiling()
         testCostByDayFallbackChain()
         testCostByDayFlatShape()
         testWindowSplitDecision()

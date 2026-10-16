@@ -74,10 +74,11 @@ struct MonthChartView: View {
     }
 
     private var yDomain: ClosedRange<Double> {
+        // 2026-10-16：以前这里把上界写死成 max $6（`min(max(top, 2.5), 6.0)`），
+        // 单日超过 $6 柱子就冲出图外（用户报的"爆表"，当天实际 $7.05）。
+        // 规则收敛到 ChartAxis（数据层，离线门禁可测）：下限 $2.5、上限跟数据走、没有天花板。
         let maxDaily = dailyCosts.map { $0.total }.max() ?? 0
-        let top = max(2.5, ceil(maxDaily * 1.2 * 10) / 10)
-        let capped = min(max(top, 2.5), 6.0)
-        return 0...capped
+        return ChartAxis.yDomain(maxDaily: maxDaily)
     }
 
     private var allXStrings: [String] {

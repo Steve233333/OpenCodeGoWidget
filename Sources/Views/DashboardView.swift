@@ -6,6 +6,25 @@ import WidgetKit
 /// 主面板（仪表盘）：额度卡片 + 费用图 + 今日模型 + 图例。
 /// 2026-09-23 Phase 2 从 App.swift 拆出（原来 1265 行一个文件装着整个界面）。
 /// 改名：`ContentView` → `DashboardView`（小组件自己也叫 ContentView，两个同名类型容易看串）。
+
+/// 「明细缺口」提示点的悬停说明（2026-10-16 从常驻文字改成 tooltip）。
+///
+/// 两类缺口都是官方数据限制，不是本工具出错：
+///   * 超出 30 天保留期的天，官方已经没有请求日志，明细永远补不回来，只能看总额；
+///   * 缺「按 Key」明细的天会让各 Key 相加 < 总额，差额就是这一块。
+/// 放在 tooltip 里是为了别再让两行长文天天挂在图表下面像报错。
+private func detailGapHelp(skippedDays: Int, keyGap: Double) -> String {
+    var lines: [String] = []
+    if skippedDays > 0 {
+        lines.append("有 \(skippedDays) 天官方没有请求日志（超出 30 天保留期，或当时未记录），这些天只能看总额、无法拆到模型或 Key。")
+    }
+    if keyGap > 0.02 {
+        lines.append(String(format: "「按 Key」相加比总额少 $%.2f：那几天缺按 Key 明细（官方未记录）。", keyGap))
+    }
+    lines.append("这是官方数据的限制，不影响总额准确。")
+    return lines.joined(separator: "\n")
+}
+
 struct DashboardView: View {
     // 2026-09-20：这里以前直接 KeychainStore.load() —— 那是**读钥匙串**，重签后 macOS 会弹授权框，
     // 而且这行是视图属性初始化，弹框会把整个界面构造卡住（窗口画不出来、刷新也不跑）。
@@ -208,27 +227,29 @@ struct DashboardView: View {
                                             .foregroundStyle(.orange)
                                             MiniProgressBar(fraction: frac, tint: .orange)
                                         }
-                                    } else if skippedInWindow > 0 {
-                                        // 补不回来的那几天：明说原因，不再假装"下次刷新就好"
-                                        Text("明细已补齐；\(skippedInWindow) 天官方没有请求日志（保留期外/未记录），只能看总额")
-                                            .font(.system(size: 8))
-                                            .foregroundStyle(.secondary)
                                     }
-                                    // 2026-09-28：只在"所有密钥"视图提示一次口径差异 ——
-                                    // 缺"按 Key"明细的天（官方没存 / 接口不可用）会让各 Key 相加 < 总额，
-                                    // 以前没人解释，用户会以为是坏了。
-                                    if selectedKeyId == nil, !snap.dailyByKey.isEmpty {
+                                    // 2026-09-28：只在"所有密钥"视图算一次口径差异 ——
+                                    // 缺"按 Key"明细的天（官方没存 / 接口不可用）会让各 Key 相加 < 总额。
+                                    // 2026-10-16：这两类缺口（保留期外的天、按 Key 差额）都是**官方数据限制、
+                                    // 不是故障**，以前每天常驻两行说明，看着像报错让用户迷惑。
+                                    // 现在合并成一个小 ⓘ：平时只有一行灰字，悬停才展开细节。
+                                    let keyGap: Double = {
+                                        guard selectedKeyId == nil, !snap.dailyByKey.isEmpty else { return 0 }
                                         let dailyMap = Dictionary(uniqueKeysWithValues: filteredDaily.map { ($0.date, $0) })
                                         let byKeySum = snap.dailyByKey.values.reduce(0.0) { acc, arr in
                                             acc + arr.filter { dailyMap[$0.date] != nil }.reduce(0.0) { $0 + $1.total }
                                         }
                                         let allSum = filteredDaily.reduce(0.0) { $0 + $1.total }
-                                        let gap = allSum - byKeySum
-                                        if gap > 0.02 {
-                                            Text(String(format: "各 Key 相加之和不等于总额：有几天缺少「按 Key」明细（官方未记录 / 日志接口不可用），差额 $%.2f", gap))
+                                        return allSum - byKeySum
+                                    }()
+                                    if skippedInWindow > 0 || keyGap > 0.02 {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "info.circle").font(.system(size: 9))
+                                            Text("部分天的官方明细未保留（不影响总额）")
                                                 .font(.system(size: 8))
-                                                .foregroundStyle(.secondary)
                                         }
+                                        .foregroundStyle(.secondary)
+                                        .help(detailGapHelp(skippedDays: skippedInWindow, keyGap: keyGap))
                                     }
                                 }
                                 // 今日模型：跟随 Key 筛选

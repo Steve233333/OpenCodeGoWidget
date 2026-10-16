@@ -16,6 +16,7 @@ swiftc -O \
   "$ROOT/Sources/UsageCostModels.swift" \
   "$ROOT/Sources/UsageMerge.swift" \
   "$ROOT/Sources/UsageRows.swift" \
+  "$ROOT/Sources/ChartWindow.swift" \
   "$ROOT/Tests/UsagePipelineTests.swift" \
   -o "$TMP/usage_pipeline_test"
 "$TMP/usage_pipeline_test"
