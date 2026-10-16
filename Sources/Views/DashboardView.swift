@@ -363,11 +363,15 @@ struct DashboardView: View {
             // 2026-09-20：以前只有"快照为空"才在启动时刷新 —— 结果打开 App 看到的是上一次的旧数据，
             // 要等 5 分钟自动那轮或手点「刷新」。现在快照超过 3 分钟就直接刷一次。
             let stale = snapshot.map { Date().timeIntervalSince($0.updatedAt) > 180 } ?? true
-            if snapshot == nil || stale { await refresh() }
+            if snapshot == nil || stale { await UsageScheduler.shared.refreshIfStale(reason: "窗口打开") }
+            if let s = WidgetDataStore.load() { snapshot = s }
         }
         .onReceive(autoTimer) { _ in
-            guard !loading else { return }
-            Task { await refresh() }
+            // 2026-10-16：定时刷新搬到 App 级 UsageScheduler（关窗口也继续跑）。
+            // 这里只把刚落盘的快照读回界面；真正拉数据由调度器负责，
+            // 否则窗口开着时两条循环会同时打控制台接口。
+            guard !loading, let s = WidgetDataStore.load() else { return }
+            snapshot = s
         }
         // 回填在跑：每 5 秒把刚写到盘上的明细读回界面，进度条与柱子同步往前爬
         .onReceive(liveTimer) { _ in
@@ -385,85 +389,31 @@ struct DashboardView: View {
     private func refresh() async {
         guard !loading else { return }
         loading = true; error = nil
-        // 先把 WKWebView 里最新的 opencode.ai 登录态同步过来（改版后 SPA 路由不触发旧的检测回调），
-        // 否则用的是过期 cookie，新控制台 API 会一直 401、费用不更新
-        // 2026-09-20：CookieSync 里可能走 WKWebView（磁盘 cookie 缺失时），而 WebKit 没有超时 ——
-        // 一旦 web 进程起不来/页面卡住，await 永不返回：界面停在 loading，5 分钟定时器被 `guard !loading`
-        // 挡住，用户看到的就是"点了刷新没反应、数据再也不更新"。给这一步加 8 秒硬超时。
-        let cookieSynced = await withTaskGroup(of: Bool?.self) { group -> Bool in
-            group.addTask { await CookieSync.syncAuthCookie() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? false
-        }
-        if cookieSynced {
-            widgetStoreWarning = nil
-        }
-        // 刷新额度/费用前强制同步模型列表与配额表（用户主动刷新应立即体现官方新增，失败静默）
+        defer { loading = false }
+        // 2026-10-16：真正拉数据只有一份实现（UsageScheduler），界面这里只负责
+        // 显示进度并在结束后把快照读回，避免两套刷新逻辑各写一份慢慢漂移。
+        // 用户主动刷新要立刻体现官方新增：模型列表 + 配额表一起重拉（失败静默，界面自己兜底）
         async let modelRefresh: [String] = ModelRegistry.refreshIfNeeded(force: true)
         async let zenRefresh: [String] = ModelRegistry.refreshZenIfNeeded(force: true)
         async let quotaRefresh: [GoQuota] = GoQuotaRegistry.refreshIfNeeded(force: true)
-        do {
-            // 用户主动刷新（含每 5 分钟自动那轮）连带重拉一次密钥列表：
-            // 控制台新建的 Key 应该立刻出现在下拉框里，而不是等缓存空掉（2026-09-24）
-            let snap = try await WidgetSnapshotRefresher.fetch(forceKeys: true)
-            let models = await modelRefresh
-            _ = await zenRefresh
-            let q = await quotaRefresh
-            // 触发图例与配额图重算
-            await MainActor.run {
-                modelTick += 1; _ = models
-                quotas = q
-                quotaUpdatedAt = GoQuotaRegistry.cachedDate()
-            }
-            // 写快照：三条通道都试一遍；一条都没写成说明小组件必然空白，界面上要说出来而不是静默
-            let savedOK = WidgetDataStore.save(snap)
-            await MainActor.run {
-                if !savedOK {
-                    widgetStoreWarning = "小组件数据写盘失败：三条通道都不可用（点右上角齿轮 → 小组件自检看详情）"
-                } else if WidgetDataStore.groupContainerURL == nil {
-                    widgetStoreWarning = "App Group 容器不可用：已改走备用通道，小组件需重开 App 后再看（齿轮 → 小组件自检）"
-                } else {
-                    widgetStoreWarning = nil
-                }
-            }
-            snapshot = snap
-            // 文件已原子写入，UserDefaults 也已同步，稍作延迟确保 Widget 扩展的 containerURL 可见
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
-            WidgetCenter.shared.reloadAllTimelines()
-            // 再补一次，规避 WidgetKit 节流对单次 reload 的限频
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
-            // 后台补历史明细（改版前那几天只有总额、没有模型维度 → 图上纯色）；不阻塞界面，可续跑
-            // 2026-09-19：补完直接把快照读回界面 + 通知小组件，不用用户再点一次「刷新」
-            Task {
-                let repaired = await CostCrawler.shared.backfillHistoryIfNeeded()
-                if repaired, let s = WidgetDataStore.load() {
-                    await MainActor.run { snapshot = s }
-                    WidgetCenter.shared.reloadAllTimelines()
-                }
-            }
-        } catch {
-            let models = await modelRefresh
-            _ = await zenRefresh
-            let q = await quotaRefresh
-            await MainActor.run {
-                modelTick += 1; _ = models
-                quotas = q
-                quotaUpdatedAt = GoQuotaRegistry.cachedDate()
-            }
-            let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            self.error = msg
-            // preserve last snapshot but mark error
-            if var s = snapshot { s.error = msg; WidgetDataStore.save(s); snapshot = s }
+        await UsageScheduler.shared.refresh(reason: "手动")
+        let models = await modelRefresh
+        _ = await zenRefresh
+        let q = await quotaRefresh
+        modelTick += 1; _ = models
+        quotas = q
+        quotaUpdatedAt = GoQuotaRegistry.cachedDate()
+        if let s = WidgetDataStore.load() { snapshot = s }
+        if let e = UsageScheduler.shared.lastError {
+            error = e
+        } else {
+            error = nil
+            widgetStoreWarning = WidgetDataStore.groupContainerURL == nil
+                ? "App Group 容器不可用：已改走备用通道（齿轮 → 小组件自检）" : nil
         }
-        loading = false
+        return
     }
+
 }
 
 /// 细进度条（历史明细回填进度用）

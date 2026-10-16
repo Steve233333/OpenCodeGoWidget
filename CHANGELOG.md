@@ -2,6 +2,77 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.64 — 修「App 更新了、磁贴不刷新」（LaunchServices 死记录）
+
+**现象**：装完新版 App，主面板数据是新的，桌面磁贴却停在上一次的时间（截图实拍：App 显示 15:44，磁贴还挂在 15:39），不重启电脑就一直不动。
+
+**根因（chronod 日志实拍）**：
+
+```
+reload: failed with error WidgetArchiver.ValidationError.bundleStubNotSupported
+  "Bundle version did not match; LaunchServices DB may need to be rebuilt"
+→ Reload failed; next attempt due at 16:50:16     ← 重试被推到一小时之后
+```
+
+打包过程会把 app 复制到 `build/staging`、`build/staging/dmg`、`dist/` 各一份，
+系统为这些**临时路径**也建了 LaunchServices 登记；构建结束目录被清掉，登记就成了
+**死记录**（指向已经不存在的旧副本）。chronod 渲染磁贴时解析到这些死记录 → 判定
+"版本不匹配" → 拒绝刷新并把重试推后一小时。所以"只要重装 App 就会这样"，
+而重启电脑能好（chronod 重来、丢掉旧解析）。
+
+**修法**：构建流程收尾时重新登记 `/Applications` 里的真身，并重启 `chronod`
+让它丢掉旧解析缓存（`lsregister -u` 对"路径已不存在"的记录无效，这是唯一能清掉死记录的办法）。
+构建中间产物那几处也顺手撤销登记，减少死记录产生。
+
+**验证**：修复前后对比 chronod 日志 ——
+
+```
+修复前：reload: failed … bundleStubNotSupported → next attempt due at 16:50
+修复后：Task [19] Reload success
+        Task [28] Reload success
+        Task [32] Reload success
+```
+
+连续三次渲染成功；磁贴数据文件本身就是新的（`widget_snapshot.json` 时间戳与主 App 一致），
+之前只是被系统拒绝渲染。
+
+**同版另两项**（1.1.11.63 的内容一并带上）：
+- 磁贴时间线不再"一出生就过期"：以前下次刷新算「快照时间 +2 分钟」，快照一旧就落在过去
+  → `timelineExhausted` → 被丢进预算队列。现在只按「现在 + 15 分钟」算，永远指向未来。
+- 5 分钟刷新循环从**主窗口视图**搬到 App 级 `UsageScheduler`：关窗口也继续刷，
+  并在系统唤醒时补一轮（以前关窗口就停、只有重启电脑才恢复）。
+
+版本 **1.1.11.64 (104)**。
+
+### v1.1.11.63 — 修「磁贴小组件不重启电脑就不刷新」
+
+**现象**：桌面上的磁贴小组件停住不动，必须重启电脑才恢复刷新。
+
+**根因（chronod 日志实拍）**：
+
+```
+Not checking cache (timelineExhausted)
+entry count: 1
+date range: 15:34:48 … 15:34:48     ← 起点=终点，时间线一出生就过期
+```
+
+小组件把下次刷新时刻算成「快照时间 + 2 分钟」。**快照越旧，这个时间越落在过去** ——
+交给 WidgetKit 时已经是"已耗尽（timelineExhausted）"，系统就把它丢进预算队列往后拖，
+表现就是卡死、只有重启电脑（chronod 重来）才恢复。偏偏"数据已经旧了"正是最该刷新的场景，
+逻辑正好反过来了。
+
+**修法**：刷新时刻只看「当前时间 + 固定间隔」，永远指向未来（`WidgetTimeline.nextRefreshDate`）；
+间隔从 2 分钟调到 15 分钟 —— WidgetKit 每天只给几十次刷新，2 分钟一次会被限流成更长的间隔，
+15 分钟既够及时又不烧光预算；主 App 在跑时另有推送（`reloadTimelines`），这只是它没跑时的兜底。
+新增离线用例 ⑱ 把"刷新时刻必须永远在未来、不许一出生就判已耗尽"钉死（含边界）。
+
+**附带修掉一个更严重的**：5 分钟刷新循环原来挂在**主窗口视图**上，关窗口就停、
+只有重启电脑（App 自启并开出窗口）才恢复 —— 这是"必须重启电脑"的另一半原因。
+现在循环搬到 App 级 `UsageScheduler`（和代理看护同一模式），跟窗口生死无关，
+并在系统唤醒时补一轮；窗口那边的定时器只负责把新快照读回界面，不再重复打接口。
+
+版本 **1.1.11.63 (103)**。
+
 ### v1.1.11.62 — 柱状图不再"爆表" + 把两行常驻说明收进 ⓘ
 
 **① 爆表**：柱状图 Y 轴上限被**写死成 $6**（`min(max(top, 2.5), 6.0)`）——

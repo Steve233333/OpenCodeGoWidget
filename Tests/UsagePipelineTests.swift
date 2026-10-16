@@ -264,6 +264,29 @@ func testHourlyCostToBeijingDay() {
     check(UsageRows.dailyFromHourlyCost("不是数组").isEmpty, "畸形输入返回空")
 }
 
+func testWidgetTimelineNeverExhausted() {
+    print("⑱ 磁贴小组件时间线：刷新时刻必须永远在未来（2026-10-16 事故）")
+    // chronod 实拍：时间线日期范围起点=终点 → timelineExhausted → 被丢进预算队列，
+    // 小组件卡住不动、只有重启电脑才恢复。旧代码用「快照时间 + 2 分钟」算下次刷新，
+    // 快照一旧这个时间就落在过去（数据越旧越该刷新，逻辑正好反了）。
+    let now = Date()
+    let next = WidgetTimeline.nextRefreshDate(now: now)
+    check(next > now, "下次刷新必须在未来")
+    check(!WidgetTimeline.timelineIsExhausted(now: now, nextRefresh: next), "不许一出生就判已耗尽")
+    check(next.timeIntervalSince(now) >= WidgetTimeline.minimumLead, "留够最小提前量")
+
+    // 无论"现在"是几点，结果都在未来（旧实现会让快照旧的时间点直接落到过去）
+    for minutesAgo in [0, 2, 10, 60, 24 * 60] {
+        let at = now.addingTimeInterval(-Double(minutesAgo) * 60)
+        let t = WidgetTimeline.nextRefreshDate(now: now)
+        check(t > now, "（快照 \(minutesAgo) 分钟前）下次刷新仍在未来")
+        _ = at   // 快照时间不再参与计算 —— 这正是修法本身
+    }
+    check(WidgetTimeline.pollInterval >= 10 * 60, "间隔要在 WidgetKit 预算友好区间（≥10 分钟）")
+    check(WidgetTimeline.timelineIsExhausted(now: now, nextRefresh: now) == true,
+          "边界：刷新时刻=现在 视为已耗尽（提醒别把等号写反）")
+}
+
 func testChartYAxisNoCeiling() {
     print("⑰ 柱状图 Y 轴上界（2026-10-16 爆表事故）")
     // 旧实现 `min(max(top, 2.5), 6.0)` 把上界写死 $6：单日 $7.05 的柱子冲出图外。
@@ -455,6 +478,7 @@ struct UsagePipelineTestRunner {
         testViewsAddUp()
         testLogRowMapping()
         testHourlyCostToBeijingDay()
+        testWidgetTimelineNeverExhausted()
         testChartYAxisNoCeiling()
         testCostByDayFallbackChain()
         testCostByDayFlatShape()

@@ -50,10 +50,12 @@ struct Provider: TimelineProvider {
         let loaded = WidgetDataStore.loadDetailed()
         let cached = loaded.snapshot
         let now = Date()
-        let staleAfter: TimeInterval = 2 * 60
         // 轻量刷新模型列表（无鉴权，不影响费用）
         Task { _ = await ModelRegistry.refreshIfNeeded() }
-        let next = (cached?.updatedAt ?? now).addingTimeInterval(staleAfter)
+        // 2026-10-16：以前这里算的是「快照时间 + 2 分钟」—— 快照一旧，这个时间就落在过去，
+        // 时间线交给系统时已是 timelineExhausted（chronod 日志实拍：日期范围起点=终点），
+        // 于是被丢进预算队列越拖越久，只能靠重启电脑恢复。现在只看"现在"，永远指向未来。
+        let next = WidgetTimeline.nextRefreshDate(now: now)
         completion(Timeline(entries: [GoUsageEntry(date: now, snapshot: cached,
                                                   reason: Self.emptyReason(loaded))],
                             policy: .after(next)))

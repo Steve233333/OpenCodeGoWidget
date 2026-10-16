@@ -207,7 +207,7 @@ echo "==> 编译 App"
 # 源码清单（2026-09-23 Phase 1/2）：主 App = Sources/ 全量（含 Views/ 子目录）；Widget = 共享部分。
 # 以前两个目标各手写一长串文件名，拆文件时漏加一个就"打包时才编译失败"，现在只维护一份排除名单。
 APP_ONLY_SOURCES=(
-  "App" "DashboardView" "QuotaViews" "ChartViews" "SelfCheckViews" "SettingsViews" "ProxyWatchdog"
+  "App" "DashboardView" "QuotaViews" "ChartViews" "SelfCheckViews" "SettingsViews" "ProxyWatchdog" "UsageScheduler"
   "CodexInstaller" "CodexSetupView" "UpdateChecker" "HealthCheck" "CookieSync"
   "OpenCodeKeyFetcher" "OpenCodeLoginView"
 )
@@ -252,6 +252,49 @@ else
   codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "build/${APP_BUNDLE_NAME}.app"
   codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "build/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 fi
+
+# 2026-10-16：**卸载临时路径的 LaunchServices 登记**。
+#
+# 为什么必须做：打包时会把 app 复制到 build/staging、build/staging/dmg、dist/ 各一份，
+# 系统会给这些临时路径也建登记；构建结束时目录被清掉，登记就成了**死记录**。
+# 之后 chronod 渲染磁贴时会解析到这些不存在的旧副本，直接报
+#   WidgetArchiver.ValidationError.bundleStubNotSupported
+#   "Bundle version did not match; LaunchServices DB may need to be rebuilt"
+# 于是磁贴拒绝刷新、重试被推到一小时甚至更久 —— 用户看到的就是"App 更新了、磁贴不动"
+# （2026-10-16 实拍）。这里在安装前把临时登记摘掉，只留 /Applications 这一个真身。
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+ROOT_ABS="$(cd "$(dirname "$0")" && pwd)"
+for rel in "build/${APP_BUNDLE_NAME}.app" "build/staging/${APP_BUNDLE_NAME}.app" \
+           "build/staging/dmg/${APP_BUNDLE_NAME}.app" "dist/${APP_BUNDLE_NAME}.app"; do
+  target="$ROOT_ABS/$rel"
+  if [ -e "$target" ]; then
+    "$LSREGISTER" -u "$target" 2>/dev/null || true
+  else
+    # 目录已经不存在（死记录）时 -u 无效，登记会一直留着；这里记一行方便排查
+    "$LSREGISTER" -dump 2>/dev/null | grep -q "$rel" && echo "   提醒：LaunchServices 里仍有 ${rel} 的残留登记" || true
+  fi
+done
+
+# 2026-10-16：**修「App 更新了、磁贴不刷新」**。
+#
+# 症状：重装 App 后桌面磁贴停住不动，重启电脑才恢复；chronod 日志报
+#   WidgetArchiver.ValidationError.bundleStubNotSupported
+#   "Bundle version did not match; LaunchServices DB may need to be rebuilt"
+#
+# 根因：打包会把 app 复制到 build/staging、build/staging/dmg、dist/ 各一份，系统为这些
+# 临时路径也建了 LaunchServices 登记；构建结束目录被清掉，登记变成**死记录**（指向不存在的
+# 旧副本）。之后 chronod 渲染磁贴时解析到死记录 → 判定版本不匹配 → 拒绝刷新，并把重试推到
+# 一小时之后。
+#
+# 处置：① 构建过程中把能撤的临时登记撤掉；② 安装完成后重启 chronod（它会自动被拉起），
+# 让它丢掉旧的解析缓存、重新读取 /Applications 里的真身。这是唯一能清掉"目录已消失的死记录"
+# 的办法（`lsregister -u` 对不存在的路径无效）。
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+ROOT_ABS="$(cd "$(dirname "$0")" && pwd)"
+for rel in "build/${APP_BUNDLE_NAME}.app" "build/staging/${APP_BUNDLE_NAME}.app" \
+           "build/staging/dmg/${APP_BUNDLE_NAME}.app" "dist/${APP_BUNDLE_NAME}.app"; do
+  [ -e "$ROOT_ABS/$rel" ] && { "$LSREGISTER" -u "$ROOT_ABS/$rel" 2>/dev/null || true; }
+done
 
 echo "==> 安装到 /Applications"
 rm -rf "/Applications/OpenCodeGoWidget.app"
@@ -334,3 +377,18 @@ pluginkit -e use -p com.apple.widgetkit-extension -i "$WIDGET_BUNDLE_ID" 2>/dev/
 echo "完成：open /Applications/${APP_BUNDLE_NAME}.app 然后在通知中心添加小组件"
 echo "可安装文件位于 dist/:"
 ls -lh "$DIST_DIR" 2>&1 | tail -20
+
+# 2026-10-16：**修「App 更新了、磁贴不刷新」**（必须放在安装之后）。
+#
+# 症状：重装 App 后桌面磁贴停住不动，重启电脑才恢复。chronod 日志报
+#   WidgetArchiver.ValidationError.bundleStubNotSupported
+#   "Bundle version did not match; LaunchServices DB may need to be rebuilt"
+#
+# 根因：打包把 app 复制到 build/staging、build/staging/dmg、dist/ 各一份，系统为这些临时
+# 路径也建了 LaunchServices 登记；构建结束目录被清掉 → 登记成了**死记录**（指向不存在的旧
+# 副本）。chronod 渲染磁贴时解析到死记录，判定版本不匹配就拒绝刷新，并把重试推到一小时之后。
+# `lsregister -u` 对"路径已不存在"的记录无效，唯一办法是让 chronod 丢掉旧解析缓存。
+"$LSREGISTER" -f "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
+killall chronod 2>/dev/null || true
+sleep 2
+echo "   已刷新小组件注册（chronod 会由系统自动拉起）"
