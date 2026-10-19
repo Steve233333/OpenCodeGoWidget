@@ -203,6 +203,7 @@ source "$SCRIPT_DIR/setup/steps/50-backup.sh"   # 4. 备份旧配置
 source "$SCRIPT_DIR/setup/steps/60-models.sh"   # 5. 生成 models.json
 source "$SCRIPT_DIR/setup/steps/70-defaults.sh"   # 6. 选择默认模型 / 记忆模型 / base_url / bearer
 source "$SCRIPT_DIR/setup/steps/80-agents-mcp.sh"   # 7. AGENTS.md 全局规则 + MCP 搜索
+source "$SCRIPT_DIR/setup/steps/85-preflight-heal.sh"   # 7b. 升级前自愈（老版本残留的运行态）
 source "$SCRIPT_DIR/setup/steps/90-proxy.sh"   # 8. 本地代理（Go/Zen 路由 + 协议桥接）
 source "$SCRIPT_DIR/setup/steps/100-patched-app.sh"   # 9. ChatGPT-Patched.app 副本（patch）
 source "$SCRIPT_DIR/setup/steps/110-archive-off.sh"   # 9b. 已停用：超大对话自动归档

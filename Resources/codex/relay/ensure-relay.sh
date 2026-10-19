@@ -67,6 +67,30 @@ probe() {
   [ -n "$code" ] && [ "$code" != "000" ]
 }
 
+# 2026-10-19：**端口通 ≠ 跑的是我们的代码**。
+#
+# 老机器升级时的坑：改名前的旧 launchd 任务（com.agent-vision-toolkit.proxy）可能还活着、
+# 还占着 19100；而 probe() 只看"端口有没有响应"，于是这里判定"代理已在运行"、直接 exit 0 ——
+# 安装器刚同步的新代码根本没被加载，用户看到的就是「配置了没效果」。
+#
+# 这个函数回答："监听 19100 的进程是不是从 ${RELAY_DIR} 跑起来的？"
+#   0 = 是（或判断不了，别误伤）；1 = 明显是别的进程占着。
+port_owned_by_relay() {
+  local pids
+  pids="$(/usr/sbin/lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u)"
+  [ -z "$pids" ] && return 1                      # 没人监听
+  local pid
+  for pid in $pids; do
+    local cmd
+    cmd="$(/bin/ps -p "$pid" -o command= 2>/dev/null)"
+    case "$cmd" in
+      *"$RELAY_DIR"*) return 0 ;;                 # 正是我们目录里的 relay.py
+      *relay.py*|*agent-relay*) return 0 ;;       # 路径变了（软链/迁移）但仍是我们的
+    esac
+  done
+  return 1                                        # 端口被别的进程占着
+}
+
 # macOS 没有 timeout 命令，自己看着闹钟杀（/usr/bin/python3 在没装 CLT 时会弹窗卡住）。
 # 注意：不要用"另开一个后台子进程 sleep 再杀"的写法 —— 那个 sleep 会活下来占着 stdout，
 # 把调用方的管道挂住十几秒（实测）。
@@ -205,6 +229,12 @@ fi
 PREV_REPAIR="$(state_get last_repair_at)"
 
 # ---- 已经在跑：只更新状态，什么都不动（--force-restart 除外：配置刚同步完新代码，必须换新的）----
+# 2026-10-19：先确认端口后面真的是我们的进程；被旧任务/别的程序占着时要抢回来，
+# 否则"配置"会静默地什么都不做（老机器升级的经典症状）。
+if probe && ! port_owned_by_relay; then
+  logline "端口 ${PORT} 有响应但**不是 agent-relay 的进程**（疑似改名前的旧任务或别的程序占用）→ 强制接管"
+  FORCE_RESTART=1
+fi
 if probe && [ "$FORCE_RESTART" != 1 ]; then
   interp="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$PLIST" 2>/dev/null || true)"
   ver=""

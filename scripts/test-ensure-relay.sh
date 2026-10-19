@@ -119,6 +119,41 @@ else
   bad "⑥ --force-restart 没换进程（rc=${rc}，pid $pid_before → ${pid_after:-空}）"
 fi
 
+# ⑥ 端口被"不是我们"的进程占着 → 不许判定"已在运行"（2026-10-19 老机器升级事故）
+#    真实场景：改名前的旧任务 com.agent-vision-toolkit.proxy 还活着并绑着 19100，
+#    旧代码只看"端口有响应"就 exit 0，安装器同步的新代码根本没生效。
+echo "==> ⑥ 端口被别的进程占用时必须接管"
+HEAL_PORT=19577
+python3 - "$HEAL_PORT" <<'PY2' &
+import socket, sys, time
+port = int(sys.argv[1])
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", port)); srv.listen(8)
+end = time.time() + 25
+while time.time() < end:
+    try:
+        srv.settimeout(1); c, _ = srv.accept()
+        c.recv(65536)
+        c.sendall(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
+        c.close()
+    except Exception:
+        pass
+srv.close()
+PY2
+SQUATTER=$!
+sleep 1
+# 用 --port 19531 指向被占端口；进程不是从 vision-dir 起的 → 应判定"不是我们的"并强制接管
+out="$(ENSURE_PROXY_CANDIDATES="$TMP/bin/good" bash "$ensure" \
+        --port "$HEAL_PORT" --vision-dir "$TMP/v2" --env-file "$TMP/env2" --dry-run --trigger test 2>&1)"
+if echo "$out" | grep -q "不是 agent-relay 的进程"; then
+  ok "⑥ 端口被别的进程占用时判定为「不是我们的」并强制接管"
+else
+  bad "⑥ 端口被占用时仍被误判为健康；输出：$(echo "$out" | tail -3)"
+fi
+kill "$SQUATTER" 2>/dev/null || true
+wait "$SQUATTER" 2>/dev/null || true
+
 if [ "$fail" = 0 ]; then
   echo "全部通过 ✅"
   exit 0
