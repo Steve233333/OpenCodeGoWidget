@@ -15,11 +15,17 @@ enum KeychainStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+        // upsert：SecItemAdd 在已有条目时返回 errSecDuplicateItem，旧实现静默失败，
+        // Keychain 里仍然是上一把 Key。先删再加，保证“填新值保存=替换”。
         SecItemDelete(query as CFDictionary)
         var add = query
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(add as CFDictionary, nil)
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status != errSecSuccess {
+            // 钥匙串被锁/权限变化时保留 App Group 副本，下次 resolvedKey 仍能读到。
+            sharedDefaults?.synchronize()
+        }
     }
 
     /// 删除已存 Key（Keychain + App Group 共享存储），幂等
@@ -56,6 +62,7 @@ enum KeychainStore {
     static func loadFromEnvFile() -> String? {
         let candidates = [
             NSString(string: "~/.config/agent-relay/env").expandingTildeInPath,
+            NSString(string: "~/.local/share/opencode/auth.json").expandingTildeInPath,
             NSString(string: "~/.config/opencode/auth.json").expandingTildeInPath
         ]
         for path in candidates {
@@ -68,25 +75,45 @@ enum KeychainStore {
                 }
             }
             // opencode auth.json is JSON with keys
-            if path.contains("auth.json"), let data = content.data(using: .utf8) {
-                if let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    // try common shapes
-                    for k in ["zen_api_key", "apiKey", "api_key", "ZEN_API_KEY"] {
-                        if let v = j[k] as? String, !v.isEmpty { return v }
-                    }
-                }
+            if path.contains("auth.json"), let data = content.data(using: .utf8),
+               let key = parseAuthJSON(data) {
+                return key
             }
         }
         return nil
     }
 
+    /// 新版 OpenCode 的形状是 {"opencode-go":{"type":"api","key":"..."}}。
+    /// 保留旧的扁平字段兜底，方便读取早期副本或手工文件。
+    static func parseAuthJSON(_ data: Data) -> String? {
+        guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        for provider in ["opencode-go", "zen"] {
+            if let p = j[provider] as? [String: Any],
+               let v = p["key"] as? String, !v.isEmpty {
+                return v
+            }
+        }
+        for k in ["zen_api_key", "apiKey", "api_key", "ZEN_API_KEY"] {
+            if let v = j[k] as? String, !v.isEmpty { return v }
+        }
+        return nil
+    }
+
     static func resolvedKey() -> String? {
-        if let k = sharedDefaults?.string(forKey: sharedKeyKey), !k.isEmpty { return k }
         // 2026-09-20：env 文件排在钥匙串**前面**。每次本地重新打包（ad-hoc 重签）都会让钥匙串
         // 里那条 apikey 的 ACL 失效 → macOS 弹授权框；用户没注意时读取会一直阻塞，
         // 表现就是"App 卡死/点了刷新没反应/窗口都画不出来"（实测两个实例都卡在 SecItemCopyMatching）。
         // 一键配置一定会写 env 文件，所以正常路径根本不需要碰钥匙串。
-        if let k = loadFromEnvFile(), !k.isEmpty { return k }
+        let group = sharedDefaults?.string(forKey: sharedKeyKey)
+        let env = loadFromEnvFile()
+        // 2026-10-20：env 是安装器刚写入的“当前 Key”，App Group 只是缓存。
+        // 以前 App Group 永远优先，env 换了新 Key 仍会被旧缓存盖住；现在 env 优先并回填缓存。
+        // 缓存里的临时值只在 env 缺失时使用（例如刚卸载安装器/正在首次登录）。
+        if let env, !env.isEmpty {
+            if group != env { sharedDefaults?.set(env, forKey: sharedKeyKey) }
+            return env
+        }
+        if let group, !group.isEmpty { return group }
         return load()
     }
 }

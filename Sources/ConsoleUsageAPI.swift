@@ -150,27 +150,35 @@ extension CostCrawler {
             logger.error("CostCrawler: 新控制台 \(path) 的 URL 拼不出来")
             return nil
         }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = timeout
-        req.setValue(cookie, forHTTPHeaderField: "Cookie")
-        req.setValue(ws, forHTTPHeaderField: "x-org-id")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
-        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-                     forHTTPHeaderField: "User-Agent")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse else {
-            logger.error("CostCrawler: 新控制台 \(path) 请求发不出去")
-            return nil
-        }
-        let text = String(data: data, encoding: .utf8) ?? ""
-        UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
-            .set(String(text.prefix(8000)), forKey: "lastConsoleAPISample")
-        guard (200...299).contains(http.statusCode) else {
+        // 429 / 503 是控制台限流或临时故障：指数退避重试一次，别把一次抖动当成“接口没了”。
+        for attempt in 0..<2 {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = timeout
+            req.setValue(cookie, forHTTPHeaderField: "Cookie")
+            req.setValue(ws, forHTTPHeaderField: "x-org-id")
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            req.setValue("https://opencode.ai/console/\(ws)/usage", forHTTPHeaderField: "Referer")
+            req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+                         forHTTPHeaderField: "User-Agent")
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                  let http = resp as? HTTPURLResponse else {
+                logger.error("CostCrawler: 新控制台 \(path) 请求发不出去")
+                return nil
+            }
+            let text = String(data: data, encoding: .utf8) ?? ""
+            UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
+                .set(String(text.prefix(8000)), forKey: "lastConsoleAPISample")
+            if (200...299).contains(http.statusCode) { return data }
+            if (http.statusCode == 429 || http.statusCode == 503) && attempt == 0 {
+                let wait = http.statusCode == 429 ? 1.5 : 0.8
+                logger.warning("CostCrawler: 新控制台 \(path) HTTP \(http.statusCode) → \(wait)s 后重试一次")
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                continue
+            }
             logger.error("CostCrawler: 新控制台 \(path) HTTP \(http.statusCode)：\(text.prefix(160))")
             return nil
         }
-        return data
+        return nil
     }
 
     /// 解析 usage/models：{items:[{model, totalCostMicroCents, ...}]} → 模型 → 美元

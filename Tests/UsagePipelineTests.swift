@@ -465,6 +465,24 @@ func testTodayCanBeRecomputed() {
           "今天这格缺失时应补上")
 }
 
+// MARK: - ⑲ 自然月窗口必须和北京日界一致（2026-09-22 曾整体偏一天）
+func testCalendarMonthWindowUsesBeijingDays() {
+    print("⑲ 自然月窗口使用北京日界")
+    let first = DailyCost(date: "2026-10-01", entries: ["a": 1])
+    let last = DailyCost(date: "2026-10-31", entries: ["a": 2])
+    let prev = DailyCost(date: "2026-09-30", entries: ["a": 4])
+    // 注意：不能把 11/01 放进来 —— 窗口锚点是“最大日期”所在月，那样会切到 11 月。
+    // 这里验证的是“10 月这组数据 + 9/30 邻近数据”时日界只认 10 月。
+    let dates = ChartWindow.dates(dailyCosts: [prev, first, last],
+                                  monthlyReset: nil, alignment: .calendar)
+    check(dates.count == 31, "10 月窗口应是 31 天（实际 \(dates.count)）")
+    check(ChartFormatters.day.string(from: dates.first!) == "2026-10-01", "窗口首日 = 10/01")
+    check(ChartFormatters.day.string(from: dates.last!) == "2026-10-31", "窗口末日 = 10/31")
+    let total = ChartWindow.total(dailyCosts: [prev, first, last],
+                                  monthlyReset: nil, alignment: .calendar)
+    check(abs(total - 3) < 1e-6, "总额只算 10 月 ($3)，不含 9/30（实际 \(total)）")
+}
+
 @main
 struct UsagePipelineTestRunner {
     static func main() {
@@ -486,6 +504,7 @@ struct UsagePipelineTestRunner {
         testTotalMismatchGuard()
         testLogsEndToEnd()
         testTodayCanBeRecomputed()
+        testCalendarMonthWindowUsesBeijingDays()
 
         if failures.isEmpty {
             print("\n全部通过 ✅")

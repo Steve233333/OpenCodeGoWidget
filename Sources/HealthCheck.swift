@@ -51,20 +51,29 @@ enum HealthCheck {
         // 2026-09-23：macOS 27 升级那次就是"加载了但没起来"，以前只报"没响应"，看不出是哪一步。
         let proxyAlive = await proxyResponds()
         let proxyJob = launchctlJobState("com.agent-relay")
+        let legacyLoaded = launchctlHas("com.agent-vision-toolkit.proxy")
+        let proxyOwned = proxyOwnedByRelay()
         let runtime = proxyRuntimeInfo()
         let interpText = runtime["interpreter"].flatMap { $0.isEmpty ? nil : $0 } ?? ""
         let verText = runtime["version"] ?? ""
         let repairText = runtime["last_repair_at"] ?? ""
         let suffix = (interpText.isEmpty ? "" : "；解释器 \(interpText)" + (verText.isEmpty || verText == "?" ? "" : "（Python \(verText)）"))
             + (repairText.isEmpty ? "" : "；上次自动修复 \(repairText)")
-        if proxyJob.loaded && proxyAlive {
-            items.append(HealthItem(level: .ok, title: "本地代理", detail: "已加载且 127.0.0.1:19100 有响应" + suffix))
+        if legacyLoaded {
+            items.append(HealthItem(level: .fail, title: "本地代理",
+                detail: "废弃服务 com.agent-vision-toolkit.proxy 仍在运行；点「修复本地代理」会停旧服务并只启动 agent-relay"))
+        } else if proxyJob.loaded && proxyAlive && proxyOwned {
+            items.append(HealthItem(level: .ok, title: "本地代理", detail: "agent-relay 正在监听 127.0.0.1:19100" + suffix))
+        } else if proxyJob.loaded && proxyAlive && !proxyOwned {
+            let listener = listenerCommandLines().joined(separator: " | ")
+            items.append(HealthItem(level: .fail, title: "本地代理",
+                detail: "端口有响应但监听者不是 agent-relay；当前：\(listener.isEmpty ? "未知进程" : listener)。点「修复本地代理」"))
         } else if proxyJob.loaded && !proxyAlive {
             let exit = proxyJob.lastExit.map { "launchctl 最后退出码 \($0)" } ?? "launchctl 没给退出码"
             items.append(HealthItem(level: .fail, title: "本地代理",
                 detail: "任务已加载但进程没起来（\(exit)）→ 点「修复本地代理」；再不行重跑「配置」。日志：~/.local/share/agent-relay/ensure-relay.log" + suffix))
-        } else if !proxyJob.loaded && proxyAlive {
-            items.append(HealthItem(level: .warn, title: "本地代理", detail: "端口有响应，但 launchd 里没有这个任务（重启后会消失）→ 点「修复本地代理」" + suffix))
+        } else if !proxyJob.loaded && proxyAlive && proxyOwned {
+            items.append(HealthItem(level: .warn, title: "本地代理", detail: "agent-relay 在监听，但 launchd 里没有这个任务（重启后会消失）→ 点「修复本地代理」" + suffix))
         } else {
             items.append(HealthItem(level: .fail, title: "本地代理",
                 detail: "127.0.0.1:19100 没响应，launchd 里也没这个任务 → App 的看护每 5 分钟会自动重挂；也可以点「修复本地代理」或重跑「配置」" + suffix))
@@ -172,7 +181,7 @@ enum HealthCheck {
 
         // ---- 10. 代理最近一次报错：502 的真正原因就写在这儿 ----
         let logPath = home.appendingPathComponent(".local/share/agent-relay/relay.err.log")
-        if let text = try? String(contentsOf: logPath, encoding: .utf8) {
+        if let text = tailLines(of: logPath, limit: 600) {
             let recent = text.split(separator: "\n", omittingEmptySubsequences: true).suffix(600).filter {
                 $0.contains("handler error") || $0.contains("Upstream network error")
                     || $0.contains("fallback FAILED") || $0.contains("not set in env")
@@ -300,14 +309,82 @@ enum HealthCheck {
         return map
     }
 
+    /// 代理错误日志会增长到几十 MB；不要每次自检把整文件读进内存（旧版会卡在 UI）。
+    static func tailLines(of url: URL, limit: Int) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let window: UInt64 = 512 * 1024
+        let start = size > window ? size - window : 0
+        try? handle.seek(toOffset: start)
+        let data = (try? handle.readToEnd()) ?? Data()
+        let text = String(data: data, encoding: .utf8) ?? ""
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.count <= limit { return text }
+        return lines.suffix(limit).joined(separator: "\n")
+    }
+
     static func proxyResponds() async -> Bool {
+        // 指向任意一个本机服务时也必须能在 4 秒内收尾；URLSession 的 timeout 之外再加硬上限，
+        // 防止系统网络栈卡死在回调里（自检/看护都会因此假死）。
         var req = URLRequest(url: URL(string: "http://127.0.0.1:19100/v1/models")!)
         req.timeoutInterval = 4
-        return await withCheckedContinuation { cont in
-            URLSession.shared.dataTask(with: req) { _, resp, _ in
-                cont.resume(returning: resp is HTTPURLResponse)
-            }.resume()
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await withCheckedContinuation { cont in
+                    URLSession.shared.dataTask(with: req) { _, resp, _ in
+                        cont.resume(returning: resp is HTTPURLResponse)
+                    }.resume()
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
         }
+    }
+
+    /// 只访问本机端口，不触发上游请求。端口有响应不代表监听者正确。
+    static func listenerCommandLines() -> [String] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        p.arguments = ["-nP", "-iTCP:19100", "-sTCP:LISTEN", "-t"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        do { try p.run() } catch { return [] }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let pids = String(data: data, encoding: .utf8)?
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init) ?? []
+        return pids.compactMap { pid in
+            let ps = Process()
+            ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+            ps.arguments = ["-p", pid, "-o", "command="]
+            let out = Pipe()
+            ps.standardOutput = out
+            ps.standardError = Pipe()
+            do { try ps.run() } catch { return nil }
+            let d = out.fileHandleForReading.readDataToEndOfFile()
+            ps.waitUntilExit()
+            let cmd = String(data: d, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return cmd.isEmpty ? nil : cmd
+        }
+    }
+
+    /// 端口背后的进程必须正是 agent-relay 的运行入口。
+    static func proxyOwnedByRelay() -> Bool {
+        let expected = home.appendingPathComponent(".local/share/agent-relay/relay.py").path
+        return listenerCommandLines().contains { $0.contains(expected) }
+    }
+
+    static func proxyHealthy() async -> Bool {
+        guard proxyOwnedByRelay() else { return false }
+        return await proxyResponds()
     }
 
     /// Go Key 有效性：发一个最小的 chat 请求（max_tokens=1，几乎不耗额度）

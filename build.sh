@@ -86,6 +86,22 @@ if [ "${SKIP_KEY_TEST:-0}" != "1" ]; then
   fi
 fi
 
+echo "==> 静默更新版本判定自检（离线；正确安装包的版本必须被接受）"
+if [ "${SKIP_VERSION_TEST:-0}" != "1" ] && [ -x "scripts/test-versioning.sh" ]; then
+  if ! "scripts/test-versioning.sh"; then
+    echo "!! 静默更新版本判定没过（或正确 Release 又被误拒）"
+    exit 1
+  fi
+fi
+
+echo "==> OpenCode auth.json 解析自检（离线；新版嵌套 opencode-go.key）"
+if [ "${SKIP_KEYCHAIN_PARSE_TEST:-0}" != "1" ] && [ -x "scripts/test-keychain-parse.sh" ]; then
+  if ! "scripts/test-keychain-parse.sh"; then
+    echo "!! auth.json Key 解析没过"
+    exit 1
+  fi
+fi
+
 # 2026-10-03：patch.sh 是「会不会把用户 Codex 副本搞坏」的唯一开关（clang 编译失败仍继续 →
 # 主可执行文件缺失；框架摘要不同步 → 启动即 FATAL）。它的修复曾经只落在本机、又被包内旧版按内容
 # 覆盖回来（安装器 sync_newer_file 是"内容不同就用包里的"），所以把四条护栏 + 行为用例钉进门禁。
@@ -122,6 +138,22 @@ echo "==> 代理生命周期自检（离线；解释器挑选 / 修复 / 幂等�
 if [ "${SKIP_ENSURE_PROXY_TEST:-0}" != "1" ] && [ -x "scripts/test-ensure-relay.sh" ]; then
   if ! "scripts/test-ensure-relay.sh"; then
     echo "!! 代理生命周期自检没过，先修好再打包（或 SKIP_ENSURE_PROXY_TEST=1 ./build.sh 跳过）"
+    exit 1
+  fi
+fi
+
+echo "==> 代理迁移链路自检（先写新 Key / 不覆盖新 env / 旧服务退场 / 幂等）"
+if [ "${SKIP_RELAY_MIGRATION_TEST:-0}" != "1" ] && [ -x "scripts/test-relay-migration.sh" ]; then
+  if ! "scripts/test-relay-migration.sh"; then
+    echo "!! 代理迁移链路自检没过，先修好再打包"
+    exit 1
+  fi
+fi
+
+echo "==> 安装器安全自检（AGENTS.md 不被覆盖 / 失败退出码 / 旧服务精确收口）"
+if [ "${SKIP_INSTALLER_SAFETY_TEST:-0}" != "1" ] && [ -x "scripts/test-installer-safety.sh" ]; then
+  if ! "scripts/test-installer-safety.sh"; then
+    echo "!! 安装器安全自检没过，先修好再打包"
     exit 1
   fi
 fi
@@ -301,12 +333,17 @@ rm -rf "/Applications/OpenCodeGoWidget.app"
 rm -rf "/Applications/${APP_BUNDLE_NAME}.app"
 ditto "build/${APP_BUNDLE_NAME}.app" "/Applications/${APP_BUNDLE_NAME}.app"
 if [ "$SIGN_IDENTITY" = "-" ]; then
-  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
-  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex" 2>/dev/null || true
+  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app"
+  codesign --force "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 else
-  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app" 2>/dev/null || true
-  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex" 2>/dev/null || true
+  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/app.entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app"
+  codesign --force --options runtime "${SIGN_ARGS[@]}" --entitlements Resources/entitlements.plist "/Applications/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex"
 fi
+
+echo "==> 校验安装包完整性与签名"
+test -x "/Applications/${APP_BUNDLE_NAME}.app/Contents/MacOS/${APP_NAME}"
+test -x "/Applications/${APP_BUNDLE_NAME}.app/Contents/PlugIns/${WIDGET_NAME}.appex/Contents/MacOS/${WIDGET_NAME}"
+codesign --verify --deep --strict "/Applications/${APP_BUNDLE_NAME}.app"
 
 echo "==> 注册"
 # 生成可安装文件（DMG + ZIP）到 dist/，再清理 build 中间产物

@@ -114,8 +114,11 @@ final class NetworkManager: @unchecked Sendable {
             return iso(m["resetsAt"])
         }
         guard let h5 = percent("fiveHour"), let wk = percent("week"), let mo = percent("month") else { return nil }
-        // 月度的 resetsAt 接口不给，用订阅周期结束时间（官网就是显示成续费倒计时）
-        let monthReset = iso(access["endsAt"]) ?? Date().addingTimeInterval(30 * 86400)
+        // 月度的 resetsAt 接口不给，用订阅周期结束时间（官网就是显示成续费倒计时）。
+        // 2026-10-20：兜底也要按北京日历加一个月，不能硬加 30 天（2 月/31 天月会漂）。
+        let monthReset = iso(access["endsAt"])
+            ?? BillingCycle.calendar.date(byAdding: .month, value: 1, to: Date())
+            ?? Date().addingTimeInterval(30 * 86400)
         return UsageStats(
             rolling: UsageItem(status: "ok", percent: h5,
                                resetsAt: reset("fiveHour") ?? Date().addingTimeInterval(5 * 3600)),

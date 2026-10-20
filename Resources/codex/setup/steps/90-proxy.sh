@@ -8,8 +8,8 @@
 # 8. 本地代理（有 Go Key 时安装：Go/Zen 路由 + 协议桥接）
 # ---------------------------------------------------------------------------
 PROXY_OK=0
+RELAY_DIR="$HOME/.local/share/agent-relay"
 if [[ "$USE_PROXY" -eq 1 ]]; then
-  RELAY_DIR="$HOME/.local/share/agent-relay"
   mkdir -p "$RELAY_DIR" "$HOME/.config/agent-relay"
   # 2026-09-05: 逐文件 mtime 比较同步（见 sync_newer_file），旧包不再整体覆盖本机
   if [ -d "$RES_DIR/relay" ]; then
@@ -32,6 +32,32 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
   mv "$ENV_FILE.new" "$ENV_FILE"
   rm -f "$tmp_env_x"
   chmod 600 "$ENV_FILE"
+
+  # 2026-10-20：**先写本次 Key，再迁移旧服务**。
+  # 以前迁移在 85-preflight 里先跑，自检读到的是新 env 的上一把 Key；用户刚输入的新 Key
+  # 要到这一步才落盘，于是真机自检 401 → 回滚旧服务 → Codex 继续用旧 Key。
+  _legacy_dir="$HOME/.local/share/agent-vision-toolkit"
+  _migration_marker="$RELAY_DIR/.legacy-vision-toolkit-migrated"
+  if [[ -d "$_legacy_dir" && ! -f "$_migration_marker" ]]; then
+    _migrate="$RES_DIR/scripts/migrate-to-agent-relay.sh"
+    if [[ -x "$_migrate" ]]; then
+      log "阶段：迁移旧代理身份（新 Key 已写入，迁移自检会使用本次配置）…"
+      if "$_migrate" >>"$LOG" 2>&1; then
+        log "旧代理已迁移；旧 launchd 服务已退场"
+      else
+        log "WARN: 迁移未完成（详见日志）；随后仍会强制启动 agent-relay 并验证监听者"
+      fi
+    else
+      log "WARN: 检测到旧安装，但找不到迁移脚本 ${_migrate}"
+    fi
+  else
+    log "旧代理身份无需迁移（已迁移或没有旧安装）"
+  fi
+  # 旧目录保留作回滚快照，但旧 launchd plist 不该继续挂载；
+  # ensure-relay 会再做一次精确收口，这里只提示。
+  if [[ -f "$HOME/Library/LaunchAgents/com.agent-vision-toolkit.proxy.plist" ]]; then
+    log "提示：旧 launchd plist 仍存在，随后由 ensure-relay 备份并移除"
+  fi
 
   # 2026-09-19：python.org 的 Python 没跑过 "Install Certificates.command" 时没有 CA 根证书，
   # 代理所有 HTTPS 会 SSL: CERTIFICATE_VERIFY_FAILED（Codex 侧只看到 502，很难查）。
@@ -56,6 +82,22 @@ if [[ "$USE_PROXY" -eq 1 ]]; then
          --trigger installer --force-restart >>"$LOG" 2>&1; then
       PROXY_OK=1
       log "本地代理已启动并验证（127.0.0.1:19100）"
+      if [[ "$HAS_GO" -eq 1 ]]; then
+        _probe_out="$(mktemp)"
+        _probe_code="$(curl -s -o "$_probe_out" -w '%{http_code}' -m 45 \
+          -X POST "http://127.0.0.1:19100/v1/responses" \
+          -H 'Authorization: Bearer relay-local-selfcheck' \
+          -H 'Content-Type: application/json' \
+          -d '{"model":"deepseek-v4.1-flash-go","stream":false,"max_output_tokens":8,"input":"只回两个字：正常"}' 2>/dev/null || true)"
+        # ensure-relay 已在同一次启动中做过上游 Key 探测（401/403 会直接非 0）；
+        # 这里再测一次只记录证据，不把上游偶发的 5xx 误判成 Key 无效。
+        _probe_note="上游非 2xx，细节见 ensure-relay 自检"
+        case "$_probe_code" in
+          2??) _probe_note="实测通过" ;;
+        esac
+        log "代理 Key 自检：HTTP ${_probe_code:-无响应}（${_probe_note}）"
+        rm -f "$_probe_out"
+      fi
     else
       log "WARN: 代理这次没能起来（详见 $RELAY_DIR/ensure-relay.log）——App 的看护每 5 分钟会再试一次"
     fi
@@ -106,6 +148,9 @@ EOF2
     # 立即同步一次（quota表 -> models.json，需联网约 10~20 秒，详细输出只写文件日志）
     log "阶段：同步 Go 模型配额表（需联网，请耐心等待）…"
     "$PY_BIN" "$RELAY_DIR/model_discovery.py" --sync --force >>"$LOG" 2>&1 || log "WARN: 首次 Go 模型同步失败，详见 $RELAY_DIR/discovery.err.log"
+    # 2026-10-20：只重算派生表（从刚生成的 models.json 生成代理档位表 + 桌面滑杆），
+    # 不联网、不改模型列表。以前这一步要等 6 小时定时任务，切模型后档位/上下文会暂时对不上。
+    "$PY_BIN" "$RELAY_DIR/model_discovery.py" --sync-derived >>"$LOG" 2>&1 || log "WARN: 档位表重算失败，详见 $RELAY_DIR/discovery.err.log"
     log "配额表同步步骤结束"
   fi
 else

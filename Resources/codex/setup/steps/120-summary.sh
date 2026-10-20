@@ -16,9 +16,9 @@ else
 fi
 
 if [[ "$MODE" == "update" ]]; then
-  SUMMARY=$'更新完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n双开副本：'"$PATCH_TEXT"$'\n\n说明：已用现有 Key 复用更新配置/模板/本地代理/补丁脚本，无需重填 Key。\n看图：不再需要视觉 Key，图片由模型原生处理（缺视觉的模型发图会报错，换有视觉的模型即可）。\n下一步：如副本在运行请重启生效；日志：'"$LOG"
+  SUMMARY=$'更新步骤结束\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n双开副本：'"$PATCH_TEXT"$'\n\n说明：已完成配置/模板/本地代理/补丁脚本同步；最终是否全部通过见随后「配置后自检」。\n看图：不再需要视觉 Key，图片由模型原生处理（缺视觉的模型发图会报错，换有视觉的模型即可）。\n下一步：如副本在运行请重启生效；日志：'"$LOG"
 else
-  SUMMARY=$'安装完成 ✅\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n双开副本：'"$PATCH_TEXT"$'\n\n看图：不再需要视觉 Key，图片由模型原生处理（缺视觉的模型发图会报错，换有视觉的模型即可）。\n\n下一步：\n1. 如果副本已启动，先完全退出再重新打开 Codex（生效）。\n2. 可选：gh auth login -h github.com 登录 GitHub；git config --global user.name/email 设置身份。\n3. 日志：'"$LOG"
+  SUMMARY=$'安装步骤结束\n\n可用模型：'"$MODEL_COUNT"$' 个\n默认模型：'"$DEFAULT_MODEL"$'\n双开副本：'"$PATCH_TEXT"$'\n\n看图：不再需要视觉 Key，图片由模型原生处理（缺视觉的模型发图会报错，换有视觉的模型即可；最终是否全部通过见随后「配置后自检」）。\n\n下一步：\n1. 如果副本已启动，先完全退出再重新打开 Codex（生效）。\n2. 可选：gh auth login -h github.com 登录 GitHub；git config --global user.name/email 设置身份。\n3. 日志：'"$LOG"
 fi
 
 log "$SUMMARY"

@@ -11,7 +11,13 @@ TS="$(date '+%Y%m%d-%H%M%S')"
 mkdir -p "$CODEX_HOME" "$HOME/.codex"
 for f in config.toml models.json AGENTS.md; do
   if [[ -f "$CODEX_HOME/$f" ]]; then
-    cp -p "$CODEX_HOME/$f" "$CODEX_HOME/$f.bak.$TS" 2>/dev/null || true
+    _dst="$CODEX_HOME/$f.bak.$TS"
+    # 不覆盖已有备份（时间戳同一秒/异常时钟）；失败要留痕。
+    if [[ ! -e "$_dst" ]] && cp -p "$CODEX_HOME/$f" "$_dst" 2>/dev/null; then
+      log "已备份：$f → $_dst"
+    else
+      log "WARN: 备份失败或目标已存在：$_dst"
+    fi
   fi
 done
 if [[ -f "$HOME/.codex/AGENTS.md" ]]; then

@@ -122,13 +122,9 @@
   "max"
  ],
  "mimo-v2.6-flash": [
-  "low",
-  "medium",
   "high"
  ],
  "mimo-v2.6-pro": [
-  "low",
-  "medium",
   "high"
  ],
  "mimo-v2.5": [
@@ -137,8 +133,6 @@
   "max"
  ],
  "mimo-v2.5-pro": [
-  "low",
-  "medium",
   "high"
  ],
  "minimax-m3": [
@@ -223,13 +217,6 @@
   "xhigh",
   "max"
  ],
- "space-bunny-free": [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max"
- ],
  "gpt-6-luna": [
   "none",
   "low",
@@ -270,6 +257,16 @@
  "gemini-4-argon-contributor": [
   "low",
   "medium",
+  "high"
+ ],
+ "beam-free": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
+ "minimax-m3.1-flash-free": [
   "high"
  ]
 }

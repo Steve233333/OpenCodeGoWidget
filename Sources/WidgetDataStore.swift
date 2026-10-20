@@ -318,8 +318,8 @@ enum WidgetSnapshotRefresher {
                let monthInterval = BillingCycle.calendar.dateInterval(of: .month, for: Date()) {
                 let cal = BillingCycle.calendar
                 let startStr = ChartFormatters.day.string(from: monthInterval.start)
-                let days = Int(monthInterval.duration/86400)
-                let endDate = cal.date(byAdding: .day, value: max(0, days - 1), to: monthInterval.start) ?? Date()
+                let dayCount = cal.range(of: .day, in: .month, for: Date())?.count ?? 30
+                let endDate = cal.date(byAdding: .day, value: max(0, dayCount - 1), to: monthInterval.start) ?? Date()
                 let endStr = ChartFormatters.day.string(from: endDate)
                 let filtered = cached.dailyCosts.filter { $0.date >= startStr && $0.date <= endStr }
                 if !filtered.isEmpty {

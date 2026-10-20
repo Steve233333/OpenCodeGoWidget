@@ -7,9 +7,20 @@
 # ---------------------------------------------------------------------------
 # 7. AGENTS.md 全局规则 + MCP 搜索（opencode hosted, 仅 27 个无搜模型用）
 # ---------------------------------------------------------------------------
-cp -p "$RES_DIR/templates/AGENTS.md" "$CODEX_HOME/AGENTS.md"
-cp -p "$RES_DIR/templates/AGENTS.md" "$HOME/.codex/AGENTS.md"
-log "AGENTS.md 已安装"
+# 2026-10-20：用户可能已经在 AGENTS.md 写了自己的规则；安装器不能每次点配置都覆盖。
+# 只补缺失，或把内容完全相同的模板视为无需变更；有差异时保留用户文件并备份模板副本。
+install_agents_template() {
+  local dst="$1" src="$RES_DIR/templates/AGENTS.md"
+  if [ ! -f "$dst" ]; then
+    cp -p "$src" "$dst" 2>/dev/null && log "AGENTS.md 已安装：${dst}" || log "WARN: AGENTS.md 安装失败：${dst}"
+  elif cmp -s "$src" "$dst"; then
+    log "AGENTS.md 已是模板内容，无需变更：${dst}"
+  else
+    log "AGENTS.md 已有自定义内容，保留不覆盖：${dst}（模板见 ${src}）"
+  fi
+}
+install_agents_template "$CODEX_HOME/AGENTS.md"
+install_agents_template "$HOME/.codex/AGENTS.md"
 # websearch MCP (Exa/Parallel hosted, no API key, 25s)
 MCP_DIR="$HOME/.config/opencode/mcp"
 MCP_SRC="$RES_DIR/mcp/websearch-server.py"

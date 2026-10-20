@@ -166,26 +166,33 @@ final class CodexInstaller: ObservableObject {
            let arr = j["models"] as? [[String: Any]] {
             s.hasGo = arr.contains { ($0["slug"] as? String ?? "").hasSuffix("-go") || ($0["slug"] as? String ?? "").hasSuffix("-zen") }
         }
-        // 副本版：只读 marker（成功才写，失败天然保持旧版）；无 marker 则读副本包 Info.plist
+        // 副本版：优先读副本包 Info.plist；marker 只在文件缺失时兜底。
         let marker = (patchBase as NSString).appendingPathComponent("patch-state.json")
+        var markerVersion = ""
         if let txt = try? String(contentsOfFile: marker, encoding: .utf8) {
             if let regex = try? NSRegularExpression(pattern: #""sourceVersion"\s*:\s*"([^"]+)""#),
                let match = regex.firstMatch(in: txt, range: NSRange(txt.startIndex..., in: txt)),
                let range = Range(match.range(at: 1), in: txt) {
                 let v = String(txt[range])
-                if !v.isEmpty { s.patchedVersion = v }
+                if !v.isEmpty { markerVersion = v }
             }
         }
-        if s.patchedVersion == "-" || s.patchedVersion.isEmpty {
-            let patchedPlistCandidates = [
-                (home as NSString).appendingPathComponent("Applications/ChatGPT-Patched.app/Contents/Info.plist"),
-                "/Applications/ChatGPT-Patched.app/Contents/Info.plist"
-            ]
-            for p in patchedPlistCandidates {
-                if let dict = NSDictionary(contentsOfFile: p) as? [String: Any], let v = dict["CFBundleShortVersionString"] as? String {
-                    s.patchedVersion = v; break
-                }
+        // 2026-10-20：先读**副本文件本身的 Info.plist**，再拿 marker 兜底。
+        // marker 可能是上一轮写的（重建失败后仍保留），只看它会把坏副本/旧副本误报为最新。
+        let patchedPlistCandidates = [
+            (home as NSString).appendingPathComponent("Applications/ChatGPT-Patched.app/Contents/Info.plist"),
+            "/Applications/ChatGPT-Patched.app/Contents/Info.plist"
+        ]
+        var fileVersion = ""
+        for p in patchedPlistCandidates {
+            if let dict = NSDictionary(contentsOfFile: p) as? [String: Any], let v = dict["CFBundleShortVersionString"] as? String {
+                fileVersion = v; break
             }
+        }
+        if !fileVersion.isEmpty {
+            s.patchedVersion = fileVersion
+        } else if !markerVersion.isEmpty {
+            s.patchedVersion = markerVersion
         }
         // 官方版：只读正本 Info.plist，与副本版分开
         do {
@@ -199,8 +206,8 @@ final class CodexInstaller: ObservableObject {
                 }
             }
         }
-        // 代理是否监听 19100
-        s.proxyRunning = isPortListening(19100)
+        // 必须确认 19100 的监听者就是 agent-relay；旧 vision_proxy 占端口不算健康。
+        s.proxyRunning = HealthCheck.proxyOwnedByRelay()
 
         // ds masked
         if let ds = existingDSKey(), !ds.isEmpty {
@@ -282,27 +289,6 @@ final class CodexInstaller: ObservableObject {
     private static func maskedKey(_ k: String) -> String {
         guard k.count > 8 else { return "****" }
         return String(k.prefix(6)) + "****" + String(k.suffix(4))
-    }
-
-    private static func isPortListening(_ port: Int) -> Bool {
-        // 用 URLSession 探活 127.0.0.1:19100，比 lsof 更沙盒友好
-        // 同步探活：尝试连一个 TCP socket
-        let host = "127.0.0.1"
-        var hints = addrinfo()
-        hints.ai_socktype = SOCK_STREAM
-        var res: UnsafeMutablePointer<addrinfo>?
-        let portStr = "\(port)"
-        guard getaddrinfo(host, portStr, &hints, &res) == 0, let r = res else { return false }
-        defer { freeaddrinfo(res) }
-        let fd = socket(r.pointee.ai_family, r.pointee.ai_socktype, r.pointee.ai_protocol)
-        if fd < 0 { return false }
-        defer { close(fd) }
-        // 1 秒超时
-        var tv = timeval(tv_sec: 1, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-        let rc = connect(fd, r.pointee.ai_addr, r.pointee.ai_addrlen)
-        return rc == 0
     }
 
     // MARK: - 刷新状态
@@ -401,13 +387,31 @@ final class CodexInstaller: ObservableObject {
                 guard let self, self.runGeneration == myGeneration else { return }
                 self.drainPipes()
                 // 兜底把剩余缓冲读完（非阻塞；阻塞式 readToEnd 会被孤儿进程 hanging 住，已禁用）
-                self.lastExitCode = p.terminationStatus
-                if p.terminationStatus == 0 {
+                var exitCode = p.terminationStatus
+                if exitCode == 0 {
+                    // 2026-10-20：安装器自身返回 0 也不当作成功；再读一次真实
+                    // proxy/Go Key/副本状态，任何关键项不对都标失败。
+                    self.refreshStatus()
+                    let s = self.status
+                    let proxyProblem = s.hasGo && !s.proxyRunning
+                    let patchProblem = !skipPatch && (!s.patchedExists || (s.officialVersion != "-" && s.patchedVersion != s.officialVersion))
+                    if proxyProblem || patchProblem {
+                        exitCode = 1
+                        if proxyProblem {
+                            self.logText += "\n[失败] 配置结束但 19100 不是 agent-relay 在监听\n"
+                        }
+                        if patchProblem {
+                            self.logText += "\n[失败] 配置结束但 Codex 副本未同步（官方 \(s.officialVersion) / 副本 \(s.patchedVersion)）\n"
+                        }
+                    }
+                }
+                self.lastExitCode = exitCode
+                if exitCode == 0 {
                     self.logText += "\n[完成] 退出码 0 ✅\n"
                     // 同步 Keychain：存"有效 Go Key"（含留空复用的旧值）供 Widget 直接用
                     if !effectiveGo.isEmpty { KeychainStore.save(effectiveGo) }
                 } else {
-                    self.logText += "\n[失败] 退出码 \(p.terminationStatus) ❌\n"
+                    self.logText += "\n[失败] 退出码 \(exitCode) ❌\n"
                 }
                 self.finalizeRun()
             }
@@ -487,12 +491,16 @@ final class CodexInstaller: ObservableObject {
         NSWorkspace.shared.open(URL(fileURLWithPath: p))
     }
     func openPatchedApp() {
-        let candidates = [
-            NSHomeDirectory() + "/Applications/ChatGPT-Patched.app",
-            "/Applications/ChatGPT-Patched.app"
-        ]
-        for c in candidates where FileManager.default.fileExists(atPath: c) {
-            NSWorkspace.shared.open(URL(fileURLWithPath: c)); return
+        let preferred = NSHomeDirectory() + "/Applications/ChatGPT-Patched.app"
+        let candidates = [preferred, "/Applications/ChatGPT-Patched.app"]
+        // 安装器可能把副本放在 ~/Applications 或 /Applications；优先打开有完整
+        // Contents/MacOS 启动器的那个，避免打开只复制了一半的目录（假完成）。
+        for c in candidates {
+            let exe = c + "/Contents/MacOS/ChatGPT"
+            if FileManager.default.isExecutableFile(atPath: exe) {
+                NSWorkspace.shared.open(URL(fileURLWithPath: c))
+                return
+            }
         }
         NSSound.beep()
     }

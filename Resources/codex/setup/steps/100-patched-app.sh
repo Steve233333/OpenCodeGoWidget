@@ -62,12 +62,20 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
       fi
     fi
     if bash "$PATCH_BASE/patch.sh" --auto-update; then
-      # --auto-update 在已是最新时无输出，仍视为成功
-      PATCH_OK=1
-      PATCH_VER_MSG="（${SRC_VER}）"
-      log "ChatGPT-Patched.app 已同步至 $SRC_VER"
+      # 2026-10-20：**必须核对结果版本**，不能只看退出码。
+      # auto-update 在"副本正在运行"时会 defer 并 exit 0，以前这里照样报"已同步"，
+      # 用户看着配置成功、副本还是旧版本。
+      BUILT_VER="$(sed -nE 's/.*"sourceVersion": *"([^"]*)".*$/\1/p' "$PATCH_BASE/patch-state.json" 2>/dev/null | head -1)"
+      if [[ "$BUILT_VER" = "$SRC_VER" ]]; then
+        PATCH_OK=1
+        PATCH_VER_MSG="（${SRC_VER}）"
+        log "ChatGPT-Patched.app 已同步至 $SRC_VER"
+      else
+        log "WARN: 重建没有落地（期望 ${SRC_VER}，实际 ${BUILT_VER:-无}）—— 通常是副本还开着阻止了重建"
+        log "      下一步：完全退出 ChatGPT-Patched（⌘Q）后再点一次「配置」"
+      fi
     else
-      # 回退：auto-update 可能因运行中 defer，尝试 --install
+      # 回退：auto-update 可能因运行中 defer，尝试 --install（现在它也是版本感知的）
       if bash "$PATCH_BASE/patch.sh" --install; then
         PATCH_OK=1
         PATCH_VER_MSG="（${SRC_VER}）"

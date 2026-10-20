@@ -60,9 +60,10 @@ final class ProxyWatchdog: ObservableObject {
 
     // MARK: - 体检 / 修复
 
-    /// 先探活：活着就只刷新状态（读 relay-runtime），死了才动手修。
+    /// 先检查“端口有响应 **且** 监听者就是 agent-relay”，两者都对才跳修复。
+    /// 只看端口会把旧 vision_proxy/别的程序误认成健康，导致看护永远不接管。
     func check(reason: String) async {
-        if await HealthCheck.proxyResponds() {
+        if await HealthCheck.proxyHealthy() {
             refreshFromRuntime()
             status = .ok
             detail = "本地代理在跑" + (interpreter.isEmpty ? "" : "（\(version.isEmpty ? "Python" : version)）")
@@ -91,7 +92,7 @@ final class ProxyWatchdog: ObservableObject {
 
         appendLog("\(reason)：代理没响应 → 调 ensure-relay.sh")
         let (rc, output) = await runProcess("/bin/bash", [script.path, "--trigger", "watchdog", "--quiet"], timeout: 120)
-        let alive = await HealthCheck.proxyResponds()
+        let alive = await HealthCheck.proxyHealthy()
         refreshFromRuntime()
 
         if alive {

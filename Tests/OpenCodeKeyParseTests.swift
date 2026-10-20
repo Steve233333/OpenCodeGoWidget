@@ -41,12 +41,30 @@ func testWorkspaceID() {
     keyCheck(OpenCodeKeyFetcher.workspaceID(fromURL: "https://opencode.ai/workspace/not_a_wrk/keys") == nil, "非 wrk_ 前缀返回 nil")
 }
 
+func testInactiveServiceAccount() {
+    print("— 服务账号过滤 —")
+    let obj: [String: Any] = [
+        "items": [
+            ["id": "svc_old", "status": "disabled", "keys": [
+                ["id": "key_old", "name": "旧 Key", "status": "active", "tokenHint": "sk-old…"]
+            ]],
+            ["id": "svc_new", "status": "active", "keys": [
+                ["id": "key_new", "name": "新 Key", "status": "active", "tokenHint": "sk-new…"]
+            ]]
+        ]
+    ]
+    let keys = OpenCodeKeyFetcher.parseServiceAccountsJSON(obj)
+    keyCheck(keys.count == 1, "停用服务账号下的 active Key 不列入可用（实际 \(keys.count) 条）")
+    keyCheck(keys.first?.id == "key_new", "只保留 active 服务账号的 Key")
+}
+
 // swiftc 多文件编译时只有 main.swift 允许顶层语句，所以这里用 @main 包一层
 @main
 struct KeyParseTestRunner {
     static func main() {
         testKeyParse()
         testWorkspaceID()
+        testInactiveServiceAccount()
 
         if keyFailures.isEmpty {
             print("\n全部通过 ✅")

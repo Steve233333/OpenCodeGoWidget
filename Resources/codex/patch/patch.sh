@@ -498,10 +498,27 @@ PYEOF
 }
 
 install() {
-  if ! is_patched; then
-    build_patched
+  # 2026-10-20：**版本感知**。以前这里只查 is_patched()（"asar 里有没有补丁特征"），
+  # 完全不看官方版本。于是官方升级后如果 --auto-update 因"副本正在运行"被 defer，
+  # 安装器回退到 --install 就会走进这个分支：日志写 "already patched, skip"、
+  # 然后 open 旧副本 —— **假成功**，副本还停在旧版本，用户以为配好了。
+  # 现在只要 marker 版本 ≠ 官方版本，就必须重建（运行中则明确报错，绝不静默跳过）。
+  local current marker_ver
+  current=$(app_version)
+  marker_ver=$(get_marker_version)
+  if is_patched && [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ]; then
+    log "already patched at $current, skip"
   else
-    log "already patched (version $(get_marker_version)), skip"
+    if is_patched; then
+      log "version mismatch (patched=$marker_ver, source=$current) → rebuilding"
+    else
+      log "not patched → building"
+    fi
+    if patched_running; then
+      log "ERROR: patched copy is running, cannot rebuild (quit it and retry)"
+      exit 1
+    fi
+    build_patched || exit 1
   fi
   log "launching patched copy..."
   open "$PATCHED"

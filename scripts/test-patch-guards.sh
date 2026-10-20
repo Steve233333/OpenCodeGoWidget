@@ -39,6 +39,16 @@ grep -qF 'AGbevlPCksUGKNL8TSn7wGmJEuJsXb2A' "$PATCH_SH" \
 grep -qF '[ "$(readlink "$link")" = "$target" ]' "$PATCH_SH" \
   && ok "CLI 软链维护在（官方改布局不断 ccpocket）" || bad "缺 codex CLI 软链维护"
 
+# 2026-10-20：`--install` 必须**版本感知**。
+# 事故：官方升级后 --auto-update 因"副本正在运行"defer（exit 0），安装器回退到 --install，
+# 而旧的 install() 只查 is_patched()（asar 里有补丁特征就跳过）→ 日志写 "already patched, skip"
+# 然后 open 旧副本 → **假成功**，副本还停在旧版本。
+grep -qF 'version mismatch (patched=$marker_ver, source=$current) → rebuilding' "$PATCH_SH" \
+  && ok "install() 版本感知（marker≠源码版本必须重建）" || bad "install() 又变回「只看 is_patched」的假成功"
+grep -qF 'local current marker_ver' "$PATCH_SH" \
+  && grep -qF 'if is_patched && [ -n "$current" ]' "$PATCH_SH" \
+  && ok "install() 用的是版本比较而不是单一 is_patched" || bad "install() 缺版本比较"
+
 # ---------------------------------------------------------------------------
 # ③ 行为用例：把脚本里那段启动器选择逻辑抠出来，用受控的假 clang 跑
 sed -n '/^  launcher_ok=""/,/main executable wrapped with user-data-dir launcher/p' "$PATCH_SH" > "$WORK/block.sh"

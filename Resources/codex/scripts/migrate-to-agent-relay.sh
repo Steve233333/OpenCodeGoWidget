@@ -3,7 +3,8 @@
 #
 # 搬四样：① 运行目录 ② 配置目录 + env 里的变量名（VISION_* → RELAY_*）
 #         ③ launchd label（com.agent-vision-toolkit.proxy → com.agent-relay）④ 日志文件名（旧名留软链）
-# 旧目录一律留**相对软链**，所以任何还写着旧路径的脚本/旧版小组件都不会断。
+# 旧目录作为回滚快照保留，但旧 launchd 服务和旧 plist 会彻底退场；成功迁移写 marker，
+# 后续配置不再重复搬迁。
 #
 # 用法：migrate-to-agent-relay.sh [--dry-run] [--rollback]
 set -uo pipefail
@@ -37,6 +38,7 @@ NEW_LABEL="com.agent-relay"
 OLD_PLIST="$HOME_DIR/Library/LaunchAgents/$OLD_LABEL.plist"
 NEW_PLIST="$HOME_DIR/Library/LaunchAgents/$NEW_LABEL.plist"
 ENV_FILE="$NEW_CFG/env"
+MIGRATION_MARKER="$NEW_DIR/.legacy-vision-toolkit-migrated"
 DRY=0
 ROLLBACK=0
 for arg in "$@"; do
@@ -61,9 +63,12 @@ if [ "$ROLLBACK" = 1 ]; then
     run "mv -f '$OLD_DIR/ensure-proxy.sh.bak-relay' '$OLD_DIR/ensure-proxy.sh'"
   fi
   run "rm -f '$OLD_DIR/.forwarded-to-relay'"
-  if [ -f "$OLD_PLIST.bak-relay" ]; then
-    run "mv -f '$OLD_PLIST.bak-relay' '$OLD_PLIST'"
-  fi
+  for _cand in "$OLD_PLIST.bak-relay" "$OLD_PLIST.bak-legacy" "$OLD_PLIST"; do
+    if [ -f "$_cand" ]; then
+      run "cp -p '$_cand' '$OLD_PLIST'"
+      break
+    fi
+  done
   if [ "$DRY" != 1 ] && [ -x "$OLD_DIR/ensure-proxy.sh" ]; then
     say "用旧入口把服务起回来（旧 label + 旧目录）"
     "$OLD_DIR/ensure-proxy.sh" --env-file "$OLD_CFG/env" --trigger rollback --force-restart --quiet || true
@@ -71,8 +76,10 @@ if [ "$ROLLBACK" = 1 ]; then
   exit 0
 fi
 
-# 已经迁移过（新目录在、旧路径是软链）→ 幂等退出
-if [ -d "$NEW_DIR" ] && [ -L "$OLD_DIR" ] && [ -d "$NEW_CFG" ]; then
+# 已经迁移过（新目录 + 迁移完成标记都在）→ 幂等退出。
+# 旧目录**故意保留**做回滚快照；不能再把“旧路径不是软链”当成“从未迁移”，否则每次配置
+# 都会重新拷一遍旧数据，甚至让旧 env 覆盖刚写好的新 Key。
+if [ -d "$NEW_DIR" ] && [ -f "$MIGRATION_MARKER" ] && [ -d "$NEW_CFG" ]; then
   say "已经是 agent-relay 身份，无需迁移 ✅"
   exit 0
 fi
@@ -85,13 +92,22 @@ fi
 say "开始切换：${OLD_DIR}（旧，保留） + ${NEW_DIR}（新，已部署）"
 run "mkdir -p '$NEW_DIR' '$NEW_CFG'"
 
-# 运行态文件（日志、缓存、备份目录）：从旧目录拷过去，保持连续性
+# 运行态文件（日志、缓存）：只在目标缺失时拷，绝不覆盖新服务已有的文件和日志。
+copy_if_missing() {
+  local src="$1" dst="$2"
+  [ -f "$src" ] || return 0
+  [ -e "$dst" ] && return 0
+  run "cp -p '$src' '$dst'"
+}
 for f in proxy.err.log proxy.log relay.err.log relay.log discovery.log prune_pending.json go_quota_cache.json go_models_cache.json zen_model_ids.json; do
-  [ -f "$OLD_DIR/$f" ] && run "cp -p '$OLD_DIR/$f' '$NEW_DIR/$f'" || true
+  copy_if_missing "$OLD_DIR/$f" "$NEW_DIR/$f"
 done
 
-# env：从旧文件派生新文件（改写变量名），旧文件保持不动（新代码本来也有旧名兜底）
-if [ -f "$OLD_CFG/env" ]; then
+# env：新文件已有内容就绝不覆盖。安装器已经在 90-proxy 写入“本次用户输入的新 Key”，
+# 这里若再从旧文件派生，会把刚更新的 Key 冲回旧值。
+if [ -s "$ENV_FILE" ]; then
+  say "保留现有新 env：${ENV_FILE}（不覆盖）"
+elif [ -f "$OLD_CFG/env" ]; then
   if [ "$DRY" = 1 ]; then
     say "会把旧 env 派生到 ${ENV_FILE}（改写 $(grep -c '^VISION_' "$OLD_CFG/env" 2>/dev/null || echo 0) 行变量名）"
   else
@@ -146,8 +162,8 @@ if [ "$DRY" = 1 ]; then say "dry-run 结束（什么都没改）"; exit 0; fi
 
 if [ "$SANDBOX" = 1 ]; then
   say "sandbox 验证（只查文件，不查服务）："
-  say "  新目录 $([ -d "$NEW_DIR" ] && echo ✅ || echo ❌)   旧路径软链 $([ -L "$OLD_DIR" ] && echo ✅ || echo ❌)"
-  say "  env 改名 $([ -f "$ENV_FILE" ] && grep -q '^RELAY_' "$ENV_FILE" && echo ✅ || echo ❌)   旧 plist 已摘 $([ -f "$OLD_PLIST" ] && echo ❌ || echo ✅)"
+  say "  新目录 $([ -d "$NEW_DIR" ] && echo ✅ || echo ❌)   旧目录保留 $([ -d "$OLD_DIR" ] && echo ✅ || echo ❌)"
+  say "  env 已就绪 $([ -s "$ENV_FILE" ] && echo ✅ || echo ❌)   旧 plist 已摘 $([ -f "$OLD_PLIST" ] && echo ❌ || echo ✅)"
   exit 0
 fi
 
@@ -178,4 +194,5 @@ else
 fi
 [ -f "$NEW_DIR/relay-runtime" ] && say "状态文件 relay-runtime 已写 ✅" || say "⚠️ 没看到 relay-runtime"
 grep -q "\[relay\]" "$NEW_DIR/relay.err.log" 2>/dev/null && say "日志前缀已是 [relay] ✅" || say "⚠️ 日志里还没出现 [relay]（可能刚重启）"
-say "迁移完成：新身份 agent-relay（旧路径已留软链，随时可 --rollback）"
+touch "$MIGRATION_MARKER"
+say "迁移完成：新身份 agent-relay（旧目录保留作回滚，旧 launchd 已退场）"

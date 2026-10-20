@@ -8,12 +8,22 @@
 # 6. 选择默认模型 / 记忆模型 / base_url / bearer
 # ---------------------------------------------------------------------------
 DEFAULT_MODEL=""
-if [[ "$HAS_DS" -eq 1 ]]; then
-  DEFAULT_MODEL="deepseek-v4-flash-vision-exp"
-elif [[ "$AVAIL_SLUGS" == *"mimo-v2.5-go"* ]]; then
-  DEFAULT_MODEL="mimo-v2.5-go"
-elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-go"* ]]; then
-  DEFAULT_MODEL="deepseek-v4-flash-go"
+# 2026-10-20：之前无条件把默认模型设成 DeepSeek 直连；这在“只有 Go Key”的机器
+# 会生成一个不存在的模型。现在先看真正可用列表，再按偏好挑第一个存在的。
+pick_available_model() {
+  local slug
+  for slug in "$@"; do
+    case " $AVAIL_SLUGS " in
+      *" $slug "*) printf '%s' "$slug"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+if [[ "$HAS_DS" -eq 1 ]] && DEFAULT_MODEL="$(pick_available_model deepseek-v4-flash-vision-exp)"; then
+  :
+elif DEFAULT_MODEL="$(pick_available_model mimo-v2.5-go deepseek-v4-flash-go)"; then
+  :
 else
   DEFAULT_MODEL="${AVAIL_SLUGS%% *}"
 fi
@@ -31,6 +41,10 @@ elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-vision-exp-go"* ]]; then
   EXTRACT_MODEL="deepseek-v4-flash-vision-exp-go"
 elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-vision-exp"* ]]; then
   EXTRACT_MODEL="deepseek-v4-flash-vision-exp"
+elif [[ -n "$DEFAULT_MODEL" ]]; then
+  # 2026-10-20：之前这里取“第一个可用模型”，但它可能是仅 DeepSeek 的模型；
+  # 纯 Go 配置下记忆任务会去调不存在的直连模型。优先跟随默认模型。
+  EXTRACT_MODEL="$DEFAULT_MODEL"
 else
   EXTRACT_MODEL="${AVAIL_SLUGS%% *}"
 fi
@@ -45,6 +59,16 @@ if [[ -z "$DEFAULT_MODEL" || -z "$EXTRACT_MODEL" ]]; then
   else
     die "models.json 生成为空：模板里按当前 Key 过滤后没有可用模型（Go=$HAS_GO DeepSeek=${HAS_DS}）。请检查 Key 是否有效。"
   fi
+fi
+
+# 空列表不应该继续往下写一个空 config；给出明确病因并让安装器失败。
+if [[ -z "${AVAIL_SLUGS:-}" ]]; then
+  die "可用模型列表为空：模板/当前 Key 过滤后没有任何模型，配置文件未覆盖。"
+fi
+
+# 刚才那段 Python 写文件失败时，别继续把“已生成”写进日志。
+if [[ ! -s "$CODEX_HOME/config.toml" ]]; then
+  die "config.toml 写入失败或为空：${CODEX_HOME}/config.toml"
 fi
 
 USE_PROXY=0

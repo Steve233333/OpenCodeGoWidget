@@ -4,8 +4,8 @@ import SwiftUI
 
 // MARK: - 应用内更新（2026-09-10）
 //
-// 设计：打开设置页时自动查一次 GitHub 最新 Release（24 小时节流），菜单栏也有入口。
-// 只有用户点「更新」才下载安装，不做后台静默更新。
+// 设计：启动时与之后每 6 小时静默检查；设置页也能手动查。
+// 静默更新默认开启，但仍先校验 Release 的版本、bundle id 和代码签名。
 // 流程：下载 ZIP -> ditto 解包 -> 校验 bundle id/版本 -> 脱离脚本等本 App 退出
 //      -> 旧版改名 .bak-旧版本 -> 拷入新版 -> 去隔离属性 -> 重新打开。
 
@@ -172,14 +172,7 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
 
     // MARK: - 版本比较（1.1.8.10 > 1.1.8.9）
     static func isNewer(_ a: String, than b: String) -> Bool {
-        let x = a.split(separator: ".").map { Int($0) ?? 0 }
-        let y = b.split(separator: ".").map { Int($0) ?? 0 }
-        for i in 0..<max(x.count, y.count) {
-            let l = i < x.count ? x[i] : 0
-            let r = i < y.count ? y[i] : 0
-            if l != r { return l > r }
-        }
-        return false
+        AppVersioning.isNewer(a, than: b)
     }
 
     /// 用户点「更新」：下载 + 解包 + 校验，然后交给脱离脚本替换并重启
@@ -244,7 +237,15 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
         ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         ditto.arguments = ["-x", "-k", zipPath.path, extractDir.path]
         do { try ditto.run() } catch { return fail("解压失败：\(error.localizedDescription)") }
-        ditto.waitUntilExit()
+        // 下载内容异常时 ditto 也可能卡住；最多等 120 秒。
+        let unzipDeadline = Date().addingTimeInterval(120)
+        while ditto.isRunning && Date() < unzipDeadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        if ditto.isRunning {
+            ditto.terminate()
+            return fail("解压超时（120 秒），已放弃安装")
+        }
         guard ditto.terminationStatus == 0 else {
             return fail("解压失败（ditto 退出码 \(ditto.terminationStatus)）")
         }
@@ -261,14 +262,60 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard let dict = NSDictionary(contentsOf: plist) as? [String: Any] else {
             return fail("新版本 Info.plist 读不到，已放弃安装")
         }
+        // ZIP 里可能还嵌着 Electron 等更深层的 .app；只接受顶层带本 bundle id 的那一个。
         let bid = dict["CFBundleIdentifier"] as? String ?? ""
         let ver = dict["CFBundleShortVersionString"] as? String ?? ""
         let want = pendingInfo?.version ?? ""
         guard bid == Bundle.main.bundleIdentifier else {
             return fail("下载包的 bundle id（\(bid)）不对，已放弃安装")
         }
-        guard !want.isEmpty, !Self.isNewer(ver, than: want) else {
+        guard AppVersioning.downloadedVersionMatches(ver, expected: want) else {
             return fail("下载包版本（\(ver)）与目标（\(want)）不符，已放弃安装")
+        }
+        // 版本和 bundle id 都对还不够：下载损坏或 ZIP 被截断时先拦下来。
+        let verify = Process()
+        verify.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        verify.arguments = ["--verify", "--deep", "--strict", newApp.path]
+        verify.standardOutput = Pipe()
+        verify.standardError = Pipe()
+        do {
+            try verify.run()
+        } catch {
+            return fail("无法校验下载包签名：\(error.localizedDescription)")
+        }
+        let verifyDeadline = Date().addingTimeInterval(60)
+        while verify.isRunning && Date() < verifyDeadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        if verify.isRunning {
+            verify.terminate()
+            return fail("签名校验超时（60 秒），已放弃安装")
+        }
+        guard verify.terminationStatus == 0 else {
+            return fail("下载包签名校验失败（codesign 退出码 \(verify.terminationStatus)）")
+        }
+        // 防止下载包偷偷把 Key 或 launchd 配置引到工作区/旧代理。只检查脚本与配置，
+        // 不扫描二进制与模型说明，避免误报。
+        let bundleRoot = newApp.standardizedFileURL.path
+        let forbidden = [
+            "/Users/steve233/Desktop/",
+            "/Library/Project/",
+            "agent-vision-toolkit/vision_proxy.py"
+        ]
+        if let e = fm.enumerator(at: newApp, includingPropertiesForKeys: nil) {
+            for case let u as URL in e {
+                guard u.pathExtension == "sh" || u.pathExtension == "command" || u.lastPathComponent == "config.toml" else { continue }
+                guard let txt = try? String(contentsOf: u, encoding: .utf8) else { continue }
+                guard let hit = forbidden.first(where: { txt.contains($0) }) else { continue }
+                Self.logSilent("拒绝更新：\(u.path) 含外部路径 \(hit)（bundle=\(bundleRoot)）")
+                return fail("下载包包含外部路径引用（\(hit)），已放弃安装")
+            }
+        }
+        // 解包目录里可能有符号链接；验签通过后再拒绝指向解包目录之外的 .app。
+        let resolved = extractDir.resolvingSymlinksInPath().standardizedFileURL.path
+        let candidate = newApp.resolvingSymlinksInPath().standardizedFileURL.path
+        guard candidate.hasPrefix(resolved + "/") else {
+            return fail("下载包里 .app 路径异常，已放弃安装")
         }
 
         let appPath = Bundle.main.bundlePath
@@ -289,6 +336,7 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
         let script = """
         #!/bin/bash
         # OpenCodeGoWidget 自动更新：等本 App 退出后替换旧版
+        set -uo pipefail
         APP="$1"; NEW="$2"; PID="$3"; OLD="$4"
         # 先等 App 自己优雅退出（设置面板开着时 AppKit 可能拖几秒）
         for _ in $(seq 1 20); do
@@ -303,17 +351,32 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
         fi
         sleep 0.5
         BAK="${APP}.bak-${OLD}"
-        rm -rf "$BAK"
-        mv "$APP" "$BAK" 2>/dev/null || true
+        if [ -e "$BAK" ]; then
+          /usr/bin/open "$APP" 2>/dev/null || true
+          /bin/rm -rf "$(dirname "$NEW")"
+          exit 1
+        fi
+        mv "$APP" "$BAK" || {
+          /usr/bin/open "$APP" 2>/dev/null || true
+          /bin/rm -rf "$(dirname "$NEW")"
+          exit 1
+        }
         if /usr/bin/ditto "$NEW" "$APP"; then
           /usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+          if ! /usr/bin/codesign --verify --deep --strict "$APP"; then
+            /bin/rm -rf "$APP"
+            mv "$BAK" "$APP" || true
+            /usr/bin/open "$APP" 2>/dev/null || true
+            /bin/rm -rf "$(dirname "$NEW")"
+            exit 1
+          fi
           /usr/bin/open "$APP"
         else
-          rm -rf "$APP"
-          mv "$BAK" "$APP" 2>/dev/null || true
-          /usr/bin/open "$APP"
+          /bin/rm -rf "$APP"
+          mv "$BAK" "$APP" || true
+          /usr/bin/open "$APP" 2>/dev/null || true
         fi
-        rm -rf "$(dirname "$NEW")"
+        /bin/rm -rf "$(dirname "$NEW")"
         """
         let scriptURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ocgw-update-\(UUID().uuidString).sh")

@@ -45,6 +45,8 @@ done
 
 LABEL="${PROXY_LABEL:-com.agent-relay}"
 PLIST="${PROXY_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
+LEGACY_LABEL="${LEGACY_PROXY_LABEL:-com.agent-vision-toolkit.proxy}"
+LEGACY_PLIST="${LEGACY_PROXY_PLIST:-$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist}"
 RUNTIME="$RELAY_DIR/relay-runtime"
 LOG="$RELAY_DIR/ensure-relay.log"
 UID_NUM="$(/usr/bin/id -u)"
@@ -73,8 +75,8 @@ probe() {
 # 还占着 19100；而 probe() 只看"端口有没有响应"，于是这里判定"代理已在运行"、直接 exit 0 ——
 # 安装器刚同步的新代码根本没被加载，用户看到的就是「配置了没效果」。
 #
-# 这个函数回答："监听 19100 的进程是不是从 ${RELAY_DIR} 跑起来的？"
-#   0 = 是（或判断不了，别误伤）；1 = 明显是别的进程占着。
+# 这个函数回答："监听端口的是不是从 ${RELAY_DIR}/relay.py 跑起来的？"
+#   0 = 是；1 = 没人监听，或明显是别的程序。
 port_owned_by_relay() {
   local pids
   pids="$(/usr/sbin/lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u)"
@@ -84,11 +86,57 @@ port_owned_by_relay() {
     local cmd
     cmd="$(/bin/ps -p "$pid" -o command= 2>/dev/null)"
     case "$cmd" in
-      *"$RELAY_DIR"*) return 0 ;;                 # 正是我们目录里的 relay.py
-      *relay.py*|*agent-relay*) return 0 ;;       # 路径变了（软链/迁移）但仍是我们的
+      *"$RELAY_DIR/relay.py"*) return 0 ;;
     esac
   done
   return 1                                        # 端口被别的进程占着
+}
+
+listener_commands() {
+  local pids pid cmd
+  pids="$(/usr/sbin/lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u)"
+  [ -z "$pids" ] && return 0
+  for pid in $pids; do
+    cmd="$(/bin/ps -p "$pid" -o command= 2>/dev/null)"
+    printf 'pid=%s %s\n' "$pid" "$cmd"
+  done
+}
+
+# 只退场已知的改名前服务。未知进程绝不自动杀，避免 “修复代理” 误伤别的软件。
+stop_legacy_job() {
+  if [ "$DRY_RUN" = 1 ]; then
+    say "dry-run：会停用旧服务 ${LEGACY_LABEL} 并摘掉 ${LEGACY_PLIST}（不写任何文件）"
+    return 0
+  fi
+  if /bin/launchctl print "gui/$UID_NUM/$LEGACY_LABEL" >/dev/null 2>&1; then
+    logline "停用旧服务 ${LEGACY_LABEL}"
+    /bin/launchctl bootout "gui/$UID_NUM/$LEGACY_LABEL" >/dev/null 2>&1 || true
+  fi
+  if [ -f "$LEGACY_PLIST" ]; then
+    [ -f "$LEGACY_PLIST.bak-legacy" ] || cp -p "$LEGACY_PLIST" "$LEGACY_PLIST.bak-legacy" 2>/dev/null || true
+    /bin/launchctl bootout "gui/$UID_NUM" "$LEGACY_PLIST" >/dev/null 2>&1 \
+      || /bin/launchctl unload "$LEGACY_PLIST" >/dev/null 2>&1 || true
+    rm -f "$LEGACY_PLIST"
+    logline "旧 plist 已退场（备份 ${LEGACY_PLIST}.bak-legacy）"
+  fi
+  # 旧 label 可能已经被摘掉，但进程仍从旧目录运行；只按完整旧入口路径收口。
+  local pids pid cmd
+  pids="$(/usr/sbin/lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u)"
+  for pid in $pids; do
+    cmd="$(/bin/ps -p "$pid" -o command= 2>/dev/null)"
+    case "$cmd" in
+      *"$HOME/.local/share/agent-vision-toolkit/vision_proxy.py"*)
+        logline "结束仍在占用端口的旧 vision_proxy（pid ${pid}）"
+        kill -TERM "$pid" 2>/dev/null || true
+        local i=0
+        while [ "$i" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+          /bin/sleep 0.2
+          i=$((i + 1))
+        done
+        kill -KILL "$pid" 2>/dev/null || true
+        ;;
+    esac
+  done
 }
 
 # macOS 没有 timeout 命令，自己看着闹钟杀（/usr/bin/python3 在没装 CLT 时会弹窗卡住）。
@@ -187,14 +235,43 @@ restart_job() {
     || /bin/launchctl load -w "$PLIST" >/dev/null 2>&1 || true
 }
 
-wait_port() {
+wait_relay_ready() {
   local i=0 n="$1"
   while [ "$i" -lt "$n" ]; do
-    probe && return 0
+    if probe && port_owned_by_relay; then return 0; fi
     /bin/sleep 1
     i=$((i + 1))
   done
   return 1
+}
+
+relay_functional_ready() {
+  # /v1/models 在本代理里固定回 401，只证明 HTTP 活着，不能证明上游 Key 有效。
+  # 真正发一条 8-token 请求：200 才算端到端可用；429 说明 Key 有效但限流。
+  local out code
+  out="$(mktemp)"
+  code="$(/usr/bin/curl -s -o "$out" -w '%{http_code}' -m 30 \
+    -X POST "http://127.0.0.1:$PORT/v1/responses" \
+    -H 'Authorization: Bearer relay-functional-check' \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"deepseek-v4.1-flash-go","stream":false,"max_output_tokens":8,"input":"reply OK"}' 2>/dev/null || true)"
+  case "$code" in
+    2??|429) rm -f "$out"; return 0 ;;
+    401|403)
+      say "上游拒绝 Key（HTTP ${code}）：$(head -c 200 "$out" 2>/dev/null | tr '\n' ' ')"
+      rm -f "$out"; return 1 ;;
+    402|404|410)
+      # 探测模型可能已下线；这是“探针过时”，不是当前 Key 失效。
+      say "功能自检跳过（HTTP ${code}：探针模型可能已下线，不代表 Key 失效）：$(head -c 160 "$out" 2>/dev/null | tr '\n' ' ')"
+      rm -f "$out"; return 2 ;;
+    5??)
+      # 上游网关偶发 5xx，不能据此报“配置失败”；监听与 Key 检查照常保留。
+      say "功能自检暂不可用（HTTP ${code} 上游故障，稍后自动重试）：$(head -c 160 "$out" 2>/dev/null | tr '\n' ' ')"
+      rm -f "$out"; return 2 ;;
+    *)
+      say "功能自检异常（HTTP ${code:-无响应}）：$(head -c 160 "$out" 2>/dev/null | tr '\n' ' ')"
+      rm -f "$out"; return 1 ;;
+  esac
 }
 
 # 状态文件：只由本脚本写（App 只读它显示"当前解释器 / 上次自动修复时间"）
@@ -223,7 +300,7 @@ if [ "$DRY_RUN" != 1 ]; then
 fi
 
 if [ "$CHECK_ONLY" = 1 ]; then
-  if probe; then exit 0; else exit 1; fi
+  if probe && port_owned_by_relay; then exit 0; else exit 1; fi
 fi
 
 PREV_REPAIR="$(state_get last_repair_at)"
@@ -232,7 +309,34 @@ PREV_REPAIR="$(state_get last_repair_at)"
 # 2026-10-19：先确认端口后面真的是我们的进程；被旧任务/别的程序占着时要抢回来，
 # 否则"配置"会静默地什么都不做（老机器升级的经典症状）。
 if probe && ! port_owned_by_relay; then
-  logline "端口 ${PORT} 有响应但**不是 agent-relay 的进程**（疑似改名前的旧任务或别的程序占用）→ 强制接管"
+  logline "端口 ${PORT} 有响应但**不是 agent-relay 的进程**（当前监听者：$(listener_commands | tr '\n' ';' )）"
+  # 先起新代码的临时实例（不依赖端口），再停旧任务；新实例失败时旧服务仍在。
+  if [ "$DRY_RUN" != 1 ]; then
+    relay_py="$RELAY_DIR/relay.py"
+    relay_port=$((PORT + 17))
+    "$relay_py" --port "$relay_port" --upstream https://api.deepseek.com/ --env-file "$ENV_FILE" >>"$RELAY_DIR/relay.err.log" 2>&1 &
+    handover_pid=$!
+    handover_ok=0
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+      if curl -s -o /dev/null -m 1 "http://127.0.0.1:$relay_port/v1/models"; then handover_ok=1; break; fi
+      sleep 0.5
+    done
+    kill "$handover_pid" 2>/dev/null || true
+    wait "$handover_pid" 2>/dev/null || true
+    if [ "$handover_ok" -ne 1 ]; then
+      logline "❌ 新代理在备用端口 ${relay_port} 没起来；旧服务保持原样，不抢端口"
+      exit 1
+    fi
+    logline "新代理备用端口自检通过；现在停旧服务并切到 ${PORT}"
+  fi
+  stop_legacy_job
+  /bin/sleep 1
+  if probe && ! port_owned_by_relay; then
+    logline "❌ 已知旧服务已尝试退场，但端口仍被其他进程占用：$(listener_commands | tr '\n' ';' )"
+    [ "$DRY_RUN" = 1 ] || write_state "unknown" "?" failed "端口被非 agent-relay 进程占用" "$PREV_REPAIR"
+    exit 1
+  fi
+  logline "旧服务已退场，继续启动 agent-relay"
   FORCE_RESTART=1
 fi
 if probe && [ "$FORCE_RESTART" != 1 ]; then
@@ -280,15 +384,26 @@ while IFS= read -r cand; do
   logline "用解释器：${cand}（Python ${ver}）"
   write_plist "$cand"
   restart_job
-  if wait_port 12; then
+  if wait_relay_ready 12; then
     CHOSEN="$cand"; CHOSEN_VER="$ver"
     break
   fi
   LAST_EXIT="$(/bin/launchctl print "gui/$UID_NUM/$LABEL" 2>/dev/null | awk '/last exit code/{print $NF}' | head -1)"
-  logline "WARN: $cand 起了但 12 秒内端口没响应${LAST_EXIT:+（launchctl 最后退出码 ${LAST_EXIT}）}"
+  logline "WARN: $cand 起了但 12 秒内没有出现由 ${RELAY_DIR}/relay.py 监听的就绪端口${LAST_EXIT:+（launchctl 最后退出码 ${LAST_EXIT}）}"
 done < <(candidates)
 
 if [ -n "$CHOSEN" ]; then
+  if [ "${RELAY_SKIP_FUNCTIONAL_CHECK:-0}" != 1 ] && [ "$TRIGGER" != "watchdog" ]; then
+    relay_functional_ready
+    _probe_rc=$?
+    if [ "$_probe_rc" -eq 1 ]; then
+      write_state "$CHOSEN" "$CHOSEN_VER" failed "HTTP 已监听，但上游 Key 无效（401/403）" "$PREV_REPAIR"
+      logline "❌ agent-relay 已监听 ${PORT}，但上游 Key 被拒绝（401/403）"
+      exit 1
+    elif [ "$_probe_rc" -eq 2 ]; then
+      logline "⚠️ 代理已监听 ${PORT}；上游功能自检暂时不可用（非 Key 错误），继续保留代理"
+    fi
+  fi
   write_state "$CHOSEN" "$CHOSEN_VER" ok "修复成功（trigger=${TRIGGER}）" "$(date '+%Y-%m-%d %H:%M:%S')"
   logline "✅ 代理已修好并在跑：${CHOSEN}（Python ${CHOSEN_VER}）"
   exit 0
@@ -299,6 +414,6 @@ if [ "$DRY_RUN" = 1 ]; then
   say "dry-run：没有可用解释器（按候选清单逐个试过）"
   exit 1
 fi
-write_state "${SKIP:-none}" "?" failed "没有可用解释器，或起来了端口也无响应" "$PREV_REPAIR"
+write_state "${SKIP:-none}" "?" failed "没有可用解释器，或监听者不是 ${RELAY_DIR}/relay.py" "$PREV_REPAIR"
 logline "❌ 代理没能起来。下一步：点「配置」重装一次；日志：$LOG 和 $RELAY_DIR/relay.err.log${ERRLINE:+（最后几行：${ERRLINE}）}"
 exit 1

@@ -72,10 +72,18 @@ enum OpenCodeKeyFetcher {
 
     /// 新接口 JSON → RemoteApiKey（secret 恒为 nil：上游不再提供完整值）
     static func parseServiceAccounts(_ data: Data) -> [RemoteApiKey] {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let items = obj["items"] as? [[String: Any]] else { return [] }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        return parseServiceAccountsJSON(obj)
+    }
+
+    /// 纯 JSON 版本，便于离线 fixture（不碰网络、不依赖 Data 类型）。
+    static func parseServiceAccountsJSON(_ obj: [String: Any]) -> [RemoteApiKey] {
+        guard let items = obj["items"] as? [[String: Any]] else { return [] }
         var out: [RemoteApiKey] = []
         for acct in items {
+            // 2026-10-20：账号本身被停用时，其 keys 里即使还标 active 也不能列成可用。
+            let acctStatus = (acct["status"] as? String) ?? "active"
+            guard acctStatus.lowercased() == "active" else { continue }
             for k in (acct["keys"] as? [[String: Any]]) ?? [] {
                 guard (k["status"] as? String) == "active" else { continue }
                 let id = k["id"] as? String ?? UUID().uuidString

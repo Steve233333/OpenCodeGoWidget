@@ -71,7 +71,7 @@ mkdir -p "$TMP/v4"
 cp -R "$VISION_SRC/proxy" "$TMP/v4/proxy"
 cp "$VISION_SRC/relay.py" "$TMP/v4/relay.py"
 : > "$TMP/env4"
-out="$(PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" bash "$ensure" \
+out="$(PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" RELAY_SKIP_FUNCTIONAL_CHECK=1 bash "$ensure" \
         --port "$TEST_PORT" --vision-dir "$TMP/v4" --env-file "$TMP/env4" --trigger test 2>&1)"
 rc=$?
 interp="$(sed -n 's/^interpreter=//p' "$TMP/v4/relay-runtime" 2>/dev/null | head -1)"
@@ -83,15 +83,33 @@ if [ "$rc" = 0 ] && [ -n "$code" ] && [ "$code" != "000" ] && [ "$result" = "ok"
 else
   bad "④ 真起失败（rc=${rc}，HTTP ${code:-无}，result=${result:-?}）：$out"
 fi
+listener_cmd="$(/usr/sbin/lsof -nP -iTCP:"$TEST_PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 | xargs -I{} /bin/ps -p {} -o command= 2>/dev/null || true)"
+if echo "$listener_cmd" | grep -qF "$TMP/v4/relay.py"; then
+  ok "④a 监听者确实是临时目录里的 relay.py"
+else
+  bad "④a 监听者不是预期的 relay.py：${listener_cmd:-无}"
+fi
 if echo "$interp" | grep -q "^/Library/Frameworks/Python.framework"; then
   ok "④b 优先用了 python.org 的解释器（不是 /usr/bin/python3）"
 else
   bad "④b 解释器优先级不对：${interp:-空}"
 fi
 
+# ④c 功能探针必须真的发出 POST /v1/responses，并把 401/403 判失败、200/429 判通过。
+if awk '/^relay_functional_ready\(\)/{p=1} p{print} p&&/^}$/{exit}' "$ensure" \
+     | grep -qF '/usr/bin/curl' \
+   && awk '/^relay_functional_ready\(\)/{p=1} p{print} p&&/^}$/{exit}' "$ensure" \
+     | grep -qF '2??|429' \
+   && awk '/^relay_functional_ready\(\)/{p=1} p{print} p&&/^}$/{exit}' "$ensure" \
+     | grep -qF '401|403'; then
+  ok "④c 功能探针使用真实请求，401/403 拒绝、2xx/429 通过"
+else
+  bad "④c 功能探针逻辑缺失或被改回只看端口"
+fi
+
 # ⑤ 幂等：已经在跑时再跑一次 → rc=0，且不再往日志里刷行
 before="$(wc -l < "$TMP/v4/ensure-relay.log" 2>/dev/null | tr -d ' ')"
-PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" bash "$ensure" \
+PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" RELAY_SKIP_FUNCTIONAL_CHECK=1 bash "$ensure" \
   --port "$TEST_PORT" --vision-dir "$TMP/v4" --env-file "$TMP/env4" --trigger test >/dev/null 2>&1
 rc=$?
 after="$(wc -l < "$TMP/v4/ensure-relay.log" 2>/dev/null | tr -d ' ')"
@@ -103,7 +121,7 @@ fi
 
 # ⑥ --force-restart：配置刚同步完新代码，跑着的旧进程必须被换掉（否则新代码永远不生效）
 pid_before="$(/bin/launchctl list | awk -v l="$TEST_LABEL" '$3 == l {print $1}')"
-PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" bash "$ensure" \
+PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest.plist" RELAY_SKIP_FUNCTIONAL_CHECK=1 bash "$ensure" \
   --port "$TEST_PORT" --vision-dir "$TMP/v4" --env-file "$TMP/env4" \
   --trigger installer --force-restart >/dev/null 2>&1
 rc=$?
@@ -150,6 +168,32 @@ if echo "$out" | grep -q "不是 agent-relay 的进程"; then
   ok "⑥ 端口被别的进程占用时判定为「不是我们的」并强制接管"
 else
   bad "⑥ 端口被占用时仍被误判为健康；输出：$(echo "$out" | tail -3)"
+fi
+handover_line="$(grep -nF '新代理备用端口自检通过' "$ensure" | head -1 | cut -d: -f1)"
+stop_line="$(grep -nF 'stop_legacy_job' "$ensure" | tail -1 | cut -d: -f1)"
+if [ -n "$handover_line" ] && [ -n "$stop_line" ] && [ "$handover_line" -lt "$stop_line" ]; then
+  ok "⑥a 备用端口预检在停旧服务之前"
+else
+  bad "⑥a 停旧服务早于备用端口预检（handover=${handover_line:-无}, stop=${stop_line:-无}）"
+fi
+
+# ⑥b 真跑一次：端口被未知进程占着时，ensure 必须失败，绝不能打印“已修好”。
+mkdir -p "$TMP/v6"
+cp -R "$VISION_SRC/proxy" "$TMP/v6/proxy"
+cp "$VISION_SRC/relay.py" "$TMP/v6/relay.py"
+: > "$TMP/env6"
+set +e
+out="$(ENSURE_PROXY_CANDIDATES="$TMP/bin/good" \
+  PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/foreign.plist" \
+  LEGACY_PROXY_LABEL="com.steve233.opencodego.legacytest.$$" \
+  LEGACY_PROXY_PLIST="$TMP/legacy-foreign.plist" \
+  bash "$ensure" --port "$HEAL_PORT" --vision-dir "$TMP/v6" --env-file "$TMP/env6" --trigger test 2>&1)"
+rc=$?
+set -uo pipefail
+if [ "$rc" != "0" ] && ! echo "$out" | grep -q "✅ 代理已修好"; then
+  ok "⑥b 未知进程占端口时返回非 0，不再报假成功"
+else
+  bad "⑥b 未知进程占端口仍报成功（rc=${rc}）：${out}"
 fi
 kill "$SQUATTER" 2>/dev/null || true
 wait "$SQUATTER" 2>/dev/null || true

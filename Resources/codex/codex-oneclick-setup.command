@@ -209,3 +209,24 @@ source "$SCRIPT_DIR/setup/steps/100-patched-app.sh"   # 9. ChatGPT-Patched.app �
 source "$SCRIPT_DIR/setup/steps/110-archive-off.sh"   # 9b. 已停用：超大对话自动归档
 source "$SCRIPT_DIR/setup/steps/120-summary.sh"   # 10. 汇总
 source "$SCRIPT_DIR/setup/steps/130-selfcheck.sh"   # 11. 配置后自检（必跑）
+
+# 2026-10-20：退出码必须反映真实结果。以前代理 401、监听者是旧服务、副本重建失败时，
+# 最后仍以 0 退出，小组件显示“上次配置成功”，把故障藏起来。
+_critical_fail=0
+if [[ "${USE_PROXY:-0}" -eq 1 && "$SKIP_PROXY_START" -eq 0 && "${PROXY_OK:-0}" -ne 1 ]]; then
+  log "ERROR: 本地代理没有通过启动/Key 自检"
+  _critical_fail=1
+fi
+if [[ "$SKIP_PATCH" -eq 0 && "${PATCH_OK:-0}" -ne 1 ]]; then
+  log "ERROR: ChatGPT-Patched.app 没有完成同步"
+  _critical_fail=1
+fi
+if [[ "${_sc_fail:-0}" -ne 0 ]]; then
+  _critical_fail=1
+fi
+if [[ "$_critical_fail" -ne 0 ]]; then
+  log "配置结束：有未通过项，已返回非 0（细节见上方自检）"
+  exit 1
+fi
+log "配置结束：全部关键项通过"
+exit 0

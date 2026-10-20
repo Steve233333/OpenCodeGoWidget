@@ -20,18 +20,28 @@ _sc_fail=0
 # ② 三个关键服务/文件
 # 2a. 本地代理（launchd）—— 2026-09-23 改成三态：未加载 / 加载了但没进程 / 进程在但端口不通。
 # macOS 27 升级那次就是"加载了但没起来"，以前只报"launchd 里没有"，看不出到底是哪一步。
-if [[ "$SKIP_PROXY_START" -eq 1 ]]; then
+if [[ "${USE_PROXY:-0}" -eq 0 ]]; then
+  log "自检① 本地代理：纯 DeepSeek 直连模式（没有 Go Key，不要求代理）"
+elif [[ "$SKIP_PROXY_START" -eq 1 ]]; then
   log "自检① 本地代理：已按 --skip-proxy-start 跳过启动（属预期）"
 else
   _proxy_line="$(launchctl list 2>/dev/null | awk '/com.agent-relay/ {print; exit}')"
+  _legacy_line="$(launchctl list 2>/dev/null | awk '/com.agent-vision-toolkit.proxy/ {print; exit}')"
   _proxy_pid="$(printf '%s' "$_proxy_line" | awk '{print $1}')"
   _proxy_exit="$(printf '%s' "$_proxy_line" | awk '{print $2}')"
-  _proxy_listen=0
-  if curl -s -o /dev/null -m 2 "http://127.0.0.1:19100/v1/models" 2>/dev/null; then _proxy_listen=1; fi
+  _proxy_owned=0
+  if [[ -x "$RELAY_DIR/ensure-relay.sh" ]] && "$RELAY_DIR/ensure-relay.sh" --check-only --quiet >/dev/null 2>&1; then
+    _proxy_owned=1
+  fi
+  _proxy_listener="$(lsof -nP -iTCP:19100 -sTCP:LISTEN -t 2>/dev/null | head -1 | xargs -I{} ps -p {} -o command= 2>/dev/null || true)"
   _proxy_interp="$(sed -n 's/^interpreter=//p' "$RELAY_DIR/relay-runtime" 2>/dev/null | head -1)"
   _proxy_repair="$(sed -n 's/^last_repair_at=//p' "$RELAY_DIR/relay-runtime" 2>/dev/null | head -1)"
   [[ -n "$_proxy_interp" ]] && log "自检① 代理解释器：$_proxy_interp${_proxy_repair:+（上次自动修复 ${_proxy_repair}）}"
-  if [[ -z "$_proxy_line" ]]; then
+  if [[ -n "$_legacy_line" ]]; then
+    _sc_fail=$((_sc_fail + 1))
+    log "自检① 本地代理：❌ 已废弃的 com.agent-vision-toolkit.proxy 仍在 launchd 里"
+    log "        下一步：跑 $RELAY_DIR/ensure-relay.sh --force-restart（它会停旧服务并只启动 agent-relay）"
+  elif [[ -z "$_proxy_line" ]]; then
     _sc_fail=$((_sc_fail + 1))
     log "自检① 本地代理：❌ launchd 里没有这个任务（没挂上）"
     log "        下一步：跑 $RELAY_DIR/ensure-relay.sh 一键修（它会挑可用解释器并重挂）；App 的看护每 5 分钟也会自动试"
@@ -39,12 +49,13 @@ else
     _sc_fail=$((_sc_fail + 1))
     log "自检① 本地代理：❌ 任务加载了但进程没起来（launchctl 上次退出码 ${_proxy_exit:-?}）"
     log "        下一步：看 $RELAY_DIR/ensure-relay.log 里「解释器不可用 / 起不来」那几行，和 $RELAY_DIR/relay.err.log 的尾巴"
-  elif [[ "$_proxy_listen" -eq 0 ]]; then
+  elif [[ "$_proxy_owned" -eq 0 ]]; then
     _sc_fail=$((_sc_fail + 1))
-    log "自检① 本地代理：❌ 进程在（pid ${_proxy_pid}）但 127.0.0.1:19100 不通"
-    log "        下一步：tail $RELAY_DIR/relay.err.log 看它启动时报了什么"
+    log "自检① 本地代理：❌ 127.0.0.1:19100 不是由 $RELAY_DIR/relay.py 监听"
+    log "        当前监听者：${_proxy_listener:-无}"
+    log "        下一步：跑 $RELAY_DIR/ensure-relay.sh --force-restart，确认旧服务已退场"
   else
-    log "自检① 本地代理：✅ 运行中（launchd pid ${_proxy_pid}，端口有响应）"
+    log "自检① 本地代理：✅ agent-relay 正在监听（launchd pid ${_proxy_pid}）"
   fi
 fi
 
