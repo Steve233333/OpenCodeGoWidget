@@ -9,6 +9,8 @@ enum KeychainStore {
     static var sharedDefaults: UserDefaults? { UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego") }
     static func save(_ key: String) {
         sharedDefaults?.set(key, forKey: sharedKeyKey)
+        // 浏览器登录拿到的新 Key 也要写回代理 env；否则 resolvedKey 的 env 优先会继续用旧 Key。
+        updateRelayEnv(key)
         let data = Data(key.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -26,6 +28,26 @@ enum KeychainStore {
             // 钥匙串被锁/权限变化时保留 App Group 副本，下次 resolvedKey 仍能读到。
             sharedDefaults?.synchronize()
         }
+    }
+
+    /// 只替换/追加 `ZEN_API_KEY`，保留 env 里其它开关；文件不存在时创建。
+    private static func updateRelayEnv(_ key: String) {
+        guard !key.isEmpty else { return }
+        let path = NSString(string: "~/.config/agent-relay/env").expandingTildeInPath
+        let url = URL(fileURLWithPath: path)
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let old = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var lines = old.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var replaced = false
+        for i in lines.indices where lines[i].hasPrefix("ZEN_API_KEY=") {
+            lines[i] = "ZEN_API_KEY=\(key)"
+            replaced = true
+        }
+        if !replaced { lines.append("ZEN_API_KEY=\(key)") }
+        let body = lines.joined(separator: "\n").trimmingCharacters(in: .newlines) + "\n"
+        try? body.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
 
     /// 删除已存 Key（Keychain + App Group 共享存储），幂等

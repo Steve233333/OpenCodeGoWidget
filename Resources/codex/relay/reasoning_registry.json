@@ -268,5 +268,12 @@
  ],
  "minimax-m3.1-flash-free": [
   "high"
+ ],
+ "space-bunny-free": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
  ]
 }

@@ -102,6 +102,14 @@ if [ "${SKIP_KEYCHAIN_PARSE_TEST:-0}" != "1" ] && [ -x "scripts/test-keychain-pa
   fi
 fi
 
+echo "==> 模型档位一致性自检（models.json ↔ reasoning_registry.json）"
+if [ "${SKIP_MODEL_REGISTRY_TEST:-0}" != "1" ] && [ -x "scripts/test-model-registry-sync.sh" ]; then
+  if ! "scripts/test-model-registry-sync.sh"; then
+    echo "!! 模型档位不同步，先修好再打包"
+    exit 1
+  fi
+fi
+
 # 2026-10-03：patch.sh 是「会不会把用户 Codex 副本搞坏」的唯一开关（clang 编译失败仍继续 →
 # 主可执行文件缺失；框架摘要不同步 → 启动即 FATAL）。它的修复曾经只落在本机、又被包内旧版按内容
 # 覆盖回来（安装器 sync_newer_file 是"内容不同就用包里的"），所以把四条护栏 + 行为用例钉进门禁。
