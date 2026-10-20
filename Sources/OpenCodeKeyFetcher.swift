@@ -29,6 +29,81 @@ enum OpenCodeKeyFetcher {
     /// 与 Safari 对齐的 UA，降低登录页/风控把内嵌浏览器当机器人拦的概率
     static let safariUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
 
+    /// 当前控制台只需要 `__Host-console_session`（st_…）；`auth` 是旧站 Cookie。
+    /// 这里把用户粘贴的原始值归一化，避免把 st_ 错存进 auth 栏（2026-10-20 事故）。
+    struct PastedCredential: Equatable {
+        var auth: String?
+        var session: String?
+        var workspaceID: String?
+    }
+
+    static func classifyPastedCredential(_ raw: String) -> PastedCredential {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return PastedCredential() }
+        let ws = workspaceID(fromURL: text)
+        // 整段 Cookie 头：抓出两个名字对应的值
+        if text.contains("=") {
+            let pairs = text.split(separator: ";").map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            var auth: String?
+            var session: String?
+            for pair in pairs {
+                let pieces = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                guard pieces.count == 2 else { continue }
+                let name = pieces[0].trimmingCharacters(in: .whitespaces)
+                let value = pieces[1].trimmingCharacters(in: .whitespaces)
+                if name == "auth" { auth = value }
+                if name == "__Host-console_session" || name == "console_session" { session = value }
+            }
+            if auth != nil || session != nil {
+                return PastedCredential(auth: auth, session: session, workspaceID: ws)
+            }
+        }
+        if text.hasPrefix("st_") {
+            return PastedCredential(session: text, workspaceID: ws)
+        }
+        if text.hasPrefix("Fe26.") {
+            return PastedCredential(auth: text, workspaceID: ws)
+        }
+        return PastedCredential(workspaceID: ws?.isEmpty == false ? ws : nil)
+    }
+
+    /// 新控制台用会话换取可见工作区：GET /console/api/orgs。
+    static func fetchWorkspaceIDs(authCookie: String, consoleSession: String) async throws -> [String] {
+        guard let url = URL(string: "https://opencode.ai/console/api/orgs") else {
+            throw FetchError.badResponse(0)
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 20
+        req.setValue(consoleCookieHeader(auth: authCookie, session: consoleSession),
+                     forHTTPHeaderField: "Cookie")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue(safariUserAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("https://opencode.ai/console", forHTTPHeaderField: "Referer")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200...299).contains(code) else { throw FetchError.badResponse(code) }
+        return parseWorkspaceIDs(data)
+    }
+
+    static func parseWorkspaceIDs(_ data: Data) -> [String] {
+        guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        var seen = Set<String>()
+        return arr.compactMap { item in
+            guard let id = item["id"] as? String, id.hasPrefix("wrk_"), seen.insert(id).inserted else { return nil }
+            return id
+        }
+    }
+
+    /// 控制台 Cookie 的唯一拼装：只发存在的字段，绝不产生 `auth=` 空值。
+    static func consoleCookieHeader(auth: String, session: String) -> String {
+        var parts = ["oc_locale=zh"]
+        if !auth.isEmpty { parts.append("auth=\(auth)") }
+        if !session.isEmpty { parts.append("__Host-console_session=\(session)") }
+        return parts.joined(separator: "; ")
+    }
+
     /// 拉取 workspace 密钥页 HTML
     static func fetchKeysHTML(workspaceID: String, authCookie: String) async throws -> String {
         guard let url = URL(string: "https://opencode.ai/workspace/\(workspaceID)/keys") else {

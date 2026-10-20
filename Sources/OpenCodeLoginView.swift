@@ -38,14 +38,36 @@ final class AccountSession: ObservableObject {
 
     init() { reload() }
 
+    /// 只要出现会话，就补工作区（页面不一定经过 /workspace/<wrk>/ 链接）。
+    func refreshLoginState() {
+        reload()
+        if hasCookie { Task { await resolveWorkspaceIfNeeded() } }
+    }
+
     func reload() {
         workspaceID = defaults?.string(forKey: "workspaceID") ?? ""
-        hasCookie = !(defaults?.string(forKey: "authCookie") ?? "").isEmpty
+        let session = defaults?.string(forKey: "consoleSession") ?? ""
+        let auth = defaults?.string(forKey: "authCookie") ?? ""
+        // 2026-10-20：过去把 st_ 误存到 authCookie；读的时候自动迁移。
+        if session.isEmpty && auth.hasPrefix("st_") {
+            defaults?.set(auth, forKey: "consoleSession")
+            defaults?.removeObject(forKey: "authCookie")
+            hasCookie = true
+        } else {
+            hasCookie = !session.isEmpty || !auth.isEmpty
+        }
+        // 会话已拿到但工作区为空：用 console/api/orgs 自动补齐（不阻塞 UI）。
+        if hasCookie && workspaceID.isEmpty {
+            Task { @MainActor [weak self] in await self?.resolveWorkspaceIfNeeded() }
+        }
         if hasCookie && !workspaceID.isEmpty, phase == .idle { phase = .loggedIn }
     }
 
     var cookieMasked: String {
-        guard let c = defaults?.string(forKey: "authCookie"), !c.isEmpty else { return "未保存" }
+        let session = defaults?.string(forKey: "consoleSession") ?? ""
+        let auth = defaults?.string(forKey: "authCookie") ?? ""
+        let c = session.isEmpty ? auth : session
+        guard !c.isEmpty else { return "未保存" }
         return "\(c.prefix(8))…（\(c.count) 字符）"
     }
 
@@ -63,30 +85,49 @@ final class AccountSession: ObservableObject {
             workspaceBecameAvailable = true
             defaults?.set(ws, forKey: "workspaceID")
         }
-        if (defaults?.string(forKey: "authCookie") ?? "") != cookie {
+        if !cookie.isEmpty, (defaults?.string(forKey: "authCookie") ?? "") != cookie {
             defaults?.set(cookie, forKey: "authCookie")
             cookieChanged = true
         }
-        hasCookie = true
+        reload()
         if phase != .fetching { phase = .loggedIn }
         NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
         WidgetCenter.shared.reloadAllTimelines()
         // Cookie 先于 workspace 重定向可见时，等 workspace 到位再拉一次
         guard cookieChanged || workspaceBecameAvailable || lastHandledCookie == nil else { return }
-        lastHandledCookie = cookie
-        Task { await fetchKeys(autoApply: cookieChanged) }
+        let session = defaults?.string(forKey: "consoleSession") ?? ""
+        lastHandledCookie = "\(workspace ?? "")|\(cookie)|\(session)"
+        Task {
+            await resolveWorkspaceIfNeeded()
+            await fetchKeys(autoApply: cookieChanged)
+        }
+    }
+
+    /// 新控制台可直接用 st_ 会话列出工作区；不再要求用户手填 wrk_。
+    func resolveWorkspaceIfNeeded() async {
+        guard workspaceID.isEmpty else { return }
+        let auth = defaults?.string(forKey: "authCookie") ?? ""
+        let session = defaults?.string(forKey: "consoleSession") ?? ""
+        guard !auth.isEmpty || !session.isEmpty else { return }
+        if let ids = try? await OpenCodeKeyFetcher.fetchWorkspaceIDs(authCookie: auth, consoleSession: session),
+           let first = ids.first {
+            workspaceID = first
+            defaults?.set(first, forKey: "workspaceID")
+            defaults?.synchronize()
+            NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
+        }
     }
 
     func fetchKeys(autoApply: Bool = false) async {
         reload()
-        guard hasCookie, !workspaceID.isEmpty,
-              let cookie = defaults?.string(forKey: "authCookie"), !cookie.isEmpty else {
+        guard hasCookie, !workspaceID.isEmpty else {
             phase = .error("还没有登录信息，请在下方浏览器里登录 opencode.ai")
             return
         }
         phase = .fetching
         statusText = "正在从 opencode.ai 拉取密钥…"
         do {
+            let cookie = defaults?.string(forKey: "authCookie") ?? ""
             let session = defaults?.string(forKey: "consoleSession") ?? ""
             let keys = try await OpenCodeKeyFetcher.fetchServiceAccounts(
                 workspaceID: workspaceID, authCookie: cookie, consoleSession: session)
@@ -129,6 +170,7 @@ final class AccountSession: ObservableObject {
 
     func clearLogin() {
         defaults?.removeObject(forKey: "authCookie")
+        defaults?.removeObject(forKey: "consoleSession")
         defaults?.removeObject(forKey: "workspaceID")
         defaults?.synchronize()
         workspaceID = ""
@@ -234,13 +276,19 @@ struct LoginWebView: NSViewRepresentable {
                         NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
                     }
                 }
-                guard let auth = cookies.first(where: {
+                // 新控制台页面不一定带 /workspace/<wrk>/ 路径；直接从 Cookie 库/orgs 自动补。
+                NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
+                let auth = cookies.first(where: {
                     $0.name == "auth" && $0.domain.contains("opencode.ai") && !$0.value.isEmpty
-                }) else { return }
-                let token = "\(ws ?? "")|\(auth.value)"
+                })
+                let session = cookies.first(where: {
+                    $0.name == "__Host-console_session" && $0.domain.contains("opencode.ai") && !$0.value.isEmpty
+                })
+                guard auth != nil || session != nil else { return }
+                let token = "\(ws ?? "")|\(auth?.value ?? "")|\(session?.value ?? "")"
                 guard token != self.lastNotified else { return }
                 self.lastNotified = token
-                DispatchQueue.main.async { self.parent.onLoginDetected(ws, auth.value) }
+                DispatchQueue.main.async { self.parent.onLoginDetected(ws, auth?.value ?? "") }
             }
         }
     }
@@ -277,6 +325,9 @@ struct LoginSheetView: View {
         }
         .frame(width: 820, height: 660)
         .onAppear { session.reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .openCodeGoCredentialsChanged)) { _ in
+            session.refreshLoginState()
+        }
     }
 
     private var header: some View {

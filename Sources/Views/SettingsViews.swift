@@ -49,7 +49,7 @@ struct GoSettingsContent: View {
     @State private var confirmClearKey = false
     @State private var confirmClearWS = false
     @State private var workspaceID: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "workspaceID") ?? ""
-    @State private var authCookie: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "authCookie") ?? ""
+    @State private var authCookie: String = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "consoleSession") ?? UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "authCookie") ?? ""
     @State private var harStatus: String = ""
     @State private var showFileImporter = false
     @State private var launchAtLogin: Bool = {
@@ -117,7 +117,7 @@ struct GoSettingsContent: View {
                 if !harStatus.isEmpty { Text(harStatus).font(.caption2).foregroundStyle(.green) }
                 Spacer()
             }
-            TextField("auth Cookie（或直接选 HAR 自动填）", text: $authCookie)
+            TextField("控制台会话 st_...（或直接选 HAR 自动填）", text: $authCookie)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption2)
             HStack(spacing: 6) {
@@ -184,12 +184,14 @@ struct GoSettingsContent: View {
                         }
                     }
                     let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+                    // 2026-10-20：同一个输入框可能粘贴 auth（Fe26…）或新版会话（st_…），
+                    // 按值归类，避免把 st_ 写进 authCookie 后“界面有值、接口仍缺会话”。
+                    let pasted = OpenCodeKeyFetcher.classifyPastedCredential(ac)
+                    if let pws = pasted.workspaceID, ws.isEmpty { ws = pws }
                     d?.set(ws, forKey: "workspaceID")
-                    // Only store real cookie (539B), never HAR path
                     if !ac.isEmpty && !ac.hasSuffix(".har") && !ac.contains(".har") {
-                        d?.set(ac, forKey: "authCookie")
-                    } else if ac.isEmpty {
-                        // keep existing if new is empty
+                        if let auth = pasted.auth { d?.set(auth, forKey: "authCookie") }
+                        if let sess = pasted.session { d?.set(sess, forKey: "consoleSession") }
                     }
                     WidgetCenter.shared.reloadAllTimelines()
                     dismiss()
@@ -197,7 +199,7 @@ struct GoSettingsContent: View {
                 Button("取消", role: .cancel) { dismiss() }
                 Spacer()
             }
-            Text("提示：柱状图需要 workspace 裸ID (wrk_...) 与 539B auth Cookie；粘贴 .har 路径或 https://.../workspace/wrk_.../usage 全链路时会在保存时即时解析为真实 Cookie 存入 App Group，无需手动复制。点上方「浏览器登录自动获取」可一步完成。")
+            Text("提示：新版控制台只需要 workspace ID (wrk_...) 与控制台会话（st_...）；粘贴 HAR、完整 Cookie 头或会话值都可以，保存时会按类型归类。点上方「浏览器登录自动获取」可一步完成。")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
 
             Divider()
@@ -241,7 +243,7 @@ struct GoSettingsContent: View {
             refreshStoredKeyMask()
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
             var storedWS = d?.string(forKey: "workspaceID") ?? ""
-            var storedAuth = d?.string(forKey: "authCookie") ?? ""
+            var storedAuth = d?.string(forKey: "consoleSession") ?? d?.string(forKey: "authCookie") ?? ""
             // Legacy migration: if stored values are still HAR path or full URL, parse in host process now
             if storedWS.contains("/workspace/"), let r = storedWS.range(of: "/workspace/") {
                 let rest = String(storedWS[r.upperBound...])
@@ -309,7 +311,7 @@ struct GoSettingsContent: View {
         .onReceive(NotificationCenter.default.publisher(for: .openCodeGoCredentialsChanged)) { _ in
             let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
             workspaceID = d?.string(forKey: "workspaceID") ?? ""
-            authCookie = d?.string(forKey: "authCookie") ?? ""
+            authCookie = d?.string(forKey: "consoleSession") ?? d?.string(forKey: "authCookie") ?? ""
         }
         .alert("清除已存 Key？", isPresented: $confirmClearKey) {
             Button("清除", role: .destructive) { clearStoredKey() }
@@ -346,6 +348,7 @@ struct GoSettingsContent: View {
         let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
         d?.removeObject(forKey: "workspaceID")
         d?.removeObject(forKey: "authCookie")
+        d?.removeObject(forKey: "consoleSession")
         d?.synchronize()
         workspaceID = ""
         authCookie = ""

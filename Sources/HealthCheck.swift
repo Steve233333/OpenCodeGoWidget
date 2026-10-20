@@ -163,9 +163,10 @@ enum HealthCheck {
         _ = await CookieSync.syncAuthCookie()
         let ws = groupValue("workspaceID")
         let cookie = groupValue("authCookie")
-        if ws.isEmpty || cookie.isEmpty {
+        let session = groupValue("consoleSession")
+        if ws.isEmpty || (cookie.isEmpty && session.isEmpty) {
             items.append(HealthItem(level: .warn, title: "费用凭据",
-                                    detail: "workspace \(ws.isEmpty ? "缺" : "有") · authCookie \(cookie.isEmpty ? "缺" : "有") → 费用图/额度不会更新；点「浏览器登录自动获取」"))
+                                    detail: "workspace \(ws.isEmpty ? "缺" : "有") · authCookie \(cookie.isEmpty ? "缺" : "有") · consoleSession \(session.isEmpty ? "缺" : "有") → 费用图/额度不会更新；点「浏览器登录自动获取」"))
         } else {
             let (level, detail) = await testCostCredentials(ws, cookie)
             let lib = await CookieSync.describeCookies()

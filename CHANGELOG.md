@@ -2,6 +2,24 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.69 — 登录后自动填入 workspace 与控制台会话
+
+**现象**：用户登录 opencode.ai 后，设置页的 workspace 仍为空；手动把 `st_...` 填进“auth Cookie”后状态显示“已配置”，但费用图和按 Key 视图仍不刷新。
+
+**根因**：新控制台已改为只认 `__Host-console_session`（`st_...`），`auth` 不再是必需项。旧代码却仍把 `auth` 当必需 Cookie，并把单框里粘贴的 `st_...` 原样写进 `authCookie`；登录回调也只保存了 session、没保存 workspace，形成“有会话、无工作区”的半截状态。
+
+**修法**：
+
+- 登录成功即可判定已登录：`auth` 或 `consoleSession` 任一存在即可，不再要求旧 `auth`。
+- 登录后调用 `GET /console/api/orgs` 自动取得第一个 `wrk_...`；刷新/启动时也会自动补齐。
+- 单框按值归类：`st_...` 写入 `consoleSession`、`Fe26...` 写入 `authCookie`、完整 Cookie 头自动拆分、workspace URL 自动提取 `wrk_...`。
+- 启动时迁移历史上误存进 `authCookie` 的 `st_...`；状态文案和输入框改为“控制台会话”。
+- 新增凭据归类与 workspace 列表解析回归，进入 `build.sh --test`。
+
+**验证**：实测同一 `st_...` 会话访问 `go/status`、`service-accounts`、`usage/cost-by-day` 均 200；本机 `/responses` 200；全量门槛与 Release 资产 sha256 校验见发版结果。
+
+版本 **1.1.11.69 (109)**。
+
 ### v1.1.11.68 — 修「下载包包含外部路径引用」误拒（66 无法升级到 67）
 
 **现象**：另一台电脑停在 1.1.11.66，检查更新提示

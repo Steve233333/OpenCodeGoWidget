@@ -58,6 +58,29 @@ func testInactiveServiceAccount() {
     keyCheck(keys.first?.id == "key_new", "只保留 active 服务账号的 Key")
 }
 
+func testCredentialClassification() {
+    print("— 登录凭据归类 —")
+    let session = OpenCodeKeyFetcher.classifyPastedCredential("st_297524e3-c5d5-4843-8dcc-86b9cac4d9d1")
+    keyCheck(session.session == "st_297524e3-c5d5-4843-8dcc-86b9cac4d9d1" && session.auth == nil,
+             "st_ 会话归到 consoleSession，不会塞进 authCookie")
+    let auth = OpenCodeKeyFetcher.classifyPastedCredential("Fe26.2**abc*def")
+    keyCheck(auth.auth == "Fe26.2**abc*def" && auth.session == nil, "Fe26 旧 auth 仍可识别")
+    let header = OpenCodeKeyFetcher.classifyPastedCredential(
+        "oc_locale=zh; auth=Fe26.2**abc; __Host-console_session=st_123")
+    keyCheck(header.auth == "Fe26.2**abc" && header.session == "st_123", "完整 Cookie 头拆分正确")
+    let ws = OpenCodeKeyFetcher.classifyPastedCredential(
+        "https://opencode.ai/console/wrk_01KT9VX0KZCD5SYNXH8D3EYJD8/usage")
+    keyCheck(ws.workspaceID == "wrk_01KT9VX0KZCD5SYNXH8D3EYJD8", "workspace 链接可提取 wrk_")
+    keyCheck(OpenCodeKeyFetcher.consoleCookieHeader(auth: "", session: "st_123")
+             == "oc_locale=zh; __Host-console_session=st_123", "缺 auth 时不产生 auth= 空值")
+}
+
+func testWorkspaceListParse() {
+    let data = #"[{"id":"wrk_01KT9VX0KZCD5SYNXH8D3EYJD8","name":"Steve233"},{"id":"bad"}]"#.data(using: .utf8)!
+    keyCheck(OpenCodeKeyFetcher.parseWorkspaceIDs(data) == ["wrk_01KT9VX0KZCD5SYNXH8D3EYJD8"],
+             "console/api/orgs 只取 wrk_ 工作区")
+}
+
 // swiftc 多文件编译时只有 main.swift 允许顶层语句，所以这里用 @main 包一层
 @main
 struct KeyParseTestRunner {
@@ -65,6 +88,8 @@ struct KeyParseTestRunner {
         testKeyParse()
         testWorkspaceID()
         testInactiveServiceAccount()
+        testCredentialClassification()
+        testWorkspaceListParse()
 
         if keyFailures.isEmpty {
             print("\n全部通过 ✅")

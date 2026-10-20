@@ -37,6 +37,9 @@ final class UsageScheduler: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        // 用户可能在旧版里留下了“st_ 存进了 authCookie / 没存 workspace”的半截登录态；
+        // 启动时先规整一次，避免费用图要用户手动重填。
+        migrateCredentialShapeIfNeeded()
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -52,6 +55,17 @@ final class UsageScheduler: ObservableObject {
         Task { @MainActor in
             guard let self = UsageScheduler.shared as UsageScheduler? else { return }
             await self.refreshIfStale(reason: "启动")
+        }
+    }
+
+    private func migrateCredentialShapeIfNeeded() {
+        let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        let auth = d?.string(forKey: "authCookie") ?? ""
+        let session = d?.string(forKey: "consoleSession") ?? ""
+        if session.isEmpty, auth.hasPrefix("st_") {
+            d?.set(auth, forKey: "consoleSession")
+            d?.removeObject(forKey: "authCookie")
+            d?.synchronize()
         }
     }
 
@@ -86,6 +100,8 @@ final class UsageScheduler: ObservableObject {
             return first ?? false
         }
         do {
+            // 登录会话可能刚更新、工作区仍为空；刷新前用会话自动补一次，避免“登录了但费用图不动”。
+            await autofillWorkspaceIfPossible()
             let snap = try await WidgetSnapshotRefresher.fetch(forceKeys: true)
             WidgetDataStore.save(snap)
             lastRefreshAt = Date()
@@ -107,6 +123,21 @@ final class UsageScheduler: ObservableObject {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             lastError = msg
             logger.error("刷新（\(reason, privacy: .public)）失败：\(msg, privacy: .public)（保留旧快照）")
+        }
+    }
+
+    private func autofillWorkspaceIfPossible() async {
+        let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        let ws = d?.string(forKey: "workspaceID") ?? ""
+        guard ws.isEmpty else { return }
+        let auth = d?.string(forKey: "authCookie") ?? ""
+        let session = d?.string(forKey: "consoleSession") ?? ""
+        guard !auth.isEmpty || !session.isEmpty else { return }
+        if let ids = try? await OpenCodeKeyFetcher.fetchWorkspaceIDs(authCookie: auth, consoleSession: session),
+           let first = ids.first {
+            d?.set(first, forKey: "workspaceID")
+            d?.synchronize()
+            logger.info("自动补齐工作区：\(first)")
         }
     }
 }

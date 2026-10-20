@@ -16,8 +16,7 @@ final class CostCrawler: @unchecked Sendable {
     /// 抓不到就返回 nil，上层保留旧快照 —— 2026-09-23 Phase 1 起不再回落老 `/_server`／HAR 缓存
     /// （那个接口早已 404，回落只会把 9/19 的陈旧数字当成本日数据，比"报错"更难查）。
     func fetchBillingCycleCosts(workspaceID: String, authCookie: String, monthlyReset: Date) async -> MonthlyCost? {
-        if workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-           authCookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             logger.info("CostCrawler: billing fetch skipped — workspace credentials missing")
             return nil
         }
