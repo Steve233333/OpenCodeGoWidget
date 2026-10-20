@@ -66,11 +66,6 @@ if [[ -z "${AVAIL_SLUGS:-}" ]]; then
   die "可用模型列表为空：模板/当前 Key 过滤后没有任何模型，配置文件未覆盖。"
 fi
 
-# 刚才那段 Python 写文件失败时，别继续把“已生成”写进日志。
-if [[ ! -s "$CODEX_HOME/config.toml" ]]; then
-  die "config.toml 写入失败或为空：${CODEX_HOME}/config.toml"
-fi
-
 USE_PROXY=0
 if [[ "$HAS_GO" -eq 1 ]]; then
   USE_PROXY=1
@@ -91,47 +86,79 @@ else
   BEARER="sk-relay-placeholder"
 fi
 
-python3 - "$RES_DIR/templates/config.toml" "$CODEX_HOME/config.toml" \
-  "$DEFAULT_MODEL" "$EXTRACT_MODEL" "$BASE_URL" "$BEARER" <<'PY'
-import os, re, sys
+_config_out="$(python3 - "$RES_DIR/templates/config.toml" "$CODEX_HOME/config.toml" \
+  "$DEFAULT_MODEL" "$EXTRACT_MODEL" "$BASE_URL" "$BEARER" 2>&1 <<'PY'
+import os, re, sys, tempfile
 src, dst, default_model, extract_model, base_url, bearer = sys.argv[1:7]
-if os.path.exists(dst) and open(dst).read().strip():
-    out = open(dst).read()
-    out = re.sub(r"^model\s*=.*", f'model = "{default_model}"', out, flags=re.MULTILINE)
-    out = re.sub(r"^model_reasoning_effort\s*=.*", 'model_reasoning_effort = "low"', out, flags=re.MULTILINE)
-    out = re.sub(r"base_url\s*=.*", f'base_url = "{base_url}"', out)
-    # 2026-09-19：以前这行只会"替换已存在的行"。被「清除」按钮删过、或老配置里本来就没这行时，
-    # 再点多少次「配置」也补不回来 —— Codex 发的请求于是没有 Authorization，
-    # 上游回 401 AuthError: Missing API key（带 cf-ray，看着像网络问题，其实是缺凭据）。
-    if re.search(r"(?m)^[ \t]*experimental_bearer_token[ \t]*=", out):
-        out = re.sub(r"experimental_bearer_token\s*=.*", f'experimental_bearer_token = "{bearer}"', out)
-    elif re.search(r"(?m)^wire_api[ \t]*=", out):
-        out = re.sub(r"(?m)^(wire_api[ \t]*=.*)$",
-                     lambda m: m.group(1) + f'\nexperimental_bearer_token = "{bearer}"', out, count=1)
-    elif re.search(r"(?m)^\[model_providers\.", out):
-        out = re.sub(r"(?m)^(\[model_providers\.[^\]]+\]\n)",
-                     lambda m: m.group(1) + f'experimental_bearer_token = "{bearer}"\n', out, count=1)
+
+try:
+    existing = ""
+    if os.path.exists(dst):
+        with open(dst, encoding="utf-8") as handle:
+            existing = handle.read()
+    if existing.strip():
+        out = existing
     else:
-        out = out.rstrip("\n") + f'\nexperimental_bearer_token = "{bearer}"\n'
-    out = re.sub(r"extract_model\s*=.*", f'extract_model = "{extract_model}"', out)
-    out = re.sub(r"consolidation_model\s*=.*", f'consolidation_model = "{extract_model}"', out)
-    # 默认关闭记忆以省 token，用户可在 config.toml 手动改回 true
-    out = re.sub(r"^generate_memories\s*=.*", 'generate_memories = false', out, flags=re.MULTILINE)
-    out = re.sub(r"^use_memories\s*=.*", 'use_memories = false', out, flags=re.MULTILINE)
-    out = re.sub(r"^disable_on_external_context\s*=.*", 'disable_on_external_context = true', out, flags=re.MULTILINE)
-    out = re.sub(r"^\[features\]\s*\nmemories\s*=.*", '[features]\nmemories = false', out, flags=re.MULTILINE)
-    if 'max_rollouts_per_startup' not in out:
-        out = re.sub(r"^(disable_on_external_context\s*=.*)", r"\1\nmax_rollouts_per_startup = 2", out, flags=re.MULTILINE)
-    open(dst, "w").write(out)
-else:
-    text = open(src).read()
-    text = text.replace("__DEFAULT_MODEL__", default_model)
-    text = text.replace("__REASONING_EFFORT__", "low")
-    text = text.replace("__BASE_URL__", base_url)
-    text = text.replace("__BEARER__", bearer)
-    text = text.replace("__EXTRACT_MODEL__", extract_model)
-    text = text.replace("__CONSOLIDATION_MODEL__", extract_model)
-    open(dst, "w").write(text)
+        with open(src, encoding="utf-8") as handle:
+            text = handle.read()
+        text = text.replace("__DEFAULT_MODEL__", default_model)
+        text = text.replace("__REASONING_EFFORT__", "low")
+        text = text.replace("__BASE_URL__", base_url)
+        text = text.replace("__BEARER__", bearer)
+        text = text.replace("__EXTRACT_MODEL__", extract_model)
+        text = text.replace("__CONSOLIDATION_MODEL__", extract_model)
+        out = text
+
+    if existing.strip():
+        out = re.sub(r"^model\s*=.*", f'model = "{default_model}"', out, flags=re.MULTILINE)
+        out = re.sub(r"^model_reasoning_effort\s*=.*", 'model_reasoning_effort = "low"', out, flags=re.MULTILINE)
+        out = re.sub(r"base_url\s*=.*", f'base_url = "{base_url}"', out)
+        # 2026-09-19：以前这行只会"替换已存在的行"。被「清除」按钮删过、或老配置里本来就没这行时，
+        # 再点多少次「配置」也补不回来 —— Codex 发的请求于是没有 Authorization，
+        # 上游回 401 AuthError: Missing API key（带 cf-ray，看着像网络问题，其实是缺凭据）。
+        if re.search(r"(?m)^[ \t]*experimental_bearer_token[ \t]*=", out):
+            out = re.sub(r"experimental_bearer_token\s*=.*", f'experimental_bearer_token = "{bearer}"', out)
+        elif re.search(r"(?m)^wire_api[ \t]*=", out):
+            out = re.sub(r"(?m)^(wire_api[ \t]*=.*)$",
+                         lambda m: m.group(1) + f'\nexperimental_bearer_token = "{bearer}"', out, count=1)
+        elif re.search(r"(?m)^\[model_providers\.", out):
+            out = re.sub(r"(?m)^(\[model_providers\.[^\]]+\]\n)",
+                         lambda m: m.group(1) + f'experimental_bearer_token = "{bearer}"\n', out, count=1)
+        else:
+            out = out.rstrip("\n") + f'\nexperimental_bearer_token = "{bearer}"\n'
+        out = re.sub(r"extract_model\s*=.*", f'extract_model = "{extract_model}"', out)
+        out = re.sub(r"consolidation_model\s*=.*", f'consolidation_model = "{extract_model}"', out)
+        # 默认关闭记忆以省 token，用户可在 config.toml 手动改回 true
+        out = re.sub(r"^generate_memories\s*=.*", 'generate_memories = false', out, flags=re.MULTILINE)
+        out = re.sub(r"^use_memories\s*=.*", 'use_memories = false', out, flags=re.MULTILINE)
+        out = re.sub(r"^disable_on_external_context\s*=.*", 'disable_on_external_context = true', out, flags=re.MULTILINE)
+        out = re.sub(r"^\[features\]\s*\nmemories\s*=.*", '[features]\nmemories = false', out, flags=re.MULTILINE)
+        if 'max_rollouts_per_startup' not in out:
+            out = re.sub(r"^(disable_on_external_context\s*=.*)", r"\1\nmax_rollouts_per_startup = 2", out, flags=re.MULTILINE)
+
+    if not out.strip():
+        raise ValueError("生成的 config.toml 为空")
+
+    parent = os.path.dirname(dst) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".config.toml.", suffix=".tmp", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(out)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, dst)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+except Exception as exc:
+    print(f"CONFIG_WRITE_FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+    raise
 PY
-chmod 600 "$CODEX_HOME/config.toml"
+)"
+_config_rc=$?
+if [[ "$_config_rc" -ne 0 || ! -s "$CODEX_HOME/config.toml" ]]; then
+  die "config.toml 写入失败：${_config_out:-未知错误}（目标：${CODEX_HOME}/config.toml）"
+fi
+chmod 600 "$CODEX_HOME/config.toml" 2>/dev/null || die "config.toml 已写入，但无法设置 600 权限：${CODEX_HOME}/config.toml"
 log "config.toml 已生成（默认模型 ${DEFAULT_MODEL}，记忆模型 ${EXTRACT_MODEL}，base_url ${BASE_URL}，记忆默认关闭）"
