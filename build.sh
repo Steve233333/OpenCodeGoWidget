@@ -118,6 +118,14 @@ if [ "${SKIP_CONFIG_TEST:-0}" != "1" ] && [ -x "scripts/test-config-generation.s
   fi
 fi
 
+echo "==> 更新包安全自检（旧版更新器可接受新包 / 旧服务收口保留）"
+if [ "${SKIP_RELEASE_SAFETY_TEST:-0}" != "1" ] && [ -x "scripts/test-release-safety.sh" ]; then
+  if ! "scripts/test-release-safety.sh"; then
+    echo "!! 更新包安全自检没过，先修好再打包"
+    exit 1
+  fi
+fi
+
 # 2026-10-03：patch.sh 是「会不会把用户 Codex 副本搞坏」的唯一开关（clang 编译失败仍继续 →
 # 主可执行文件缺失；框架摘要不同步 → 启动即 FATAL）。它的修复曾经只落在本机、又被包内旧版按内容
 # 覆盖回来（安装器 sync_newer_file 是"内容不同就用包里的"），所以把四条护栏 + 行为用例钉进门禁。

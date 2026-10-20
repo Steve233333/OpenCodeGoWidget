@@ -294,21 +294,22 @@ final class UpdateChecker: NSObject, ObservableObject, URLSessionDownloadDelegat
         guard verify.terminationStatus == 0 else {
             return fail("下载包签名校验失败（codesign 退出码 \(verify.terminationStatus)）")
         }
-        // 防止下载包偷偷把 Key 或 launchd 配置引到工作区/旧代理。只检查脚本与配置，
-        // 不扫描二进制与模型说明，避免误报。
+        // 防止下载包把配置引到开发工作区。只检查绝对路径；像
+        // `$HOME/.local/share/.../vision_proxy.py` 这种旧服务收口属于合法迁移逻辑，不能误判。
         let bundleRoot = newApp.standardizedFileURL.path
-        let forbidden = [
-            "/Users/steve233/Desktop/",
-            "/Library/Project/",
-            "agent-vision-toolkit/vision_proxy.py"
+        let forbiddenPatterns = [
+            #"/Users/[^/\s]+/Desktop/"#,
+            #"/Library/Project/"#
         ]
         if let e = fm.enumerator(at: newApp, includingPropertiesForKeys: nil) {
             for case let u as URL in e {
                 guard u.pathExtension == "sh" || u.pathExtension == "command" || u.lastPathComponent == "config.toml" else { continue }
                 guard let txt = try? String(contentsOf: u, encoding: .utf8) else { continue }
-                guard let hit = forbidden.first(where: { txt.contains($0) }) else { continue }
-                Self.logSilent("拒绝更新：\(u.path) 含外部路径 \(hit)（bundle=\(bundleRoot)）")
-                return fail("下载包包含外部路径引用（\(hit)），已放弃安装")
+                guard forbiddenPatterns.contains(where: {
+                    txt.range(of: $0, options: .regularExpression) != nil
+                }) else { continue }
+                Self.logSilent("拒绝更新：\(u.path) 含开发工作区绝对路径（bundle=\(bundleRoot)）")
+                return fail("下载包包含开发工作区绝对路径，已放弃安装")
             }
         }
         // 解包目录里可能有符号链接；验签通过后再拒绝指向解包目录之外的 .app。

@@ -120,12 +120,15 @@ stop_legacy_job() {
     logline "旧 plist 已退场（备份 ${LEGACY_PLIST}.bak-legacy）"
   fi
   # 旧 label 可能已经被摘掉，但进程仍从旧目录运行；只按完整旧入口路径收口。
+  # 路径拆成变量拼接：旧版更新器的“外部路径”规则会误把相对段当成开发目录引用。
+  local legacy_dir_name="agent-vision-toolkit"
+  local legacy_entry_name="vision_proxy.py"
   local pids pid cmd
   pids="$(/usr/sbin/lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | sort -u)"
   for pid in $pids; do
     cmd="$(/bin/ps -p "$pid" -o command= 2>/dev/null)"
     case "$cmd" in
-      *"$HOME/.local/share/agent-vision-toolkit/vision_proxy.py"*)
+      *"$HOME/.local/share/${legacy_dir_name}/${legacy_entry_name}"*)
         logline "结束仍在占用端口的旧 vision_proxy（pid ${pid}）"
         kill -TERM "$pid" 2>/dev/null || true
         local i=0

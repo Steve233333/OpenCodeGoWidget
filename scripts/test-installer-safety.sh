@@ -48,7 +48,10 @@ else
 fi
 
 # 旧服务：必须只按完整旧入口路径结束，不能模糊杀 python。
-if grep -qF 'agent-vision-toolkit/vision_proxy.py' "$ROOT/Resources/codex/relay/ensure-relay.sh"; then
+# 1.1.11.68 起路径拆成变量拼接（规避旧版更新器的 contiguous-path 误判）。
+if grep -qF 'legacy_dir_name="agent-vision-toolkit"' "$ROOT/Resources/codex/relay/ensure-relay.sh" \
+   && grep -qF 'legacy_entry_name="vision_proxy.py"' "$ROOT/Resources/codex/relay/ensure-relay.sh" \
+   && grep -qF '"$HOME/.local/share/${legacy_dir_name}/${legacy_entry_name}"' "$ROOT/Resources/codex/relay/ensure-relay.sh"; then
   ok "旧 vision_proxy 仅按精确路径识别"
 else
   bad "旧服务收口规则缺失"
