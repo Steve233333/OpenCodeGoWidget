@@ -2,6 +2,35 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.70 — 联网搜索换 hosted MCP，推理档位与模型目录不再漂移
+
+**现象**：
+
+- LongCat 2.5 Preview Free、MiniMax M3.1 Flash Free 等免费模型联网时，答案正文里漏出 `<anthropic:function_calls>` 这类工具标记；MiniMax 明明已经拿到搜索结果，却回答“我无法进行实时网络搜索”。
+- MiniMax M3.1 Flash Free 在 Codex 选择器里是五档（low/medium/high/xhigh/max），但代理真正读取的档位表里只有 `high` —— 换机器或重建小组件后会退档。
+- 模型目录模板停在 9 月 27 日：Step 5 Preview、Beam Free、MiniMax M3.1 Flash Free、Claude Haiku 5.5、Gemini 4 Argon Contributor 这 5 个新模型只存在于本机目录，新装机器拿不到。
+
+**根因**：
+
+- 联网旁路只走 DeepSeek 代搜。网关把 DeepSeek 的工具调用当作正文回填，于是“工具标记”和“无法联网”这类无效结果一起进了用户可见文本。
+- 代理读的 `reasoning_registry.json` 由目录生成，但仓库里那份没有随目录更新（运行时那份是新的、仓库那份是旧的），两边长期漂移。
+- 模板 `models.json` 与真实目录脱节，`test-model-registry-sync.sh` 只校验“模板 ↔ 档位表”，查不出模板本身缺模型。
+
+**修法**：
+
+- 联网旁路改成 **Exa / Parallel hosted MCP 直搜优先，DeepSeek 代搜兜底**；结果统一清洗 Anthropic 工具标记，并拒绝“无法联网/无结果”这类无效回填。
+- 档位表与本机真源对齐：MiniMax M3.1 Flash Free 五档、MiMo v2.5/v2.6 三档、补回 Step 5 Preview。
+- 模板补 5 个新模型并修正 3 个 MiMo 档位（45 → 50 个模型），原条目一个不删。
+- 档位门禁增加新模型实测档位断言；新增 3 条离线回归（标记清洗 / 拒绝无效结果 / MCP 响应解析），代理混沌 57 → 60 例。
+
+**验证**：
+
+- 隔离端口 19101 实测：LongCat 流式 200（9.4s）、MiniMax M3.1 Flash Free 200（5.5s），正文无工具标记。
+- Exa hosted MCP 实测返回带标题 / URL / 发布时间的真实结果；MCP 响应 JSON、SSE 两种形态解析都过。
+- 漂移检查（仓库 ↔ 本机运行副本）全绿；`build.sh --test` 全绿。
+
+版本 **1.1.11.70 (110)**。
+
 ### v1.1.11.69 — 登录后自动填入 workspace 与控制台会话
 
 **现象**：用户登录 opencode.ai 后，设置页的 workspace 仍为空；手动把 `st_...` 填进“auth Cookie”后状态显示“已配置”，但费用图和按 Key 视图仍不刷新。
