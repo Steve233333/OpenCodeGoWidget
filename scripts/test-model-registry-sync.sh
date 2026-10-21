@@ -22,5 +22,17 @@ if missing or mismatch:
     for x in missing: print('  缺表:',x)
     for x in mismatch: print('  不一致:',x)
     sys.exit(1)
+# 新模型可能先被线上目录自动发现，模板还没同步。这里单列本轮已实测的档位，
+# 防止“运行时有五档、仓库真源又退回只有 high”的漂移。
+required = {
+    'beam-free': ['low', 'medium', 'high', 'xhigh', 'max'],
+    'minimax-m3.1-flash-free': ['low', 'medium', 'high', 'xhigh', 'max'],
+}
+bad_required = [(name, levels, registry.get(name)) for name, levels in required.items()
+                if registry.get(name) != levels]
+if bad_required:
+    print('❌ 新模型实测档位未同步：')
+    for x in bad_required: print(' ', x)
+    sys.exit(1)
 print(f'   ✅ {len(models)} 个模型的档位与 reasoning_registry 一致')
 PY

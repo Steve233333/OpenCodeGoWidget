@@ -720,6 +720,59 @@ def t_web_search_history_fuzz():
         assert stats["web_search_replayed"] == stats2["web_search_replayed"]
         assert stats["dropped_reasoning"] == stats2["dropped_reasoning"]
 
+
+def t_search_result_cleaning_removes_anthropic_markup():
+    raw = """
+Search results for '北京天气':
+<anthropic:function_calls>
+<anthropic:invoke name="web_search">
+<anthropic:parameter name="query">北京天气</anthropic:parameter>
+</anthropic:invoke>
+</anthropic:function_calls>
+Title: 北京天气
+URL: https://www.weather.com.cn/weather/101010100.shtml
+Highlights: 今天北京最高温 17°C，最低温 7°C。
+"""
+    cleaned = vp._clean_search_result(raw)
+    assert "anthropic:" not in cleaned
+    assert "function_calls" not in cleaned
+    assert "今天北京最高温 17°C" in cleaned
+    assert "https://www.weather.com.cn/" in cleaned
+    assert vp._search_result_is_usable(cleaned)
+
+
+def t_search_result_rejects_refusals_and_tool_traces():
+    refusal = "我无法进行实时网络搜索，因此不能为你抓取并总结北京今天天气。"
+    markup_only = (
+        "<anthropic:function_calls><anthropic:invoke name=\"web_search\">"
+        "<anthropic:parameter name=\"query\">北京天气</anthropic:parameter>"
+        "</anthropic:invoke></anthropic:function_calls>"
+    )
+    assert not vp._search_result_is_usable(refusal)
+    assert not vp._search_result_is_usable(markup_only)
+    assert not vp._search_result_is_usable("")
+    assert not vp._search_result_is_usable(None)
+
+
+def t_mcp_search_response_parser_json_and_sse():
+    json_body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"content": [{"type": "text", "text": "Title: x\nURL: https://example.com"}]},
+    })
+    sse_body = (
+        "event: message\n"
+        "data: " + json.dumps({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {"content": [{"type": "text", "text": "Title: y\nURL: https://example.org"}]},
+        }) + "\n"
+    )
+    assert vp._parse_mcp_search_response(json_body) == "Title: x\nURL: https://example.com"
+    assert vp._parse_mcp_search_response(sse_body) == "Title: y\nURL: https://example.org"
+    assert vp._parse_mcp_search_response("{bad json") is None
+
+
 def t_bodylimit_under_limit_untouched():
     """2026-09-30：没超限就一个字都不许改。"""
     os.environ["RELAY_MAX_BODY_MB"] = "10"

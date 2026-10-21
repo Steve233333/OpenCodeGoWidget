@@ -15,7 +15,7 @@ Codex ──▶ relay.py（薄入口 + 兼容 re-export）
               ├─ proxy/sse.py         SSE 改写引擎：帧分发 + apply_patch 参数拼接 + 终止修复 + 正文平滑
               ├─ proxy/toolfix.py     工具调用修补：坏 JSON 参数、历史里的 monster、MiMo XML→function_call
               ├─ proxy/muse.py        Muse 兼容：schema 修补、禁止空转前缀、空转重试、预算下限
-              ├─ proxy/search_sidecar.py  给没有原生搜索的模型合成 web_search（结果来自 deepseek 代搜）
+              ├─ proxy/search_sidecar.py  给没有原生搜索的模型合成 web_search（Exa/Parallel 优先，deepseek 兜底）
               │                             + 历史翻译件：查询词/调用 id/占位结果/合成工具定义（两个桥共用）
               └─ proxy/apply_patch.py apply_patch 工具描述改写（custom → function）
 ```

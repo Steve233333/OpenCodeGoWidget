@@ -17,6 +17,46 @@ from .config import (
 from .policy import has_native_search
 
 
+EXA_MCP_URL = "https://mcp.exa.ai/mcp"
+PARALLEL_MCP_URL = "https://search.parallel.ai/mcp"
+MCP_SEARCH_TIMEOUT = 5
+
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_SYSTEM_OPENER = urllib.request.build_opener()
+
+_ANTHROPIC_FUNCTION_BLOCK_RE = re.compile(
+    r"<anthropic:function_calls\b[^>]*>.*?(?:</anthropic:function_calls>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_GENERIC_FUNCTION_BLOCK_RE = re.compile(
+    r"<function_calls\b[^>]*>.*?(?:</function_calls>|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_XML_TOOL_TAG_RE = re.compile(
+    r"</?(?:anthropic:)?(?:function_calls|invoke|parameter)\b[^>]*>",
+    re.IGNORECASE,
+)
+_WEB_SEARCH_MARKER_RE = re.compile(
+    r"^\s*\[web_search_call\]\s*.*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_SEARCH_REFUSAL_MARKERS = (
+    "无法进行实时网络搜索",
+    "无法进行联网搜索",
+    "无法联网",
+    "不能为你抓取",
+    "不能联网",
+    "没有联网",
+    "i cannot search",
+    "i can't search",
+    "unable to search",
+    "cannot browse",
+    "can't browse",
+    "do not have access to the internet",
+    "don't have access to the internet",
+)
+
+
 def synthetic_web_search_tool():
     """合成 web_search 工具定义（Responses 格式）。
 
@@ -37,6 +77,146 @@ def synthetic_web_search_tool():
             "additionalProperties": False
         }
     }
+
+
+def _parse_mcp_search_response(raw):
+    """Extract the text block from an MCP JSON-RPC response (JSON or SSE)."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    if not isinstance(raw, str):
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+
+    def text_from_obj(obj):
+        if not isinstance(obj, dict):
+            return None
+        content = (obj.get("result") or {}).get("content") or []
+        texts = [
+            item.get("text")
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip()
+        ]
+        return "\n".join(texts) if texts else None
+
+    if raw.startswith("{"):
+        try:
+            direct = text_from_obj(json.loads(raw))
+            if direct:
+                return direct
+        except Exception:
+            pass
+    for line in raw.splitlines():
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            parsed = text_from_obj(json.loads(data))
+            if parsed:
+                return parsed
+        except Exception:
+            continue
+    return None
+
+
+def _clean_search_result(text):
+    """Remove third-party tool-call markup from a search result before replay."""
+    if not isinstance(text, str):
+        return ""
+    cleaned = _ANTHROPIC_FUNCTION_BLOCK_RE.sub("", text)
+    cleaned = _GENERIC_FUNCTION_BLOCK_RE.sub("", cleaned)
+    cleaned = _XML_TOOL_TAG_RE.sub("", cleaned)
+    cleaned = _WEB_SEARCH_MARKER_RE.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _search_result_is_usable(text):
+    """Reject refusals and empty tool-call traces; require evidence of a result set."""
+    cleaned = _clean_search_result(text)
+    if len(cleaned) < 60:
+        return False
+    lower = cleaned.lower()
+    if any(marker in lower for marker in _SEARCH_REFUSAL_MARKERS):
+        return False
+    if lower.startswith(("search for ", "search failed", "no search results found")):
+        return False
+    evidence_markers = (
+        "title:",
+        "url:",
+        "http://",
+        "https://",
+        '"results"',
+        '"search_id"',
+    )
+    return any(marker in lower for marker in evidence_markers)
+
+
+def _mcp_call_sync(url, tool, arguments, timeout=MCP_SEARCH_TIMEOUT):
+    """Call a public MCP search endpoint directly, then through the system proxy."""
+    body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": tool, "arguments": arguments},
+    }, ensure_ascii=False).encode()
+    errors = []
+    for mode, opener in (("direct", _DIRECT_OPENER), ("system", _SYSTEM_OPENER)):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=body,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "User-Agent": "agent-relay-search/1.0",
+                },
+            )
+            with opener.open(req, timeout=timeout) as response:
+                raw = response.read()
+            parsed = _parse_mcp_search_response(raw)
+            if parsed:
+                return parsed, None
+            errors.append(f"{mode}: empty response")
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            errors.append(f"{mode}: HTTP {exc.code} {raw[:160]}")
+        except Exception as exc:
+            errors.append(f"{mode}: {exc!r}")
+    return None, "; ".join(errors)
+
+
+def _search_mcp_sync(query):
+    """Try Exa then Parallel. Both are public hosted MCP endpoints."""
+    providers = (
+        (
+            "exa",
+            EXA_MCP_URL,
+            "web_search_exa",
+            {"query": query, "type": "auto", "numResults": 6, "livecrawl": "fallback"},
+        ),
+        (
+            "parallel",
+            PARALLEL_MCP_URL,
+            "web_search",
+            {"objective": query, "search_queries": [query]},
+        ),
+    )
+    errors = []
+    for name, url, tool, arguments in providers:
+        result, error = _mcp_call_sync(url, tool, arguments)
+        cleaned = _clean_search_result(result)
+        if _search_result_is_usable(cleaned):
+            return cleaned, name, None
+        if error:
+            errors.append(f"{name}: {error}")
+        else:
+            errors.append(f"{name}: unusable result")
+    return None, None, "; ".join(errors)
 
 
 def web_search_query_of(item):
@@ -85,7 +265,7 @@ def _inject_synthetic_web_search(parsed, model=None, go_route=False):
     """Inject synthetic web_search for all non-search Go models (无条件).
 
     接受后所有 mimo/glm/qwen/kimi 等都能通过 web_search 边车真搜
-    （DuckDuckGo 直连 3s 优先，deepseek 兜底），不再依赖 Codex 是否下发了原生 web_search。
+    （Exa/Parallel hosted MCP 优先，deepseek 兜底），不再依赖 Codex 是否下发了原生 web_search。
     """
     if not go_route or not isinstance(model, str):
         return False
@@ -121,7 +301,16 @@ def _inject_synthetic_web_search(parsed, model=None, go_route=False):
 
 
 async def _perform_web_search(query, zen_key=None):
-    """只走 deepseek 代搜，给非联网模型用，不再直连 Google/DuckDuckGo。"""
+    """给无原生搜索模型提供干净结果：Exa/Parallel 优先，deepseek 兜底。"""
+    try:
+        hosted, provider, hosted_error = await asyncio.to_thread(_search_mcp_sync, query)
+        if hosted and _search_result_is_usable(hosted):
+            _log(f"[relay] hosted web search success provider={provider} query='{query[:30]}' len={len(hosted)}")
+            return hosted
+        _log(f"[relay] hosted web search failed query='{query[:30]}' err={hosted_error}")
+    except Exception as exc:
+        _log(f"[relay] hosted web search crashed query='{query[:30]}': {exc!r}")
+
     # 兜底取 key
     if not zen_key:
         zen_key = os.environ.get("ZEN_API_KEY", "")
@@ -185,8 +374,9 @@ async def _perform_web_search(query, zen_key=None):
                                                     texts.append(part.get("text", ""))
                                         if item.get("type") == "web_search_call":
                                             texts.append(f"[web_search_call] {json.dumps(item.get('action', {}), ensure_ascii=False)}")
-                                    if texts:
-                                        return "\n".join(texts)
+                                    candidate = _clean_search_result("\n".join(texts))
+                                    if _search_result_is_usable(candidate):
+                                        return candidate
                                 except:
                                     pass
                             # SSE
@@ -207,15 +397,17 @@ async def _perform_web_search(query, zen_key=None):
                                                         texts.append(c["text"])
                                     except:
                                         continue
-                            if texts:
-                                return "".join(texts)
-                            return body[:3000]
+                            candidate = _clean_search_result("".join(texts))
+                            if _search_result_is_usable(candidate):
+                                return candidate
+                            return ""
 
                     result = await asyncio.to_thread(do_search)
-                    if result and len(result.strip()) > 30:
-                        _log(f"[relay] delegate deepseek success via {url} query='{query[:30]}' len={len(result)}")
-                        return result
-                    last_err = f"{url} empty"
+                    cleaned = _clean_search_result(result)
+                    if _search_result_is_usable(cleaned):
+                        _log(f"[relay] delegate deepseek success via {url} query='{query[:30]}' len={len(cleaned)}")
+                        return cleaned
+                    last_err = f"{url} unusable or empty result"
                 except Exception as e:
                     last_err = f"{url} {e!r}"
                     _log(f"[relay] delegate failed {url} opener={'direct' if 'ProxyHandler' in str(type(opener)) else 'system'}: {e!r}")
@@ -223,10 +415,10 @@ async def _perform_web_search(query, zen_key=None):
                         continue
                     break
         _log(f"[relay] delegate all failed query='{query[:30]}' last_err={last_err}")
-        return f"Search for '{query}' failed: delegate all targets failed ({last_err})"
+        return f"Search failed for '{query}': no usable result from Exa, Parallel, or DeepSeek."
     except Exception as e:
         _log(f"[relay] sidecar deepseek failed: {e!r}")
-        return f"Search for '{query}' failed: {e!r}"
+        return f"Search failed for '{query}': {e!r}"
 
 
 def _is_web_search_tool_call(item):
