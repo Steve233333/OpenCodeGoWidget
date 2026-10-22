@@ -134,7 +134,7 @@ def _recent_image_ids(parsed, keep_items: int):
             container = item.get(key)
             if not isinstance(container, list):
                 continue
-            for part in container:
+            for idx, part in enumerate(container):
                 if isinstance(part, dict) and part.get("type") in _IMAGE_TYPES:
                     protected.add(id(part))
     return protected
@@ -375,13 +375,13 @@ def _collect_trim_targets(parsed):
             container = item.get(key)
             if not isinstance(container, list):
                 continue
-            for part in container:
+            for idx, part in enumerate(container):
                 if not isinstance(part, dict):
                     continue
                 if part.get("type") in _IMAGE_TYPES and index < total - keep_images:
                     uri = _image_uri_get(part)
                     if isinstance(uri, str) and uri.startswith("data:"):
-                        images.append((part, uri))
+                        images.append((container, idx, part, uri))
                 if part.get("type") in ("input_text", "output_text", "text") and index < first_old:
                     text = part.get("text")
                     if isinstance(text, str) and len(text) >= TRIM_TEXT_THRESHOLD:
@@ -408,7 +408,7 @@ def trim_long_history(parsed, body_bytes: int, model=None):
     dropped_images = 0
 
     # ① 老图先缩（语义不变，只是分辨率降一档）
-    for part, uri in images:
+    for _container, _idx, part, uri in images:
         shrunk = _shrink_data_uri(uri, TRIM_MAX_SIDE, TRIM_JPEG_QUALITY)
         if shrunk != uri:
             _image_uri_set(part, shrunk)
@@ -424,11 +424,13 @@ def trim_long_history(parsed, body_bytes: int, model=None):
 
     # ③ 还超阈值就丢老图（从旧到新），语义保不住但比 429 划算
     if saved < body_bytes - limit:
-        for part, uri in images:
+        for container, idx, part, uri in images:
             if saved >= body_bytes - limit:
                 break
             current = _image_uri_get(part) or ""
-            _image_uri_set(part, TRIM_IMAGE_PLACEHOLDER)
+            # 整块换成文本：只把 image_url 改成占位文字的话，上游会拿到一个
+            # 非法图片 URL 直接回 400（2026-10-22 影子实测踩到）。
+            container[idx] = {"type": "input_text", "text": TRIM_IMAGE_PLACEHOLDER}
             saved += max(0, len(current) - len(TRIM_IMAGE_PLACEHOLDER))
             dropped_images += 1
 

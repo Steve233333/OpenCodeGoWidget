@@ -1091,7 +1091,7 @@ def _png_data_uri(width=1700, height=1000):
 
 def t_trim_long_history_shrinks_old_image_and_text():
     uri = _png_data_uri()
-    big_text = "x" * 2_500_000
+    big_text = "x" * 2_200_000
     parsed = {"input": [
         {"role": "user", "content": [{"type": "input_image", "image_url": uri}]},
         {"role": "user", "content": [{"type": "input_text", "text": big_text}]},
@@ -1109,6 +1109,33 @@ def t_trim_long_history_shrinks_old_image_and_text():
     assert len(parsed["input"][1]["content"][0]["text"]) < len(big_text)
     # 最近 12 条不动
     assert parsed["input"][-1]["content"][0]["text"] == "最近第 19 条"
+
+
+def t_trim_long_history_drops_image_as_text_block():
+    # 体积远超阈值 → 老图只能丢；丢的时候必须整块换成文本，
+    # 只把 image_url 写成占位文字的话上游会回 400（影子实测踩到过）。
+    uri = _png_data_uri()
+    big_text = "x" * 12_000_000
+    parsed = {"input": [
+        {"role": "user", "content": [{"type": "input_image", "image_url": uri}]},
+        {"role": "user", "content": [{"type": "input_text", "text": big_text}]},
+    ] + [
+        {"role": "user", "content": [{"type": "input_text", "text": f"最近第 {i} 条"}]}
+        for i in range(20)
+    ]}
+    body = json.dumps(parsed).encode()
+    # 把缩图关掉，确保一定走到"丢图"这一步（否则缩完就够了）
+    old_shrink = vp._bodylimit._shrink_data_uri
+    vp._bodylimit._shrink_data_uri = lambda u, *a, **k: u
+    try:
+        out = vp.trim_long_history(parsed, len(body), "test-model")
+    finally:
+        vp._bodylimit._shrink_data_uri = old_shrink
+    assert out is not None
+    part = parsed["input"][0]["content"][0]
+    assert part.get("type") == "input_text", part.get("type")
+    assert "image_url" not in part
+    assert "较早的截图" in part.get("text", "")
 
 
 def t_trim_long_history_below_threshold_is_noop():
