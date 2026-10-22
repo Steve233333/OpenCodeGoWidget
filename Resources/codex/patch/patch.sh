@@ -76,6 +76,18 @@ is_patched() {
   grep -aqE 'useHiddenModels&&[^`]*===`amazonBedrock`' "$asar" 2>/dev/null
 }
 
+# 2026-10-22：副本**体检**。光看 asar 里有没有补丁特征不够 ——
+# 一个被中断/被改坏的副本可能还留着补丁特征，但签名已经失效（macOS 报"已损坏"）。
+# 点「配置」时先体检，坏了就重建，做到"不论怎么折腾，点一次就修好"。
+copy_healthy() {
+  [ -d "$PATCHED" ] || return 1
+  is_patched || return 1
+  local bindir="$PATCHED/Contents/MacOS"
+  [ -s "$bindir/ChatGPT" ] || return 1
+  codesign --verify --deep --strict "$PATCHED" >/dev/null 2>&1 || return 1
+  return 0
+}
+
 # 官方改布局会让 ~/.local/bin/codex 变成**悬空软链**（26.930 把 CLI 从
 # Contents/Resources/codex 挪到 Contents/Resources/codex-cli/bin/codex）—— 手机端
 # ccpocket 桥的 PATH 第一项就是这个软链，悬空就起不来会话。只在软链已存在时维护它，
@@ -152,6 +164,29 @@ build_patched() {
       log "ABORTED:$step (暂存目录已清理，正式路径上的旧副本未受影响)"
     else
       log "ABORTED:$step (正式路径上的旧副本未受影响)"
+    fi
+    # 兜底（2026-10-22）：**绝不给用户留一个打不开的壳**。
+    # 正式路径上连一个能用的副本都没有（首次安装 + 补丁没适配上这版官方）时，
+    # 放一份官方原版进去：能打开，只是模型过滤没打补丁。
+    # 退出码 2 = "副本可用，但未打补丁"（App 显示黄色提示，不是红色失败）。
+    if [ ! -d "$PATCHED" ] || ! copy_healthy; then
+      log "WARN: 正式路径上没有可用的副本，放一份官方原版进去（能打开，模型过滤未打补丁）"
+      if [ -d "$PATCHED" ]; then
+        # 坏副本先挪走（cp -R 到已存在的目录会变成"拷进去"，必须先腾位置）
+        local bad_bak="$(dirname "$PATCHED")/ChatGPT-Patched.broken.$(date '+%Y%m%d-%H%M%S')"
+        if mv "$PATCHED" "$bad_bak" 2>/dev/null; then
+          log "损坏副本已挪走 -> $bad_bak"
+        else
+          rm -rf "$PATCHED"
+        fi
+      fi
+      if cp -R "$SOURCE" "$PATCHED" 2>/dev/null; then
+        codesign --force --deep --sign - "$PATCHED" >/dev/null 2>&1 || true
+        log "已放置官方原版副本（未打补丁）"
+        exit 2
+      else
+        log "ERROR: 官方原版也复制失败，请检查磁盘空间"
+      fi
     fi
     exit 1
   }
@@ -519,10 +554,12 @@ install() {
   local current marker_ver
   current=$(app_version)
   marker_ver=$(get_marker_version)
-  if is_patched && [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ]; then
-    log "already patched at $current, skip"
+  if [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ] && copy_healthy; then
+    log "already patched at $current, healthy, skip"
   else
-    if is_patched; then
+    if [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ] && ! copy_healthy; then
+      log "副本存在但体检不通过（损坏/签名失效/启动器缺失）→ 自动重建修复"
+    elif is_patched; then
       log "version mismatch (patched=$marker_ver, source=$current) → rebuilding"
     else
       log "not patched → building"

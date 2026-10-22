@@ -46,8 +46,8 @@ grep -qF '[ "$(readlink "$link")" = "$target" ]' "$PATCH_SH" \
 grep -qF 'version mismatch (patched=$marker_ver, source=$current) → rebuilding' "$PATCH_SH" \
   && ok "install() 版本感知（marker≠源码版本必须重建）" || bad "install() 又变回「只看 is_patched」的假成功"
 grep -qF 'local current marker_ver' "$PATCH_SH" \
-  && grep -qF 'if is_patched && [ -n "$current" ]' "$PATCH_SH" \
-  && ok "install() 用的是版本比较而不是单一 is_patched" || bad "install() 缺版本比较"
+  && grep -qF '[ "$current" = "$marker_ver" ] && copy_healthy' "$PATCH_SH" \
+  && ok "install() 用的是版本比较 + 体检，而不是单一 is_patched" || bad "install() 缺版本比较/体检"
 
 # ---------------------------------------------------------------------------
 # ②b 原子重建护栏（2026-10-22）
@@ -75,6 +75,19 @@ if [ -n "$verify_line" ] && [ -n "$swap_line" ] && [ "$verify_line" -lt "$swap_l
 else
   bad "换入发生在验签之前（半成品会先落到正式路径）"
 fi
+
+# ---------------------------------------------------------------------------
+# ②c 副本体检 + 自愈（2026-10-22）
+# 目标：升级之后「点配置」不再出错 —— 副本坏了自动重建，重建还不行也留一个能打开的。
+grep -qF 'copy_healthy()' "$PATCH_SH" \
+  && grep -qF '&& copy_healthy; then' "$PATCH_SH" \
+  && ok "install() 先体检再决定跳过/重建" || bad "install() 没做副本体检"
+grep -qF '副本存在但体检不通过' "$PATCH_SH" \
+  && ok "坏副本会被自动重建（点配置即修复）" || bad "缺坏副本自动重建"
+grep -qF '已放置官方原版副本（未打补丁）' "$PATCH_SH" \
+  && ok "重建失败也保证留一个能打开的副本" || bad "缺官方原版兜底"
+grep -qF 'exit 2' "$PATCH_SH" \
+  && ok "降级用退出码 2（App 显示黄色提示而不是失败）" || bad "缺降级退出码"
 
 # ---------------------------------------------------------------------------
 # ③ 行为用例：把脚本里那段启动器选择逻辑抠出来，用受控的假 clang 跑

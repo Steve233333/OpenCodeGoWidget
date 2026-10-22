@@ -33,6 +33,8 @@ struct CodexStatus: Equatable {
     var hasDS: Bool = false
     var envExists: Bool = false
     var patchedExists: Bool = false
+    /// 2026-10-22：副本"体检"结果。false = 副本损坏/签名失效/启动器缺失，点「配置」会自动重建。
+    var patchedHealthy: Bool = true
     var patchedVersion: String = "-"
     var officialVersion: String = "-"
     var proxyRunning: Bool = false
@@ -265,6 +267,41 @@ final class CodexInstaller: ObservableObject {
         return s
     }
 
+    /// 2026-10-22：副本在哪个路径（两个位置都认）。
+    static func patchedAppPath() -> String {
+        let inHome = (home as NSString).appendingPathComponent("Applications/ChatGPT-Patched.app")
+        if FileManager.default.fileExists(atPath: inHome) { return inHome }
+        return "/Applications/ChatGPT-Patched.app"
+    }
+
+    /// 副本体检：存在 + 启动器非空 + 签名有效。副本不存在不算"坏"（那是"还没装"）。
+    nonisolated static func verifyPatchedCopy(at path: String) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path) else { return true }
+        let launcher = (path as NSString).appendingPathComponent("Contents/MacOS/ChatGPT")
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: launcher, isDirectory: &isDir) else { return false }
+        if isDir.boolValue { return false }
+        let attrs = try? fm.attributesOfItem(atPath: launcher)
+        let size = (attrs?[.size] as? Int) ?? 0
+        if size <= 0 { return false }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        proc.arguments = ["--verify", "--deep", "--strict", path]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return false }
+        let deadline = Date().addingTimeInterval(90)
+        while proc.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        if proc.isRunning {
+            proc.terminate()
+            return false
+        }
+        return proc.terminationStatus == 0
+    }
+
     static func existingGoKey() -> String {
         let envPath = envFile
         guard let content = try? String(contentsOfFile: envPath, encoding: .utf8) else { return "" }
@@ -342,6 +379,16 @@ final class CodexInstaller: ObservableObject {
 
     func refreshStatus() {
         status = Self.detectStatus()
+        // 2026-10-22：副本体检（codesign 验证 1.6GB 的包要几秒，放后台，别卡 UI）
+        let path = Self.patchedAppPath()
+        Task { @MainActor in
+            // 真正的 codesign 验证放到 detached 里跑（这里只捕获 path，不碰 self）
+            let healthy = await Task.detached(priority: .utility) {
+                CodexInstaller.verifyPatchedCopy(at: path)
+            }.value
+            guard self.status.patchedExists else { return }
+            self.status.patchedHealthy = healthy
+        }
     }
 
     // MARK: - 执行安装
@@ -470,6 +517,10 @@ final class CodexInstaller: ObservableObject {
                 } else if exitCode == 0 {
                     self.logText += "\n[完成] 退出码 0 ✅\n"
                     // 同步 Keychain：存"有效 Go Key"（含留空复用的旧值）供 Widget 直接用
+                    if !effectiveGo.isEmpty { KeychainStore.save(effectiveGo) }
+                } else if exitCode == 2 {
+                    // 2026-10-22：副本可用，只是补丁没适配上这版官方 → 降级，不是失败
+                    self.logText += "\n[降级] 退出码 2：副本可用，但模型过滤补丁暂未适配当前官方版（不影响使用）\n"
                     if !effectiveGo.isEmpty { KeychainStore.save(effectiveGo) }
                 } else {
                     self.logText += "\n[失败] 退出码 \(exitCode) ❌\n"

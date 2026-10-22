@@ -101,8 +101,25 @@ struct CodexSetupView: View {
                 }
             }
             if let code = installer.lastExitCode {
-                Text(code == 0 ? "上次配置成功 ✅" : "上次配置失败（\(code)），请查看日志")
-                    .font(.caption2).foregroundStyle(code == 0 ? .green : .red)
+                if code == 0 {
+                    Text("上次配置成功 ✅").font(.caption2).foregroundStyle(.green)
+                } else if code == 2 {
+                    // 2026-10-22：副本可用、只是补丁没适配上这版官方 → 降级提示，不是失败
+                    Text("上次配置完成（副本可用，但模型过滤补丁暂未适配当前官方版）")
+                        .font(.caption2).foregroundStyle(.orange)
+                } else {
+                    Text("上次配置失败（\(code)），请查看日志")
+                        .font(.caption2).foregroundStyle(.red)
+                }
+            }
+            // 2026-10-22：副本体检不通过 → 明确告诉用户"点配置就能自动修好"
+            if installer.status.patchedExists && !installer.status.patchedHealthy {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("⚠️ Codex 副本体检不通过（多半是上次配置被中断，或副本被改坏）")
+                        .font(.caption2).foregroundStyle(.orange)
+                    Text("点下面的「配置」即可自动重建修复（约 1~2 分钟，期间别打开副本）。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
             if isBusy {
                 HStack(spacing: 6) {
