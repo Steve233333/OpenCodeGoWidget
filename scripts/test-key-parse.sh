@@ -18,6 +18,17 @@ swiftc -O \
   "$ROOT/Sources/ChartFormatters.swift" \
   "$ROOT/Sources/BillingCycle.swift" \
   "$ROOT/Sources/UsageCostModels.swift" \
+  "$ROOT/Sources/KeyDirectory.swift" \
   "$ROOT/Tests/KeyListParseTests.swift" \
   -o "$TMP/key_list_parse_test"
 "$TMP/key_list_parse_test"
+
+echo "==> Key 目录状态机自检（离线；401/临时故障/会话变化）"
+swiftc -O \
+  "$ROOT/Sources/ChartFormatters.swift" \
+  "$ROOT/Sources/BillingCycle.swift" \
+  "$ROOT/Sources/UsageCostModels.swift" \
+  "$ROOT/Sources/KeyDirectory.swift" \
+  "$ROOT/Tests/KeyDirectoryStateTests.swift" \
+  -o "$TMP/key_directory_state_test"
+"$TMP/key_directory_state_test"

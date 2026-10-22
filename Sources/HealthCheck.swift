@@ -160,7 +160,7 @@ enum HealthCheck {
 
         // ---- 8. 费用凭据（workspace + cookie）：决定"费用/额度刷不刷新" ----
         // 先自愈：把 WKWebView cookie 库里最新的 auth 同步过来（改版后 SPA 不触发旧的检测回调）
-        _ = await CookieSync.syncAuthCookie()
+        _ = await CookieSync.syncAllCookies()
         let ws = groupValue("workspaceID")
         let cookie = groupValue("authCookie")
         let session = groupValue("consoleSession")
@@ -171,6 +171,27 @@ enum HealthCheck {
             let (level, detail) = await testCostCredentials(ws, cookie)
             let lib = await CookieSync.describeCookies()
             items.append(HealthItem(level: level, title: "费用凭据", detail: detail + " ｜ cookie 库：\(lib)"))
+        }
+        if let keyDirectory = KeyDirectoryStore.load() {
+            let keyTitle = "Key 目录"
+            let checked = keyDirectory.checkedAt.formatted(date: .omitted, time: .shortened)
+            switch keyDirectory.status {
+            case .live:
+                items.append(HealthItem(level: .ok, title: keyTitle,
+                                        detail: "\(keyDirectory.keys.count) 把有效 · 已验证于 \(checked)"))
+            case .loginRequired:
+                items.append(HealthItem(level: .fail, title: keyTitle,
+                                        detail: "控制台登录已失效，旧 Key 已撤下 · \(checked)"))
+            case .noActiveKeys:
+                items.append(HealthItem(level: .warn, title: keyTitle,
+                                        detail: "官网当前没有有效 Key · \(checked)"))
+            case .temporaryFailure:
+                let suffix = keyDirectory.usableKeys.isEmpty
+                    ? "暂无可选 Key"
+                    : "沿用同会话下上次已验证的 \(keyDirectory.usableKeys.count) 把"
+                items.append(HealthItem(level: .warn, title: keyTitle,
+                                        detail: "\(keyDirectory.detail ?? "接口暂不可用") · \(suffix) · \(checked)"))
+            }
         }
 
         // ---- 9. 小组件共享通道（复用已有诊断） ----

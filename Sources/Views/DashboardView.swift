@@ -38,6 +38,8 @@ struct DashboardView: View {
     @State private var quotas: [GoQuota] = GoQuotaRegistry.cachedSync()
     @State private var quotaUpdatedAt: Date? = GoQuotaRegistry.cachedDate()
     @State private var selectedKeyId: String? = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.string(forKey: "selectedCostKeyId")
+    @State private var keyDirectory: KeyDirectoryState? = KeyDirectoryStore.load()
+    @State private var openLoginWithSettings = false
     @State private var chartAlignment: ChartAlignment = BillingCycle.loadAlignment()
     /// 小组件共享通道的自检警告（写盘失败 / App Group 容器拿不到时置位，界面顶部显示）
     @State private var widgetStoreWarning: String?
@@ -147,26 +149,57 @@ struct DashboardView: View {
                                     .background(Color.primary.opacity(0.08))
                                     .clipShape(RoundedRectangle(cornerRadius: 7))
                                     Spacer()
-                                    let keysForMenu: [ApiKeyInfo] = snap.availableKeys.isEmpty ? CostCrawler.shared.loadCachedKeys() : snap.availableKeys
-                                    if !keysForMenu.isEmpty {
-                                        Menu {
-                                            Button("所有密钥") { selectedKeyId = nil; UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.removeObject(forKey: "selectedCostKeyId") }
+                                    let keysForMenu = keyDirectory?.usableKeys ?? []
+                                    Menu {
+                                        Button("所有密钥") {
+                                            selectedKeyId = nil
+                                            UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
+                                                .removeObject(forKey: "selectedCostKeyId")
+                                        }
+                                        if keysForMenu.isEmpty {
+                                            Button(action: {}, label: { Text("暂无可选 Key") })
+                                                .disabled(true)
+                                        } else {
                                             ForEach(keysForMenu) { k in
                                                 Button(k.displayName) { selectedKeyId = k.id; UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.set(k.id, forKey: "selectedCostKeyId") }
                                             }
-                                        } label: {
-                                            HStack(spacing: 3) {
-                                                Text(selectedKeyId == nil ? "所有密钥" : (keysForMenu.first(where: { $0.id == selectedKeyId })?.displayName ?? "未知"))
-                                                    .font(.caption2).lineLimit(1)
-                                                Image(systemName: "chevron.up.chevron.down").font(.system(size: 7))
-                                            }
-                                            .padding(.horizontal, 6).padding(.vertical, 4)
-                                            .background(Color.primary.opacity(0.06))
-                                            .clipShape(RoundedRectangle(cornerRadius: 6))
                                         }
-                                        .menuStyle(.borderlessButton)
-                                        .fixedSize()
+                                    } label: {
+                                        HStack(spacing: 3) {
+                                            Text(selectedKeyId == nil ? "所有密钥" : (keysForMenu.first(where: { $0.id == selectedKeyId })?.displayName ?? "所有密钥"))
+                                                .font(.caption2).lineLimit(1)
+                                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 7))
+                                        }
+                                        .padding(.horizontal, 6).padding(.vertical, 4)
+                                        .background(Color.primary.opacity(0.06))
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
                                     }
+                                    .menuStyle(.borderlessButton)
+                                    .fixedSize()
+                                }
+                                if keyDirectory?.status == .loginRequired {
+                                    HStack(spacing: 7) {
+                                        Image(systemName: "person.crop.circle.badge.exclamationmark")
+                                            .foregroundStyle(.orange)
+                                        Text("控制台登录已失效，旧 Key 已撤下；历史花费仍可在“所有密钥”查看。")
+                                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                                        Spacer()
+                                        Button("重新登录") {
+                                            openLoginWithSettings = true
+                                            showSettings = true
+                                        }
+                                        .controlSize(.mini)
+                                    }
+                                    .padding(.horizontal, 8).padding(.vertical, 6)
+                                    .background(Color.orange.opacity(0.10))
+                                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                                } else if keyDirectory?.status == .noActiveKeys {
+                                    Text("官网当前没有有效 Key；历史花费仍可在“所有密钥”查看。")
+                                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                                } else if keyDirectory?.status == .temporaryFailure,
+                                          keyDirectory?.usableKeys.isEmpty == true {
+                                    Text(keyDirectory?.detail ?? "Key 列表暂时无法验证；历史花费仍可在“所有密钥”查看。")
+                                        .font(.system(size: 9)).foregroundStyle(.orange)
                                 }
                                 if filteredDaily.isEmpty {
                                     VStack(spacing: 6) {
@@ -325,8 +358,14 @@ struct DashboardView: View {
         }
         // 高度跟窗口走（窗口可拉伸），宽度锁 620
         .frame(minWidth: 620, maxWidth: 620, minHeight: 480, maxHeight: .infinity)
-        .sheet(isPresented: $showSettings) { SettingsView(apiKey: $apiKey) }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(apiKey: $apiKey, openLoginOnAppear: openLoginWithSettings)
+        }
+        .onChange(of: showSettings) { _, presented in
+            if !presented { openLoginWithSettings = false }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openCodeGoOpenSettings)) { _ in
+            openLoginWithSettings = false
             showSettings = true
         }
         // 浏览器登录自动获取的 Go Key 同步到主界面状态（供设置页与刷新使用）
@@ -340,6 +379,7 @@ struct DashboardView: View {
             // 登录态变化（含换账号 → 刚清过缓存）后立即拉一次数据；先清空内存里的旧快照，
             // 免得抹掉缓存后界面还挂着上一个账号的数字
             snapshot = nil
+            refreshKeyDirectoryState()
             Task { await refresh() }
         }
         .task {
@@ -365,6 +405,7 @@ struct DashboardView: View {
             let stale = snapshot.map { Date().timeIntervalSince($0.updatedAt) > 180 } ?? true
             if snapshot == nil || stale { await UsageScheduler.shared.refreshIfStale(reason: "窗口打开") }
             if let s = WidgetDataStore.load() { snapshot = s }
+            refreshKeyDirectoryState()
         }
         .onReceive(autoTimer) { _ in
             // 2026-10-16：定时刷新搬到 App 级 UsageScheduler（关窗口也继续跑）。
@@ -372,6 +413,7 @@ struct DashboardView: View {
             // 否则窗口开着时两条循环会同时打控制台接口。
             guard !loading, let s = WidgetDataStore.load() else { return }
             snapshot = s
+            refreshKeyDirectoryState()
         }
         // 回填在跑：每 5 秒把刚写到盘上的明细读回界面，进度条与柱子同步往前爬
         .onReceive(liveTimer) { _ in
@@ -404,6 +446,7 @@ struct DashboardView: View {
         quotas = q
         quotaUpdatedAt = GoQuotaRegistry.cachedDate()
         if let s = WidgetDataStore.load() { snapshot = s }
+        refreshKeyDirectoryState()
         if let e = UsageScheduler.shared.lastError {
             error = e
         } else {
@@ -412,6 +455,15 @@ struct DashboardView: View {
                 ? "App Group 容器不可用：已改走备用通道（齿轮 → 小组件自检）" : nil
         }
         return
+    }
+
+    private func refreshKeyDirectoryState() {
+        keyDirectory = KeyDirectoryStore.load()
+        if !KeyDirectoryStore.selectedKeyIsAvailable(selectedKeyId, in: keyDirectory) {
+            selectedKeyId = nil
+            UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
+                .removeObject(forKey: "selectedCostKeyId")
+        }
     }
 
 }

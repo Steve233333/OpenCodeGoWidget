@@ -169,7 +169,9 @@ enum WidgetDataStore {
         if let d = defaults {
             // 2026-09-24：availableKeys（密钥列表）也一起清 —— 提示文案一直写着"会删掉…密钥列表"，
             // 但代码里只删用量快照，于是"清完缓存还是看不到新 Key"。换账号那条路径也靠这里复位。
-            for key in [snapshotKey, "availableKeys", "historyBackfillDone", "historyBackfillCursor",
+            for key in [snapshotKey, "availableKeys", KeyDirectoryStore.stateKey,
+                        KeyDirectoryStore.rejectedSessionFingerprintKey, "selectedCostKeyId",
+                        "historyBackfillDone", "historyBackfillCursor",
                         "historyBackfillLastCount", "historyBackfillFailedWindows",
                         "historyRepairLast", "historyBackfillRunning", "historyBackfillRunningAt"] {
                 d.removeObject(forKey: key)
@@ -189,6 +191,27 @@ enum WidgetDataStore {
         guard UsageMerge.CachePolicy.needsWipe(storedConvention: d.string(forKey: dayConventionKey)) else { return false }
         wipeUsageCache()
         d.set(dayConventionValue, forKey: dayConventionKey)
+        d.synchronize()
+        return true
+    }
+
+    /// v1.1.11.74：旧版 `availableKeys` 没有“本次官网验证成功”的状态，不能继续显示。
+    /// 升级后先撤下一次，只允许新的 KeyDirectoryState 在 200 响应后重新填充。
+    @discardableResult
+    static func migrateKeyDirectoryCacheIfNeeded() -> Bool {
+        guard let d = defaults,
+              d.string(forKey: KeyDirectoryStore.cacheSchemaKey) != KeyDirectoryStore.cacheSchemaVersion else {
+            return false
+        }
+        d.removeObject(forKey: "availableKeys")
+        d.removeObject(forKey: KeyDirectoryStore.stateKey)
+        d.removeObject(forKey: KeyDirectoryStore.rejectedSessionFingerprintKey)
+        d.removeObject(forKey: "selectedCostKeyId")
+        if var snapshot = load() {
+            snapshot.availableKeys = []
+            _ = save(snapshot)
+        }
+        d.set(KeyDirectoryStore.cacheSchemaVersion, forKey: KeyDirectoryStore.cacheSchemaKey)
         d.synchronize()
         return true
     }
@@ -266,12 +289,13 @@ enum WidgetConstants {
 
 enum WidgetSnapshotRefresher {
     /// `forceKeys: true` = App 主动刷新那一轮：密钥列表跟用量一起重拉
-    /// （2026-09-24：新建的 Key 立刻出现在下拉框；拉失败退回缓存，不拖慢刷新、不清空下拉框）。
+    /// （2026-10-22：先得到有状态的 Key 目录，再拉用量；401 不再回退旧列表）。
     static func fetch(forceKeys: Bool = false) async throws -> WidgetSnapshot {
         // 日界口径换过一次（北京→UTC），旧口径的数据整体作废，避免新旧混着显示
         WidgetDataStore.migrateDayConventionIfNeeded()
-        // 密钥列表跟后面的用量抓取并发跑，刷新总耗时不变
-        async let keysTask = CostCrawler.shared.cachedOrFetchedKeys(force: forceKeys)
+        WidgetDataStore.migrateKeyDirectoryCacheIfNeeded()
+        // 先确定 Key 目录状态，再拉用量。这样即使用量请求失败，401 也已经清掉了旧 Key。
+        let keyDirectory = await CostCrawler.shared.cachedOrFetchedKeys(force: forceKeys)
         let manager = NetworkManager()
         let usage = try await manager.fetchUsage()
         // 账期模式：按月重置日对齐并跨月合并，避免月中开套餐被自然月切断
@@ -371,7 +395,7 @@ enum WidgetSnapshotRefresher {
         // availableKeys：只用控制台密钥列表里的 Key（2026-09-19 修：以前会把"明细里出现过的 Key"
         // 也并进来，导致**已删除的 Key**以裸 id 形式出现在下拉框里 —— 用户明明只有 2 把却看到 3 个。
         // 已删除 Key 的历史用量仍保留在"所有密钥"里（和控制台一致：它算在 Legacy 服务账号名下）。
-        let keys = await keysTask
+        let keys = keyDirectory.usableKeys
         // dailyByKey 从 CostCrawler 的 MonthlyCost 中获得
         let dailyByKey = byKeyFinal
         // 2026-09-26 修「今日模型 305%」：卡片上的"今日合计"必须和"今日每个模型的明细"**同源**。

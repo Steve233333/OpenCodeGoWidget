@@ -220,52 +220,86 @@ final class CostCrawler: @unchecked Sendable {
 
     // MARK: - 密钥列表（下拉框）
 
-    func cacheAvailableKeys(_ keys: [ApiKeyInfo]) {
-        guard !keys.isEmpty else { return }
-        if let data = try? JSONEncoder().encode(keys) {
-            UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?.set(data, forKey: "availableKeys")
-        }
-    }
-
-    func loadCachedKeys() -> [ApiKeyInfo] {
-        guard let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego"),
-              let data = d.data(forKey: "availableKeys"),
-              let arr = try? JSONDecoder().decode([ApiKeyInfo].self, from: data) else { return [] }
-        return arr
-    }
-
-    /// 密钥列表：默认缓存优先；`force: true`（App 每次刷新都会传）先重拉一次控制台。
+    /// 密钥目录：只有本次官网成功验证过的 active Key 才能进入下拉框。
     ///
-    /// 2026-09-24 修：以前是"有缓存就永远不刷新"，于是新建的 Key 永远进不了下拉框 ——
-    /// 而「清除用量缓存」又没删密钥列表，用户怎么点都看不到新钥匙。
-    /// 现在：拉到就用新的并写缓存；拉失败 / 结果为空一律退回缓存，下拉框绝不清空。
-    func cachedOrFetchedKeys(force: Bool = false) async -> [ApiKeyInfo] {
-        let cached = loadCachedKeys()
-        if !force, !cached.isEmpty { return cached }
-        if let fresh = await fetchConsoleKeys(), !fresh.isEmpty {
-            cacheAvailableKeys(fresh)
-            return fresh
-        }
-        return cached
-    }
-
-    /// 拉控制台的服务账号密钥列表：items[].keys[] 里每个 key 有 id / name / status / revokedAt / expiresAt。
-    /// 过滤规则（吊销 / 非 active / 已过期 / 账号名去 `Legacy: ` 前缀）全在
-    /// `ApiKeyInfo.parseConsoleKeys()` 里 —— 那边是纯函数，离线可测（Tests/KeyListParseTests.swift）。
-    func fetchConsoleKeys() async -> [ApiKeyInfo]? {
+    /// 2026-10-22 修：旧实现 401 后静默回退 `availableKeys`，于是 Legacy 下已吊销的
+    /// “临时/方泽恩/丁雁”会无限期显示。现在把“登录失效 / 官网没有 Key / 临时网络故障”
+    /// 分成不同状态；401/403 会立刻撤下旧列表并清除失效会话。
+    func cachedOrFetchedKeys(force: Bool = false) async -> KeyDirectoryState {
         let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
         let ws = suite?.string(forKey: "workspaceID") ?? ""
         let auth = suite?.string(forKey: "authCookie") ?? ""
         let session = suite?.string(forKey: "consoleSession") ?? ""
-        guard !ws.isEmpty, !session.isEmpty else { return nil }
-        let cookie = Self.consoleCookieHeader(auth: auth, session: session)
-        guard let data = await consoleFetch(path: "service-accounts", query: "", cookie: cookie, ws: ws),
-              let list = ApiKeyInfo.parseConsoleKeys(data) else {
-            logger.warning("CostCrawler: 密钥列表拉取失败 → 沿用缓存（下拉框不清空）")
-            return nil
+        let fingerprint = KeyDirectoryStore.fingerprint(
+            workspaceID: ws, auth: auth, session: session
+        )
+        let previous = KeyDirectoryStore.load(defaults: suite)
+
+        if !force, let previous,
+           previous.status == .live,
+           previous.sessionFingerprint == fingerprint,
+           !previous.keys.isEmpty {
+            return previous
         }
-        logger.info("密钥列表刷新：\(list.keys.count) 把有效（跳过 \(list.skipped) 把已吊销/已过期）")
-        return list.keys.isEmpty ? nil : list.keys
+
+        guard !ws.isEmpty, !session.isEmpty || !auth.isEmpty else {
+            let state = KeyDirectoryReducer.reduce(
+                .loginRequired("缺少 workspace 或控制台登录信息"),
+                previous: previous,
+                sessionFingerprint: fingerprint
+            )
+            KeyDirectoryStore.save(state, defaults: suite)
+            logger.warning("CostCrawler: Key 目录不可用 → 缺少 workspace / 控制台会话")
+            return state
+        }
+
+        let cookie = Self.consoleCookieHeader(auth: auth, session: session)
+        let result = await consoleFetchResult(
+            path: "service-accounts", query: "", cookie: cookie, ws: ws
+        )
+
+        let outcome: KeyDirectoryFetchOutcome
+        switch result {
+        case .success(let data):
+            if let list = ApiKeyInfo.parseConsoleKeys(data) {
+                outcome = .fetched(list)
+            } else {
+                outcome = .temporaryFailure("密钥接口返回了无法解析的数据")
+            }
+        case .httpError(401), .httpError(403):
+            outcome = .loginRequired("控制台登录已失效，请重新登录")
+        case .httpError(let code):
+            outcome = .temporaryFailure("密钥接口 HTTP \(code)")
+        case .networkError:
+            outcome = .temporaryFailure("网络异常，暂时无法验证 Key 列表")
+        case .invalidURL:
+            outcome = .temporaryFailure("密钥接口地址无效")
+        }
+
+        let state = KeyDirectoryReducer.reduce(
+            outcome, previous: previous, sessionFingerprint: fingerprint
+        )
+        KeyDirectoryStore.save(state, defaults: suite)
+
+        switch state.status {
+        case .live:
+            KeyDirectoryStore.clearRejectedSession(defaults: suite)
+            logger.info("密钥目录刷新：\(state.keys.count) 把有效（\(state.detail ?? "无跳过项")）")
+        case .loginRequired:
+            // 只清控制台会话，不动 Go API Key / DeepSeek Key / 历史用量。
+            suite?.removeObject(forKey: "consoleSession")
+            suite?.removeObject(forKey: "selectedCostKeyId")
+            suite?.synchronize()
+            KeyDirectoryStore.rejectSession(fingerprint, defaults: suite)
+            logger.error("密钥目录刷新：控制台登录失效 → 已撤下旧 Key，等待重新登录")
+        case .noActiveKeys:
+            suite?.removeObject(forKey: "selectedCostKeyId")
+            suite?.synchronize()
+            logger.info("密钥目录刷新：官网当前没有 active Key")
+        case .temporaryFailure:
+            logger.warning("密钥目录刷新失败：\(state.detail ?? "未知错误")；仅在同会话下保留上次已验证列表")
+        }
+        return state
     }
 
 }

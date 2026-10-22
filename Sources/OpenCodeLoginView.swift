@@ -84,10 +84,15 @@ final class AccountSession: ObservableObject {
             workspaceID = ws
             workspaceBecameAvailable = true
             defaults?.set(ws, forKey: "workspaceID")
+            KeyDirectoryStore.invalidate(
+                reason: "workspace 已更新，等待重新验证 Key", defaults: defaults
+            )
         }
         if !cookie.isEmpty, (defaults?.string(forKey: "authCookie") ?? "") != cookie {
             defaults?.set(cookie, forKey: "authCookie")
             cookieChanged = true
+            KeyDirectoryStore.clearRejectedSession(defaults: defaults)
+            KeyDirectoryStore.invalidate(reason: "登录信息已更新，等待重新验证 Key", defaults: defaults)
         }
         reload()
         if phase != .fetching { phase = .loggedIn }
@@ -172,6 +177,10 @@ final class AccountSession: ObservableObject {
         defaults?.removeObject(forKey: "authCookie")
         defaults?.removeObject(forKey: "consoleSession")
         defaults?.removeObject(forKey: "workspaceID")
+        defaults?.removeObject(forKey: "availableKeys")
+        defaults?.removeObject(forKey: KeyDirectoryStore.stateKey)
+        defaults?.removeObject(forKey: KeyDirectoryStore.rejectedSessionFingerprintKey)
+        defaults?.removeObject(forKey: "selectedCostKeyId")
         defaults?.synchronize()
         workspaceID = ""
         hasCookie = false
@@ -272,6 +281,10 @@ struct LoginWebView: NSViewRepresentable {
                     let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
                     if suite?.string(forKey: "consoleSession") != sess.value {
                         suite?.set(sess.value, forKey: "consoleSession")
+                        KeyDirectoryStore.clearRejectedSession(defaults: suite)
+                        KeyDirectoryStore.invalidate(
+                            reason: "控制台会话已更新，等待重新验证 Key", defaults: suite
+                        )
                         suite?.synchronize()
                         NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
                     }
@@ -298,8 +311,10 @@ struct LoginWebView: NSViewRepresentable {
 
 struct LoginSheetView: View {
     @ObservedObject var session: AccountSession
+    var forceFreshLogin: Bool = false
     @Environment(\.dismiss) var dismiss
     @StateObject private var webHandle = WebViewHandle()
+    @State private var didForceFreshLogin = false
 
     // 2026-09-19：OpenCode 换成新控制台，老 /auth 已下线 → 直接开新控制台的登录页，
     // 否则用户在这个 WebView 里登录完也拿不到新控制台的会话 cookie。
@@ -324,7 +339,18 @@ struct LoginSheetView: View {
             footer
         }
         .frame(width: 820, height: 660)
-        .onAppear { session.reload() }
+        .onAppear {
+            session.reload()
+            guard forceFreshLogin, !didForceFreshLogin else { return }
+            didForceFreshLogin = true
+            session.clearLogin()
+            // WebView 刚创建时 handle 可能还没挂上，等一拍再清站点数据并重载登录页。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                webHandle.clearCookies {
+                    webHandle.webView?.load(URLRequest(url: authURL))
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openCodeGoCredentialsChanged)) { _ in
             session.refreshLoginState()
         }
@@ -347,7 +373,7 @@ struct LoginSheetView: View {
             Button("拉取密钥") { Task { await session.fetchKeys() } }
                 .controlSize(.small)
                 .disabled(!session.hasCookie)
-            Button("清除登录") {
+            Button("清除并重登") {
                 session.clearLogin()
                 webHandle.clearCookies {
                     webHandle.webView?.load(URLRequest(url: authURL))

@@ -7,17 +7,22 @@ import Foundation
 // 控制台里新建的 Key 一直看不见。解析规则抽成 ApiKeyInfo.parseConsoleKeys 后，用真实结构锁住：
 // 只留 active 且没过期的、账号名去掉 "Legacy: " 前缀、保持接口顺序、name 为空用 id 兜底。
 
-/// 抄自 2026-09-24 控制台的真实结构（id/名字真实，不含任何 key 值）。
-/// key_03 = 已吊销（就是你删掉的那把）；key_05 = 已过期；key_06 = 没名字。
+/// 2026-10-22 控制台真实结构：Legacy 账号 7 把全部吊销；新服务账户 2 把 active。
+/// id/名字来自接口，不含任何完整 Key 值。
 let consoleKeysFixtureJSON = """
 {"items":[{"account":{"id":"svcacct_01KT9VX0KZCD5SYNXH8D3EYJD8_01KT9VX0KZCYTT6YEX6127AK5S",
 "name":"Legacy: steve23333@proton.me"},"keys":[
-{"id":"key_01M0B525E7NNSV1EWC34FHSTYQ","name":"丁雁","status":"active","permissions":"inference-only","createdAt":"2026-08-18T19:20:07.000Z","revokedAt":null,"expiresAt":null},
-{"id":"key_01M13VPQNY35W08DEVR6ZZN0GT","name":"方泽恩","status":"active","permissions":"inference-only","createdAt":"2026-08-28T09:37:36.000Z","revokedAt":null,"expiresAt":null},
-{"id":"key_revoked","name":"临时","status":"revoked","permissions":"all","createdAt":"2026-09-23T16:59:47.000Z","revokedAt":"2026-09-23T17:03:55.000Z","expiresAt":null},
-{"id":"key_active_new","name":"临时","status":"active","permissions":"inference-only","createdAt":"2026-09-23T17:04:13.000Z","revokedAt":null,"expiresAt":"2099-01-01T00:00:00.000Z"},
-{"id":"key_expired","name":"过期钥匙","status":"active","createdAt":"2026-09-01T00:00:00.000Z","revokedAt":null,"expiresAt":"2026-09-10T00:00:00.000Z"},
-{"id":"key_noname","status":"active","createdAt":"2026-09-01T00:00:00.000Z"}
+{"id":"key_01M0B525E7NNSV1EWC34FHSTYQ","name":"丁雁_过期了","status":"revoked","createdAt":"2026-08-18T19:20:07.000Z","expiresAt":"2026-10-17T16:42:08.000Z"},
+{"id":"key_01M13VPQNY35W08DEVR6ZZN0GT","name":"方泽恩_过期了","status":"revoked","createdAt":"2026-08-28T09:37:36.000Z","expiresAt":"2026-10-17T16:42:08.000Z"},
+{"id":"sk_01M37KB2CW9V1G51TG47R1B72A","name":"临时","status":"revoked","createdAt":"2026-09-23T16:59:47.000Z","expiresAt":null},
+{"id":"sk_01M37KK5Y36V5TFQBVQYC97MXP","name":"临时","status":"revoked","createdAt":"2026-09-23T17:04:13.000Z","expiresAt":null},
+{"id":"sk_0aa2def4-737a-4c26-a3be-4b60cb0102be","name":"方泽恩","status":"revoked","createdAt":"2026-10-18T14:34:15.000Z","expiresAt":null},
+{"id":"sk_d2abf559-8cad-4c3b-a5d8-ce7768434ff9","name":"丁雁","status":"revoked","createdAt":"2026-10-18T14:34:54.000Z","expiresAt":null},
+{"id":"sk_9147b799-40aa-4b3f-8e04-31dd48ddcbd6","name":"丁雁","status":"revoked","createdAt":"2026-10-19T11:33:00.000Z","expiresAt":null}
+]},
+{"account":{"id":"svcacct_dc58b0de-f168-4ed4-9c1b-b46d5ba55d6d","name":"方泽恩"},"keys":[
+{"id":"sk_f7379ae5-ca0c-4a5f-a44c-a711854d7983","name":"方泽恩","status":"active","createdAt":"2026-10-22T03:53:06.000Z","expiresAt":null},
+{"id":"sk_0d92ba10-7957-47aa-8043-5cd188db052b","name":"丁雁","status":"active","createdAt":"2026-10-22T03:53:30.000Z","expiresAt":null}
 ]}]}
 """
 
@@ -28,7 +33,7 @@ func keyListCheck(_ cond: Bool, _ name: String) {
 
 /// 固定"现在"，让过期判定可重复（真实 fixture 里的过期时间是写死的）
 func fixedNow() -> Date {
-    ApiKeyInfo.parseISO8601("2026-09-24T04:00:00.000Z")!
+    ApiKeyInfo.parseISO8601("2026-10-22T09:00:00.000Z")!
 }
 
 func testConsoleKeyListBasics() {
@@ -38,20 +43,16 @@ func testConsoleKeyListBasics() {
         keyListCheck(false, "真实样例应能解析（返回 nil 说明结构判定挂了）")
         return
     }
-    keyListCheck(list.keys.count == 4, "6 把里只留 4 把有效的（实际 \(list.keys.count)）")
-    keyListCheck(list.skipped == 2, "跳过 2 把（已吊销 1 + 已过期 1，实际 \(list.skipped)）")
-    keyListCheck(list.keys.map(\.id) == ["key_01M0B525E7NNSV1EWC34FHSTYQ",
-                                         "key_01M13VPQNY35W08DEVR6ZZN0GT",
-                                         "key_active_new",
-                                         "key_noname"],
-                 "保持接口顺序，且吊销/过期的不在列表里")
-    keyListCheck(list.keys.first?.displayName == "steve23333@proton.me - 丁雁",
-                 "账号名去掉 Legacy: 前缀（实际 \(list.keys.first?.displayName ?? "nil")）")
-    keyListCheck(list.keys[2].displayName == "steve23333@proton.me - 临时", "新建的「临时」带账号前缀")
-    keyListCheck(list.keys[3].displayName == "steve23333@proton.me - key_noname",
-                 "key 没有 name 时用 id 兜底")
-    keyListCheck(!list.keys.contains { $0.id == "key_revoked" }, "已吊销的不进下拉框")
-    keyListCheck(!list.keys.contains { $0.id == "key_expired" }, "已过期的不进下拉框")
+    keyListCheck(list.keys.count == 2, "9 把里只留 2 把有效的（实际 \(list.keys.count)）")
+    keyListCheck(list.skipped == 7, "跳过 Legacy 下 7 把已吊销 Key（实际 \(list.skipped)）")
+    keyListCheck(list.keys.map(\.id) == [
+        "sk_f7379ae5-ca0c-4a5f-a44c-a711854d7983",
+        "sk_0d92ba10-7957-47aa-8043-5cd188db052b"
+    ], "保持接口顺序，Legacy/临时全部不进列表")
+    keyListCheck(list.keys.first?.displayName == "方泽恩 - 方泽恩",
+                 "账号名去掉 Legacy: 前缀且显示新服务账户（实际 \(list.keys.first?.displayName ?? "nil")）")
+    keyListCheck(list.keys[1].displayName == "方泽恩 - 丁雁", "第二把有效 Key 显示正确")
+    keyListCheck(!list.keys.contains { $0.displayName.contains("临时") }, "已吊销的临时不进下拉框")
 }
 
 func testConsoleKeyListEdgeCases() {

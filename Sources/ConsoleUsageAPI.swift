@@ -1,6 +1,13 @@
 import Foundation
 import os
 
+enum ConsoleFetchResult {
+    case success(Data)
+    case httpError(Int)
+    case networkError
+    case invalidURL
+}
+
 /// 控制台用量 API 的**网络 / 游标 / 解析**层（2026-09-23 Phase 1 从 CostCrawler.swift 拆出）。
 ///
 /// 这里只负责"怎么把数据从 opencode.ai 拿下来"；合并规则在 `UsageMerge`，
@@ -129,26 +136,44 @@ extension CostCrawler {
         return parts.joined(separator: "; ")
     }
 
-    /// 调一个新控制台接口（query 已经是拼好的字符串），返回响应体（非 2xx 返回 nil 并把样本存下来）
+    /// 兼容旧调用方：只返回 2xx 响应体。
     func consoleFetch(path: String, query: String, cookie: String, ws: String) async -> Data? {
-        var comps = URLComponents(string: "https://opencode.ai/console/api/\(path)")!
-        comps.query = query
-        return await consoleFetch(url: comps.url, path: path, cookie: cookie, ws: ws)
+        guard case .success(let data) = await consoleFetchResult(
+            path: path, query: query, cookie: cookie, ws: ws
+        ) else { return nil }
+        return data
     }
 
     /// 同上，但用 URLQueryItem 拼参数（request-logs 的 cursor/毫秒时间戳里带特殊字符，必须走这里）
     func consoleFetch(path: String, queryItems: [URLQueryItem], cookie: String, ws: String,
                       timeout: TimeInterval = 20) async -> Data? {
-        var comps = URLComponents(string: "https://opencode.ai/console/api/\(path)")!
-        comps.queryItems = queryItems
-        return await consoleFetch(url: comps.url, path: path, cookie: cookie, ws: ws, timeout: timeout)
+        guard case .success(let data) = await consoleFetchResult(
+            path: path, queryItems: queryItems, cookie: cookie, ws: ws, timeout: timeout
+        ) else { return nil }
+        return data
     }
 
-    private func consoleFetch(url: URL?, path: String, cookie: String, ws: String,
-                              timeout: TimeInterval = 20) async -> Data? {
+    /// Key 目录需要知道失败类型：401/403 是“重新登录”，429/5xx/断网只是“稍后重试”。
+    func consoleFetchResult(path: String, query: String, cookie: String, ws: String) async -> ConsoleFetchResult {
+        var comps = URLComponents(string: "https://opencode.ai/console/api/\(path)")!
+        comps.query = query
+        return await consoleFetchResult(url: comps.url, path: path, cookie: cookie, ws: ws)
+    }
+
+    func consoleFetchResult(path: String, queryItems: [URLQueryItem], cookie: String, ws: String,
+                            timeout: TimeInterval = 20) async -> ConsoleFetchResult {
+        var comps = URLComponents(string: "https://opencode.ai/console/api/\(path)")!
+        comps.queryItems = queryItems
+        return await consoleFetchResult(
+            url: comps.url, path: path, cookie: cookie, ws: ws, timeout: timeout
+        )
+    }
+
+    private func consoleFetchResult(url: URL?, path: String, cookie: String, ws: String,
+                                    timeout: TimeInterval = 20) async -> ConsoleFetchResult {
         guard let url else {
             logger.error("CostCrawler: 新控制台 \(path) 的 URL 拼不出来")
-            return nil
+            return .invalidURL
         }
         // 429 / 503 是控制台限流或临时故障：指数退避重试一次，别把一次抖动当成“接口没了”。
         for attempt in 0..<2 {
@@ -163,12 +188,12 @@ extension CostCrawler {
             guard let (data, resp) = try? await URLSession.shared.data(for: req),
                   let http = resp as? HTTPURLResponse else {
                 logger.error("CostCrawler: 新控制台 \(path) 请求发不出去")
-                return nil
+                return .networkError
             }
             let text = String(data: data, encoding: .utf8) ?? ""
             UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
                 .set(String(text.prefix(8000)), forKey: "lastConsoleAPISample")
-            if (200...299).contains(http.statusCode) { return data }
+            if (200...299).contains(http.statusCode) { return .success(data) }
             if (http.statusCode == 429 || http.statusCode == 503) && attempt == 0 {
                 let wait = http.statusCode == 429 ? 1.5 : 0.8
                 logger.warning("CostCrawler: 新控制台 \(path) HTTP \(http.statusCode) → \(wait)s 后重试一次")
@@ -176,9 +201,9 @@ extension CostCrawler {
                 continue
             }
             logger.error("CostCrawler: 新控制台 \(path) HTTP \(http.statusCode)：\(text.prefix(160))")
-            return nil
+            return .httpError(http.statusCode)
         }
-        return nil
+        return .networkError
     }
 
     /// 解析 usage/models：{items:[{model, totalCostMicroCents, ...}]} → 模型 → 美元

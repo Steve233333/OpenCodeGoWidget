@@ -37,6 +37,7 @@ final class UsageScheduler: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        WidgetDataStore.migrateKeyDirectoryCacheIfNeeded()
         // 用户可能在旧版里留下了“st_ 存进了 authCookie / 没存 workspace”的半截登录态；
         // 启动时先规整一次，避免费用图要用户手动重填。
         migrateCredentialShapeIfNeeded()
@@ -88,9 +89,13 @@ final class UsageScheduler: ObservableObject {
         }
         running = true
         defer { running = false }
+        WidgetDataStore.migrateKeyDirectoryCacheIfNeeded()
         // 登录态先同步过来（新控制台 API 缺了会 401）；WebKit 没有超时，给它 8 秒硬顶
         _ = await withTaskGroup(of: Bool?.self) { group -> Bool in
-            group.addTask { await CookieSync.syncAuthCookie() }
+            group.addTask {
+                let result = await CookieSync.syncAllCookies()
+                return result.authChanged || result.sessionChanged
+            }
             group.addTask {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
                 return nil

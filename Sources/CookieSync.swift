@@ -37,13 +37,39 @@ enum CookieSync {
         }
         let defaults = UserDefaults(suiteName: suiteName)
         var result = SyncResult()
-        for (name, key) in [("auth", authKey), ("__Host-console_session", sessionKey)] {
-            guard let value = values[name], !value.isEmpty else { continue }
-            result.found[name] = value.count
-            let old = defaults?.string(forKey: key) ?? ""
-            guard old != value else { continue }
-            defaults?.set(value, forKey: key)
-            if key == authKey { result.authChanged = true } else { result.sessionChanged = true }
+        let oldAuth = defaults?.string(forKey: authKey) ?? ""
+        let oldSession = defaults?.string(forKey: sessionKey) ?? ""
+        var candidateAuth = oldAuth
+        var candidateSession = oldSession
+
+        if let auth = values["auth"], !auth.isEmpty {
+            result.found["auth"] = auth.count
+            candidateAuth = auth
+            if oldAuth != auth {
+                defaults?.set(auth, forKey: authKey)
+                result.authChanged = true
+            }
+        }
+
+        if let session = values["__Host-console_session"], !session.isEmpty {
+            result.found["__Host-console_session"] = session.count
+            candidateSession = session
+            let workspace = defaults?.string(forKey: "workspaceID") ?? ""
+            let fingerprint = KeyDirectoryStore.fingerprint(
+                workspaceID: workspace, auth: candidateAuth, session: candidateSession
+            )
+            // 401 后的旧 cookie 仍可能躺在 binarycookies 里。若不拦住，
+            // 每 5 分钟都会把它重新导入，Key 目录又会陷入同一个 401。
+            if !KeyDirectoryStore.isRejectedSession(fingerprint, defaults: defaults),
+               oldSession != session {
+                defaults?.set(session, forKey: sessionKey)
+                result.sessionChanged = true
+                KeyDirectoryStore.clearRejectedSession(defaults: defaults)
+            }
+        }
+
+        if result.authChanged || result.sessionChanged {
+            KeyDirectoryStore.invalidate(reason: "控制台凭据已更新，等待重新验证 Key", defaults: defaults)
         }
         defaults?.synchronize()
         return result

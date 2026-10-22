@@ -9,9 +9,11 @@ import ServiceManagement
 
 struct SettingsView: View {
     @Binding var apiKey: String
+    var openLoginOnAppear: Bool = false
     @Environment(\.dismiss) var dismiss
     @StateObject private var session = AccountSession()
     @State private var showLoginSheet = false
+    @State private var didRequestFreshLogin = false
     var body: some View {
         VStack(spacing: 0) {
             ScrollView(.vertical, showsIndicators: true) {
@@ -33,7 +35,18 @@ struct SettingsView: View {
         }
         .frame(width: 560, height: 680)
         .sheet(isPresented: $showLoginSheet) {
-            LoginSheetView(session: session)
+            LoginSheetView(session: session, forceFreshLogin: openLoginOnAppear)
+        }
+        .onAppear {
+            guard openLoginOnAppear, !didRequestFreshLogin else { return }
+            didRequestFreshLogin = true
+            showLoginSheet = true
+        }
+        .onChange(of: showLoginSheet) { _, presented in
+            guard !presented else { return }
+            // 重新登录弹窗打开得比设置页子视图更早时，清凭据通知可能先于订阅到达。
+            // 关闭后再同步一次，确保输入框和“已配置”状态不会残留旧会话。
+            NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
         }
     }
 }
@@ -184,16 +197,33 @@ struct GoSettingsContent: View {
                         }
                     }
                     let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+                    let oldFingerprint = KeyDirectoryStore.currentFingerprint(defaults: d)
                     // 2026-10-20：同一个输入框可能粘贴 auth（Fe26…）或新版会话（st_…），
                     // 按值归类，避免把 st_ 写进 authCookie 后“界面有值、接口仍缺会话”。
                     let pasted = OpenCodeKeyFetcher.classifyPastedCredential(ac)
                     if let pws = pasted.workspaceID, ws.isEmpty { ws = pws }
                     d?.set(ws, forKey: "workspaceID")
                     if !ac.isEmpty && !ac.hasSuffix(".har") && !ac.contains(".har") {
-                        if let auth = pasted.auth { d?.set(auth, forKey: "authCookie") }
-                        if let sess = pasted.session { d?.set(sess, forKey: "consoleSession") }
+                        if let auth = pasted.auth {
+                            d?.set(auth, forKey: "authCookie")
+                        }
+                        if let sess = pasted.session {
+                            d?.set(sess, forKey: "consoleSession")
+                        }
                     }
+                    let newFingerprint = KeyDirectoryStore.currentFingerprint(defaults: d)
+                    if oldFingerprint != newFingerprint {
+                        KeyDirectoryStore.clearRejectedSession(defaults: d)
+                        // 旧 WebKit 磁盘里的会话要拦住；新会话验证成功后会自动解除。
+                        KeyDirectoryStore.rejectSession(oldFingerprint, defaults: d)
+                        KeyDirectoryStore.invalidate(
+                            reason: "手动更新控制台凭据，等待重新验证 Key", defaults: d
+                        )
+                    }
+                    d?.removeObject(forKey: "selectedCostKeyId")
+                    d?.synchronize()
                     WidgetCenter.shared.reloadAllTimelines()
+                    NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
                     dismiss()
                 }.buttonStyle(.borderedProminent)
                 Button("取消", role: .cancel) { dismiss() }
@@ -349,6 +379,10 @@ struct GoSettingsContent: View {
         d?.removeObject(forKey: "workspaceID")
         d?.removeObject(forKey: "authCookie")
         d?.removeObject(forKey: "consoleSession")
+        d?.removeObject(forKey: "availableKeys")
+        d?.removeObject(forKey: KeyDirectoryStore.stateKey)
+        d?.removeObject(forKey: KeyDirectoryStore.rejectedSessionFingerprintKey)
+        d?.removeObject(forKey: "selectedCostKeyId")
         d?.synchronize()
         workspaceID = ""
         authCookie = ""
@@ -399,12 +433,22 @@ struct GoSettingsContent: View {
         if let workspace = foundWorkspace { workspaceID = workspace }
 
         let defaults = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        let oldFingerprint = KeyDirectoryStore.currentFingerprint(defaults: defaults)
         if let auth = foundAuth { defaults?.set(auth, forKey: "authCookie") }
         if let workspace = foundWorkspace { defaults?.set(workspace, forKey: "workspaceID") }
+        if foundAuth != nil || foundWorkspace != nil {
+            KeyDirectoryStore.clearRejectedSession(defaults: defaults)
+            KeyDirectoryStore.rejectSession(oldFingerprint, defaults: defaults)
+            KeyDirectoryStore.invalidate(
+                reason: "HAR 凭据已更新，等待重新验证 Key", defaults: defaults
+            )
+            defaults?.removeObject(forKey: "selectedCostKeyId")
+        }
         defaults?.synchronize()
 
         if foundAuth != nil || foundWorkspace != nil {
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
+            NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
         } else {
             harStatus = "未在 HAR 中找到 OpenCode workspace 或 auth Cookie"
         }
