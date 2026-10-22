@@ -14,7 +14,7 @@ import time
 import uuid
 
 from .apply_patch import _rewrite_apply_patch_tool
-from .bodylimit import shed_oversized_history
+from .bodylimit import shed_oversized_history, trim_long_history
 from .bridges_chat import _oc_session_id, _responses_request_to_chat
 from .config import (GO_SUFFIX, GO_UPSTREAM, IO_CHUNK_BYTES, WEB_SEARCH_INLINE_LIMIT,
                      ZEN_SUFFIX, ZEN_UPSTREAM, _clamp_reasoning_effort, _log,
@@ -34,6 +34,20 @@ from .toolfix import (_fix_tool_required, _normalize_fc_args_history,
 
 def _header_value(headers, name):
     return next((value for key, value in headers if key.lower() == name.lower()), None)
+
+
+def _should_bridge_on_status(upstream_status, route):
+    """原生 /responses 拿到这个状态时，要不要切 chat 桥。
+
+    429 永远不切（2026-10-22）：那是上游**瞬时限流**，chat 桥和原生走的是同一条
+    上游，切过去只会再撞一次同样的限流（实测 429 -> 切桥 -> 桥也 429 -> 502）。
+    5xx / 401 维持老行为：5xx 切桥，401 只对已知 chat 适配模型切。
+    """
+    if upstream_status == 429:
+        return False
+    if upstream_status >= 500:
+        return True
+    return upstream_status == 401 and route == ROUTE_NATIVE_OR_BRIDGE
 
 
 
@@ -226,6 +240,12 @@ class RequestPipelineMixin:
                 shed = shed_oversized_history(parsed, len(body), model)
                 if shed is not None:
                     body = shed
+                # 2026-10-22：长会话瘦身（>2MB 默认）。长会话每轮重发整段历史，
+                # 突发大请求更容易撞上游 429；这里把老图缩到长边 1600、裁掉过早的
+                # 超大文本块，把请求压回阈值以内（ZCode 的 media guard 早就在做这套）。
+                trimmed = trim_long_history(parsed, len(body), model)
+                if trimmed is not None:
+                    body = trimmed
         return body, zen_changed, go_changed
 
     """Proxy 的请求管线（作为 mixin 与 Proxy 组合；方法依赖 Proxy 上的网络/工具方法）。"""
@@ -287,16 +307,17 @@ class RequestPipelineMixin:
             elif bridge_cached:
                 fallback_now = True
             else:
-                response = await self._open_upstream(method, path, bytes(body), headers, upstream)
-                upstream_status = getattr(response, "status", None) or getattr(response, "code", 0) or 0
+                # 2026-10-22：429/5xx 先原地退避重试（还没往客户端写任何字节），
+                # 免得 Codex 客户端立刻重发同一份长会话历史、继续撞限流。
+                response, upstream_status = await self._open_upstream_with_status_retry(
+                    method, path, bytes(body), headers, upstream, model=model)
                 if 200 <= upstream_status < 300:
                     # 原生路径活了：把"连续失败"计数清零（下次坏了重新从 5 分钟起步）
                     NATIVE_PROBES.note_success(model)
                 # 2026-09-10：网关把「Model X is not supported for format openai」从 500 改成 401
                 # （kimi-k3 实测），已知 chat 适配模型在 /responses 上吃 401 也要切桥；
                 # 未登记模型仍只在 5xx 时切，避免把真正的鉴权失败吞成桥接。
-                needs_bridge = upstream_status >= 500 or (
-                    upstream_status == 401 and pol.route == ROUTE_NATIVE_OR_BRIDGE)
+                needs_bridge = _should_bridge_on_status(upstream_status, pol.route)
                 # 2026-09-27：网关把 chat-only 模型的 /responses 从 5xx 改成
                 # 400 ModelProtocolUnsupported（mimo/GLM 实测），落在 "<500" 里就不会桥接，
                 # 用户直接吃 400。这种 400 是"协议不对"，看一眼响应体就切桥；真正的请求错误仍透传。
@@ -367,7 +388,9 @@ class RequestPipelineMixin:
                     # 2026-09-24 修：策略=bridge 的模型（如 space-bunny、omen-alpha）根本没试原生
                     # （upstream_status=0），以前照样记一次"原生连续失败"并打日志 —— 数字一路涨、
                     # 日志误导排查。现在只有真试过原生才记账/打那行。
-                    if upstream_status:
+                    # 429 是瞬时限流，不该把模型记成"原生已坏"（否则接下来几分钟
+                    # 全被误导去走同样被限流的 chat 桥 → 一串 502）。
+                    if upstream_status and upstream_status != 429:
                         ttl = NATIVE_PROBES.note_failure(model)
                         _log(f"[relay] {model} 原生 /responses 连续失败 "
                              f"{NATIVE_PROBES.streak(model)} 次 → 接下来 {int(ttl)}s 直接走 chat 桥")

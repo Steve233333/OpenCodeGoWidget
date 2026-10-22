@@ -206,6 +206,45 @@ def normalize_route_model(model):
 _UPSTREAM_TRANSIENT_STATUS = frozenset({403, 429, 500, 502, 503, 504})
 
 
+# ---------------------------------------------------------------------------
+# 原生 /responses 路径的瞬时状态重试（2026-10-22）
+# ---------------------------------------------------------------------------
+# 现象：OpenCode Go 网关在上游供应商限流时回 429，正文是 server_error 类型。
+# 这是瞬时的：实测同一个 Key、同样大小、相隔 3 秒的请求，一个 200 一个 429。
+# 以前原生路径把 429 原样回给客户端；Codex 客户端收到后又立刻把同一份
+# 长会话历史（动辄 1~3MB）重发一遍，继续 429，用户看到 exceeded retry limit。
+# ZCode 走 19110 media guard，那边对 429 重试 5 次，所以同一个账号在 ZCode
+# 上看不到这个错，差别只在于谁负责重试。
+#
+# 重试是安全的：429/5xx 意味着上游没有生成、也没有计费，而且重试发生在
+# 还没往客户端写任何字节之前，不会出现半截响应被重复输出。
+#
+# 403 不在列表里：那是配额/权限类错误，多试几次只是白等
+# （chat/messages 桥仍按老规矩重试 403，见 _UPSTREAM_TRANSIENT_STATUS）。
+NATIVE_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+NATIVE_RETRY_ATTEMPTS = 5        # 429 用满：1 次原始 + 4 次退避重试
+NATIVE_5XX_RETRY_ATTEMPTS = 2    # 5xx 只快速重试一次，之后照旧切 chat 桥
+NATIVE_RETRY_BACKOFF = 1.5       # 第 N 次重试等 NATIVE_RETRY_BACKOFF * N 秒
+NATIVE_RETRY_MAX_DELAY = 20.0    # 单次等待上限（Retry-After 也要封顶）
+
+
+def native_retry_delay(retry_after, attempt):
+    """第 attempt 次重试前等多久（秒）。
+
+    Retry-After 只认纯数字（HTTP-date 不解析），并且一律封顶 NATIVE_RETRY_MAX_DELAY，
+    免得上游给一个 3600 就把客户端挂住。
+    """
+    delay = None
+    if retry_after is not None:
+        try:
+            delay = float(str(retry_after).strip())
+        except (TypeError, ValueError):
+            delay = None
+    if delay is None:
+        delay = NATIVE_RETRY_BACKOFF * max(1, attempt)
+    return max(0.0, min(delay, NATIVE_RETRY_MAX_DELAY))
+
+
 _ANTHROPIC_VERSION = "2023-06-01"
 
 

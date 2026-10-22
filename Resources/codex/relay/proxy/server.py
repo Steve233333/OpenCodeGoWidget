@@ -42,6 +42,12 @@ from .config import (
     MUSE_STALL_TEXT_LIMIT,
     IO_BUFFER_BYTES,
     IO_CHUNK_BYTES,
+    NATIVE_5XX_RETRY_ATTEMPTS,
+    NATIVE_RETRY_ATTEMPTS,
+    NATIVE_RETRY_BACKOFF,
+    NATIVE_RETRY_MAX_DELAY,
+    NATIVE_RETRY_STATUS,
+    native_retry_delay,
     RETRY_BACKOFF_BASE,
     TERMINAL_GRACE_SECONDS,
     WEB_SEARCH_BRIDGE_LIMIT,
@@ -316,6 +322,45 @@ class Proxy(RequestPipelineMixin):
             return await asyncio.to_thread(open_request)
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Upstream network error: {exc.reason}") from exc
+
+    async def _open_upstream_with_status_retry(self, method, path, body, headers,
+                                                upstream=None, model=None):
+        # 2026-10-22：原生 /responses 路径补 429/5xx 退避重试。
+        # OpenCode Go 网关在上游限流时回 429（正文是 server_error），而且是瞬时的：
+        # 同一个 Key、同样大小、相隔 3 秒的请求一个 200 一个 429。以前这里把 429
+        # 原样回给客户端，Codex 客户端收到后立刻把同一份长会话历史（1~3MB）再发
+        # 一遍，继续 429 -> 用户看到 exceeded retry limit。ZCode 走 19110 media
+        # guard，那边对 429 重试 5 次，所以同一个账号在 ZCode 上不报这个错。
+        # 重试安全：429/5xx 意味着上游没生成也没计费，而且重试发生在还没往客户端
+        # 写任何字节之前，不会出现半截响应被重复输出。
+        # 429 用满 NATIVE_RETRY_ATTEMPTS 次；5xx 只快速重试一次，之后照旧切 chat 桥。
+        attempt = 0
+        while True:
+            response = await self._open_upstream(method, path, body, headers, upstream)
+            status = getattr(response, "status", None) or getattr(response, "code", 0) or 0
+            if status not in NATIVE_RETRY_STATUS:
+                return response, status
+            limit = NATIVE_RETRY_ATTEMPTS if status == 429 else NATIVE_5XX_RETRY_ATTEMPTS
+            if attempt + 1 >= limit:
+                return response, status
+            err_text = ""
+            retry_after = None
+            try:
+                resp_headers = getattr(response, "headers", None)
+                if resp_headers is not None:
+                    retry_after = resp_headers.get("Retry-After")
+                err_text = (await asyncio.to_thread(response.read)).decode(errors="replace")[:200]
+            except Exception:
+                pass
+            try:
+                response.close()
+            except Exception:
+                pass
+            attempt += 1
+            delay = native_retry_delay(retry_after, attempt)
+            _log(f"[relay] upstream transient {status} model={model}, "
+                 f"retry {attempt}/{limit - 1} in {delay:.1f}s: {err_text[:120]}")
+            await asyncio.sleep(delay)
 
     async def _send_chat_bridge(self, writer, chat_resp, original_parsed, model, txn=None):
         # MiMo 的 XML 工具调用要用到参数类型（见 _tool_param_types）

@@ -991,6 +991,145 @@ def t_header_value_fuzz():
     # case insensitive
     assert vp._header_value([("Authorization", "Bearer xxx")], "authorization") == "Bearer xxx"
 
+# ---------- 11. 长会话 429 退避重试（2026-10-22） ----------
+
+class _FakeResp:
+    def __init__(self, status, body=b'{"error":{"type":"server_error"}}', headers=None):
+        self.status = status
+        self._body = body
+        self.headers = headers or {}
+
+    def read(self):
+        return self._body
+
+    def close(self):
+        pass
+
+
+def _run_native_retry(responses, model="deepseek-v4.1-flash"):
+    import asyncio
+    calls = []
+
+    class _P:
+        async def _open_upstream(self, method, path, body, headers, upstream=None):
+            calls.append(1)
+            return responses[min(len(calls) - 1, len(responses) - 1)]
+
+    old_delay = vp._server.native_retry_delay
+    vp._server.native_retry_delay = lambda *a, **k: 0.0
+    try:
+        resp, status = asyncio.run(
+            vp._server.Proxy._open_upstream_with_status_retry(
+                _P(), "POST", "/v1/responses", b"{}", [], None, model=model)
+        )
+    finally:
+        vp._server.native_retry_delay = old_delay
+    return calls, status, resp
+
+
+def t_native_retry_429_retries_until_success():
+    calls, status, resp = _run_native_retry([_FakeResp(429), _FakeResp(429), _FakeResp(200, b'{"ok":1}')])
+    assert status == 200
+    assert len(calls) == 3, calls
+    assert resp.status == 200
+
+
+def t_native_retry_429_gives_up_after_attempts():
+    calls, status, _resp = _run_native_retry([_FakeResp(429)])
+    assert status == 429
+    # 1 次原始 + 4 次重试 = 5 次
+    assert len(calls) == vp.NATIVE_RETRY_ATTEMPTS, calls
+
+
+def t_native_retry_5xx_only_one_extra_try():
+    calls, status, _resp = _run_native_retry([_FakeResp(503)])
+    assert status == 503
+    assert len(calls) == vp.NATIVE_5XX_RETRY_ATTEMPTS, calls
+
+
+def t_native_retry_403_is_not_retried():
+    calls, status, _resp = _run_native_retry([_FakeResp(403)])
+    assert status == 403
+    assert len(calls) == 1, calls
+
+
+def t_429_never_switches_to_chat_bridge():
+    for route in ("native", "native-or-bridge", "bridge", "messages"):
+        assert not vp._pipeline._should_bridge_on_status(429, route), route
+    assert vp._pipeline._should_bridge_on_status(503, "native")
+    assert vp._pipeline._should_bridge_on_status(401, "native-or-bridge")
+    assert not vp._pipeline._should_bridge_on_status(401, "native")
+
+
+def t_429_does_not_poison_native_probe_cache():
+    src = open(os.path.join(ROOT, "proxy", "pipeline.py"), encoding="utf-8").read()
+    assert "upstream_status != 429" in src
+    assert "NATIVE_PROBES.note_failure" in src
+
+
+def t_native_retry_delay_caps_retry_after():
+    assert vp.native_retry_delay("3600", 1) == vp.NATIVE_RETRY_MAX_DELAY
+    assert vp.native_retry_delay("3", 1) == 3.0
+    assert vp.native_retry_delay(None, 2) == vp.NATIVE_RETRY_BACKOFF * 2
+    assert vp.native_retry_delay("not-a-number", 1) == vp.NATIVE_RETRY_BACKOFF
+
+
+# ---------- 12. 长会话瘦身（2026-10-22） ----------
+
+def _png_data_uri(width=1700, height=1000):
+    import base64
+    import io as _io
+    import os as _os
+    from PIL import Image as _PILImage
+    # 随机噪声：PNG 压不动（~1 字节/像素），JPEG 压得动 → 缩放后一定更小
+    raw = _os.urandom(width * height * 3)
+    img = _PILImage.frombytes("RGB", (width, height), raw)
+    buf = _io.BytesIO()
+    img.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def t_trim_long_history_shrinks_old_image_and_text():
+    uri = _png_data_uri()
+    big_text = "x" * 2_500_000
+    parsed = {"input": [
+        {"role": "user", "content": [{"type": "input_image", "image_url": uri}]},
+        {"role": "user", "content": [{"type": "input_text", "text": big_text}]},
+    ] + [
+        {"role": "user", "content": [{"type": "input_text", "text": f"最近第 {i} 条"}]}
+        for i in range(20)
+    ]}
+    body = json.dumps(parsed).encode()
+    out = vp.trim_long_history(parsed, len(body), "test-model")
+    assert out is not None, "超阈值的长会话应该被瘦身"
+    assert len(out) < len(body)
+    old_image = parsed["input"][0]["content"][0]["image_url"]
+    assert old_image.startswith("data:image/jpeg;base64,"), old_image[:40]
+    assert len(old_image) < len(uri)
+    assert len(parsed["input"][1]["content"][0]["text"]) < len(big_text)
+    # 最近 12 条不动
+    assert parsed["input"][-1]["content"][0]["text"] == "最近第 19 条"
+
+
+def t_trim_long_history_below_threshold_is_noop():
+    parsed = {"input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]}
+    body = json.dumps(parsed).encode()
+    assert vp.trim_long_history(parsed, len(body), "m") is None
+
+
+def t_trim_long_history_keeps_recent_images():
+    uri = _png_data_uri(400, 300)
+    parsed = {"input": [
+        {"role": "user", "content": [{"type": "input_image", "image_url": uri}]},
+    ] + [
+        {"role": "user", "content": [{"type": "input_image", "image_url": uri}]}
+        for _ in range(3)
+    ]}
+    body = json.dumps(parsed).encode()
+    # 体积不到阈值 → 完全不动
+    assert vp.trim_long_history(parsed, len(body), "m") is None
+    assert parsed["input"][0]["content"][0]["image_url"] == uri
+
 # ---------- runner ----------
 for name, fn in list(globals().items()):
     if name.startswith("t_"):

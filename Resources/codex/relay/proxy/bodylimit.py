@@ -22,6 +22,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import io
 import json
 import os
 
@@ -33,6 +36,39 @@ OUTPUT_PLACEHOLDER = "[较早的工具输出已省略：请求体过大，已自
 TEXT_PLACEHOLDER = "\n…（较早的大段文本已截断：请求体过大）"
 
 _IMAGE_TYPES = ("input_image", "image_url", "output_image")
+
+
+# ---------------------------------------------------------------------------
+# 长会话瘦身（2026-10-22）
+# ---------------------------------------------------------------------------
+# 背景：OpenCode Go 网关对突发的大请求会回 429。长会话每轮都把整段历史原样
+# 重发（实测 1.2~3.2MB），所以长会话明显更容易撞限流；Codex 客户端收到 429
+# 后的"立刻重发同一份历史"又会把限流续上。
+# ZCode 的 19110 media guard 早就在做这件事（图片缩到长边 1600 / JPEG q82、
+# 旧图丢弃、超大文本裁剪），所以 ZCode 不报这个错 —— 这里把同一套搬到
+# agent-relay，让 Codex 这条路也受益。
+#
+# 与 shed_oversized_history 的分工：
+#   * shed_oversized_history：超过 45MB 的保命逻辑（否则上游必回 413），丢内容；
+#   * trim_long_history：超过 2MB 的预防逻辑，缩图 + 裁旧文本，尽量不丢语义。
+#
+# 阈值用 RELAY_TRIM_THRESHOLD_MB 覆盖（0 = 关闭），默认 2MB。
+DEFAULT_TRIM_THRESHOLD_MB = 2
+TRIM_KEEP_ITEMS = 12            # 最近 12 条输入原样不动
+TRIM_KEEP_IMAGES = 6            # 最近 6 张图保持原图（当前截图最值钱）
+TRIM_MAX_SIDE = 1600
+TRIM_JPEG_QUALITY = 82
+TRIM_TEXT_THRESHOLD = 8 * 1024  # 超过 8KB 的旧文本块才裁
+TRIM_TEXT_KEEP = 2 * 1024
+TRIM_IMAGE_PLACEHOLDER = "[较早的截图已省略：长会话瘦身，避免触发上游限流]"
+TRIM_TEXT_PLACEHOLDER = "\n…（较早的大段文本已裁剪：长会话瘦身）"
+
+try:  # Pillow 在 agent-relay 的解释器里可用；没有就只裁文本不缩图
+    from PIL import Image
+except Exception:  # pragma: no cover - 环境缺 Pillow 时的降级路径
+    Image = None
+
+_SHRINK_CACHE: dict = {}
 
 
 def max_body_bytes() -> int:
@@ -239,4 +275,168 @@ def shed_oversized_history(parsed, body_bytes: int, model=None):
          f"(上限 {limit/1048576:.0f}MB) · 丢图 {dropped_images} 张 · 丢工具输出 {dropped_outputs} 条 · "
          f"截断文本 {truncated_texts} 段 · 省 {saved/1048576:.1f}MB (model={model})"
          + ("· 仍超上限（已无可丢内容，这次可能还是 413）" if still_over else ""))
+    return new_body
+
+
+# ---------------------------------------------------------------------------
+# 长会话瘦身（实现）
+# ---------------------------------------------------------------------------
+
+
+def trim_threshold_bytes() -> int:
+    """长会话瘦身的触发阈值（字节）。RELAY_TRIM_THRESHOLD_MB=0 表示关闭。"""
+    try:
+        mb = int(relay_env("RELAY_TRIM_THRESHOLD_MB") or DEFAULT_TRIM_THRESHOLD_MB)
+    except ValueError:
+        mb = DEFAULT_TRIM_THRESHOLD_MB
+    return max(0, mb) * 1024 * 1024
+
+
+def _keep_recent_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(relay_env(name) or default))
+    except ValueError:
+        return default
+
+
+def _image_uri_get(part):
+    """取出图片块里的 data URI（没有就 None）。"""
+    if not isinstance(part, dict):
+        return None
+    holder = part.get("image_url")
+    if isinstance(holder, dict):
+        holder = holder.get("url")
+    if isinstance(holder, str):
+        return holder
+    holder = part.get("url")
+    return holder if isinstance(holder, str) else None
+
+
+def _image_uri_set(part, value) -> None:
+    """把缩/换后的 URI 写回图片块（保持原来的形状）。"""
+    holder = part.get("image_url")
+    if isinstance(holder, dict):
+        holder["url"] = value
+    elif isinstance(holder, str):
+        part["image_url"] = value
+    else:
+        part["url"] = value
+
+
+def _shrink_data_uri(uri: str, max_side: int, quality: int) -> str:
+    """把 data URI 图片缩到长边 max_side、JPEG quality；失败原样返回。"""
+    if Image is None or not isinstance(uri, str) or not uri.startswith("data:"):
+        return uri
+    key = (max_side, quality, hashlib.sha1(uri.encode("utf-8", "replace")).hexdigest())
+    cached = _SHRINK_CACHE.get(key)
+    if cached:
+        return cached
+    try:
+        header, payload = uri.split(",", 1)
+        raw = base64.b64decode(payload)
+        with Image.open(io.BytesIO(raw)) as image:
+            image = image.convert("RGB")
+            width, height = image.size
+            scale = min(1.0, max_side / float(max(width, height)))
+            if scale < 1.0:
+                image = image.resize(
+                    (max(1, int(width * scale)), max(1, int(height * scale))),
+                    Image.LANCZOS,
+                )
+            buffer = io.BytesIO()
+            image.save(buffer, "JPEG", quality=quality, optimize=True)
+            shrunk = "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    except Exception:
+        return uri
+    if len(shrunk) >= len(uri):
+        return uri
+    if len(_SHRINK_CACHE) > 256:
+        _SHRINK_CACHE.clear()
+    _SHRINK_CACHE[key] = shrunk
+    return shrunk
+
+
+def _trim_input_items(parsed):
+    """返回 (items, 最近保留起点) —— 最近若干条不动。"""
+    items = [item for item in (parsed.get("input") or []) if isinstance(item, dict)]
+    keep = _keep_recent_int("RELAY_TRIM_KEEP_ITEMS", TRIM_KEEP_ITEMS)
+    return items, max(0, len(items) - keep)
+
+
+def _collect_trim_targets(parsed):
+    """收集老输入里的图片块和长文本块（从旧到新）。"""
+    items, first_old = _trim_input_items(parsed)
+    images = []
+    texts = []
+    keep_images = _keep_recent_int("RELAY_TRIM_KEEP_IMAGES", TRIM_KEEP_IMAGES)
+    total = len(items)
+    for index, item in enumerate(items):
+        for key in ("content", "output"):
+            container = item.get(key)
+            if not isinstance(container, list):
+                continue
+            for part in container:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") in _IMAGE_TYPES and index < total - keep_images:
+                    uri = _image_uri_get(part)
+                    if isinstance(uri, str) and uri.startswith("data:"):
+                        images.append((part, uri))
+                if part.get("type") in ("input_text", "output_text", "text") and index < first_old:
+                    text = part.get("text")
+                    if isinstance(text, str) and len(text) >= TRIM_TEXT_THRESHOLD:
+                        texts.append((part, len(text)))
+    return images, texts
+
+
+def trim_long_history(parsed, body_bytes: int, model=None):
+    """长会话瘦身：图片缩放 + 旧文本裁剪，把请求压回阈值以内。
+
+    只改发往上游的这一份 payload，不碰磁盘会话。返回新 body（bytes）或 None（没动）。
+    """
+    limit = trim_threshold_bytes()
+    if limit <= 0 or body_bytes <= limit or not isinstance(parsed, dict):
+        return None
+
+    images, texts = _collect_trim_targets(parsed)
+    if not images and not texts:
+        return None
+
+    saved = 0
+    shrunk_images = 0
+    trimmed_texts = 0
+    dropped_images = 0
+
+    # ① 老图先缩（语义不变，只是分辨率降一档）
+    for part, uri in images:
+        shrunk = _shrink_data_uri(uri, TRIM_MAX_SIDE, TRIM_JPEG_QUALITY)
+        if shrunk != uri:
+            _image_uri_set(part, shrunk)
+            saved += len(uri) - len(shrunk)
+            shrunk_images += 1
+
+    # ② 老文本裁剪（保留开头 + 占位说明）
+    for part, size in texts:
+        original = part.get("text") or ""
+        part["text"] = original[:TRIM_TEXT_KEEP] + TRIM_TEXT_PLACEHOLDER
+        saved += max(0, size - len(part["text"]))
+        trimmed_texts += 1
+
+    # ③ 还超阈值就丢老图（从旧到新），语义保不住但比 429 划算
+    if saved < body_bytes - limit:
+        for part, uri in images:
+            if saved >= body_bytes - limit:
+                break
+            current = _image_uri_get(part) or ""
+            _image_uri_set(part, TRIM_IMAGE_PLACEHOLDER)
+            saved += max(0, len(current) - len(TRIM_IMAGE_PLACEHOLDER))
+            dropped_images += 1
+
+    if not (shrunk_images or trimmed_texts or dropped_images):
+        return None
+
+    new_body = json.dumps(parsed).encode()
+    _log(f"[relay] 长会话瘦身：{body_bytes/1048576:.1f}MB → {len(new_body)/1048576:.1f}MB "
+         f"(阈值 {limit/1048576:.0f}MB) · 缩图 {shrunk_images} 张 · 丢图 {dropped_images} 张 · "
+         f"裁文本 {trimmed_texts} 段 · 省 {saved/1048576:.1f}MB (model={model})")
     return new_body
