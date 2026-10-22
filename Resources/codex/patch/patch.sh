@@ -131,42 +131,27 @@ build_patched() {
       exit 1 ;;
   esac
 
-  # B1 备份再重建（2026-09-04）：旧副本先改名备份，重建成功才删，失败自动恢复。
-  # marker 只在成功末尾写，失败路径天然保持旧版本，与恢复后的备份一致，无需额外处理。
-  local PATCH_BAK=""
-  backup_patched() {
-    # 首次安装无旧包时跳过备份/恢复
-    if [ ! -d "$PATCHED" ]; then
-      log "no existing patched copy, skip backup"
-      return 0
-    fi
-    # 备份命名：marker 旧 sourceVersion > 旧包 Info.plist 版本 > 时间戳兜底，保证 mv 永不撞名
-    local bak_ver bak_base
-    bak_ver=$(get_marker_version)
-    if [ -z "$bak_ver" ]; then
-      bak_ver=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PATCHED/Contents/Info.plist" 2>/dev/null || true)
-      if [[ "$bak_ver" == *"Will Create"* ]] || [[ "$bak_ver" == *"Does Not Exist"* ]]; then bak_ver=""; fi
-    fi
-    if [ -z "$bak_ver" ]; then
-      bak_ver="ts$(date '+%Y%m%d-%H%M%S')"
-    fi
-    bak_base="$(dirname "$PATCHED")/ChatGPT-Patched.bak.$bak_ver"
-    PATCH_BAK="$bak_base"
-    # 同名旧备份先清掉（只留一份最新旧版）
-    rm -rf "$PATCH_BAK"
-    mv "$PATCHED" "$PATCH_BAK"
-    log "backed up existing patched copy -> $PATCH_BAK"
-  }
-  restore_patched() {
-    # $1 = 步骤名
+  # 2026-10-22：**原子重建**（替换 2026-09-04 的"先备份、再原地重建"）。
+  # 旧流程的问题：先把正式路径上的旧副本 mv 成备份，再把官方版 cp 到正式路径原地改。
+  # 那一两分钟里，正式路径上是个半成品（asar 已改、签名没重做、启动器没编好）：
+  #   * 用户这时双击 ChatGPT-Patched，macOS 直接报"已损坏，无法打开"；
+  #   * 任务中途被取消/关机，半成品还会留在正式路径上，之后也开不了。
+  # 现在改成：先在暂存目录里建好、验签通过，再原子换入 ——
+  # 正式路径上永远是"旧的好的"或"新的好的"，没有半成品窗口。
+  local PATCH_BAK="" STAGING=""
+  STAGING="$(dirname "$PATCHED")/ChatGPT-Patched.new.$(date '+%Y%m%d-%H%M%S')"
+  # 上次任务被 kill 时可能留下暂存目录，先清干净（只清 .new.*，绝不碰正式路径）
+  rm -rf "$(dirname "$PATCHED")"/ChatGPT-Patched.new.* 2>/dev/null || true
+  mkdir -p "$(dirname "$PATCHED")"
+
+  discard_staging() {
+    # $1 = 步骤名。失败只丢暂存目录；正式路径上的旧副本原封不动，不需要"恢复"。
     local step="$1"
-    if [ -n "$PATCH_BAK" ] && [ -d "$PATCH_BAK" ]; then
-      rm -rf "$PATCHED"
-      mv "$PATCH_BAK" "$PATCHED"
-      log "RESTORED:$step (old copy recovered, marker keeps old version)"
+    if [ -n "$STAGING" ] && [ -d "$STAGING" ]; then
+      rm -rf "$STAGING"
+      log "ABORTED:$step (暂存目录已清理，正式路径上的旧副本未受影响)"
     else
-      rm -rf "$PATCHED"
-      log "RESTORED:$step (no backup, fresh install failed cleanly)"
+      log "ABORTED:$step (正式路径上的旧副本未受影响)"
     fi
     exit 1
   }
@@ -176,34 +161,35 @@ build_patched() {
       log "backup removed ($PATCH_BAK)"
     fi
   }
-  backup_patched
-  mkdir -p "$(dirname "$PATCHED")"
-  cp -R "$SOURCE" "$PATCHED"
-  log "copied source -> $PATCHED"
 
-  local asar="$PATCHED/Contents/Resources/app.asar"
-  local plist="$PATCHED/Contents/Info.plist"
+  cp -R "$SOURCE" "$STAGING"
+  log "copied source -> $STAGING"
+
+  local asar="$STAGING/Contents/Resources/app.asar"
+  local plist="$STAGING/Contents/Info.plist"
 
   # Unique-occurrence check: abort if the pattern moved (upstream rebuild).
   local matches off snippet within
   matches=$(grep -aboE "$PATTERN_REGEX" "$asar" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$matches" -ne 1 ]; then
     log "ERROR: pattern occurrences=$matches (expected 1) for regex $PATTERN_REGEX, refusing to patch. App may have a code change."
-    restore_patched "pattern-count"
+    discard_staging "pattern-count"
   fi
   off=$(grep -aboE "$PATTERN_REGEX" "$asar" 2>/dev/null | head -1 | cut -d: -f1)
   snippet=$(grep -aoE "$PATTERN_REGEX" "$asar" 2>/dev/null | head -1)
   within=$(printf '%s' "$snippet" | grep -aboF "$PATCH_FROM" | head -1 | cut -d: -f1)
   if [ -z "$within" ]; then
     log "ERROR: cannot locate $PATCH_FROM within matched pattern, refusing"
-    restore_patched "pattern-locate"
+    discard_staging "pattern-locate"
   fi
   off=$((off + within))
   printf '%s' "$PATCH_TO" | dd of="$asar" bs=1 seek="$off" count="${#PATCH_TO}" conv=notrunc 2>/dev/null
 
-  if ! is_patched; then
-    log "ERROR: patch byte verification failed, removing broken copy"
-    restore_patched "byte-verify"
+  # 2026-10-22：必须校验**暂存目录里这份** asar。is_patched() 读的是正式路径，
+  # 原子重建后正式路径上还是旧包（甚至还没建），拿它校验会永远失败。
+  if ! grep -aqE 'useHiddenModels&&[^`]*===`amazonBedrock`' "$asar" 2>/dev/null; then
+    log "ERROR: patch byte verification failed, discarding staged copy"
+    discard_staging "byte-verify"
   fi
   log "pattern '$PATTERN' patched ($PATCH_FROM -> $PATCH_TO) at offset $off"
 
@@ -223,7 +209,7 @@ build_patched() {
     log "WARN: sparkle feed URL not found (code change?), skipping"
   else
     log "ERROR: sparkle feed URL occurrences=$feed_matches (expected 1), refusing"
-    restore_patched "feed-multi"
+    discard_staging "feed-multi"
   fi
 
   # 26.901+: Electron validates per-file asar integrity on every read, using the
@@ -359,7 +345,7 @@ print('asar rewritten, size unchanged: %d' % len(buf))
 PYEOF
   then
     log "ERROR: asar integrity refresh failed, removing broken copy"
-    restore_patched "integrity"
+    discard_staging "integrity"
   fi
   log "asar integrity refreshed (picker single-line + per-file recompute + header hash)"
 
@@ -385,7 +371,7 @@ PYEOF
   # (launchd refuses shell scripts as the main executable; CHROME_USER_DATA_DIR
   # is ignored by Electron, and a space-separated --user-data-dir arg is not
   # forwarded to child processes — use the '=' form.)
-  local bindir="$PATCHED/Contents/MacOS"
+  local bindir="$STAGING/Contents/MacOS"
   mv "$bindir/ChatGPT" "$bindir/ChatGPT.bin"
   local uddir="$HOME/Library/Application Support/Codex-Patched"
   cat > "$BASE/scripts/launcher.c" << 'EOF'
@@ -462,20 +448,47 @@ EOF
   log "re-signing with cert ($SIGN_IDENTITY)..."
   # Use the stable entitlements file (application-groups + automation etc.)
   # so CUAService bootstrap and appshot work after every rebuild.
-  if codesign --force --deep --sign "$SIGN_IDENTITY" --keychain "$SIGN_KEYCHAIN" --entitlements "$BASE/certs/ent2.plist" "$PATCHED" >> "$LOG" 2>&1; then
+  if codesign --force --deep --sign "$SIGN_IDENTITY" --keychain "$SIGN_KEYCHAIN" --entitlements "$BASE/certs/ent2.plist" "$STAGING" >> "$LOG" 2>&1; then
     log "re-signed"
   else
     log "ERROR: cert signing failed (is the keychain unlocked?), falling back to ad-hoc"
-    codesign --force --deep --sign - "$PATCHED" >> "$LOG" 2>&1
+    codesign --force --deep --sign - "$STAGING" >> "$LOG" 2>&1
     log "re-signed (ad-hoc fallback)"
   fi
 
   # 轻量启动确认：验签通过才删备份（B1/B2），失败走同一回滚
-  if ! codesign --verify --deep --strict "$PATCHED" >> "$LOG" 2>&1; then
+  if ! codesign --verify --deep --strict "$STAGING" >> "$LOG" 2>&1; then
     log "ERROR: codesign verify failed on new copy"
-    restore_patched "verify"
+    discard_staging "verify"
   fi
   log "codesign verify passed"
+
+  # 换入（原子）：验签通过的新包先占位，再把旧的挪到备份 —— 正式路径上不会出现半成品。
+  # 换入前再确认旧副本没在运行（运行中 mv 会把正在跑的程序弄坏）。
+  if patched_running; then
+    log "ERROR: 副本正在运行，无法换入，放弃本次重建（旧副本仍是好的）"
+    discard_staging "swap-running"
+  fi
+  if [ -d "$PATCHED" ]; then
+    # 备份命名：marker 旧 sourceVersion > 旧包 Info.plist 版本 > 时间戳兜底，保证 mv 永不撞名
+    local bak_ver bak_base
+    bak_ver=$(get_marker_version)
+    if [ -z "$bak_ver" ]; then
+      bak_ver=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PATCHED/Contents/Info.plist" 2>/dev/null || true)
+      if [[ "$bak_ver" == *"Will Create"* ]] || [[ "$bak_ver" == *"Does Not Exist"* ]]; then bak_ver=""; fi
+    fi
+    if [ -z "$bak_ver" ]; then
+      bak_ver="ts$(date '+%Y%m%d-%H%M%S')"
+    fi
+    bak_base="$(dirname "$PATCHED")/ChatGPT-Patched.bak.$bak_ver"
+    PATCH_BAK="$bak_base"
+    rm -rf "$PATCH_BAK"
+    mv "$PATCHED" "$PATCH_BAK"
+    log "backed up existing patched copy -> $PATCH_BAK"
+  fi
+  mv "$STAGING" "$PATCHED"
+  STAGING=""
+  log "swapped staged build into place -> $PATCHED"
   cleanup_backup
 
   printf '{"sourceVersion":"%s","builtAt":"%s"}\n' "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MARKER"

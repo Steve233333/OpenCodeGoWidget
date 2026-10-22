@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import Darwin
 
 // MARK: - 模型与常量
 
@@ -65,8 +66,54 @@ final class CodexInstaller: ObservableObject {
     static var patchBase: String { (home as NSString).appendingPathComponent(".codex/picker-patch") }
     static var passFile: String { (patchBase as NSString).appendingPathComponent(".keychain-pass") }
     static var logFile: String { (home as NSString).appendingPathComponent("Library/Logs/codex-oneclick-setup.log") }
+    static var lockInfoFile: String { (patchBase as NSString).appendingPathComponent(".oneclick.lock.d/info") }
     static var proxyPlist: String { (home as NSString).appendingPathComponent("Library/LaunchAgents/com.agent-relay.plist") }
     static var discoveryPlist: String { (home as NSString).appendingPathComponent("Library/LaunchAgents/com.steve233.go-model-discovery.plist") }
+
+    /// 2026-10-22：配置任务的"跨界面/跨 App"运行状态。
+    ///
+    /// 事故（另一台机器）：点了「配置」→ 退出设置面板 → 回来界面一片空白（运行中状态是
+    /// View 实例私有的 @StateObject，重开就没了）→ 以为没在配 → 又点一次 → 互斥锁把
+    /// 第二次挡住，却显示成红色「失败 (1)」；期间双击副本 → 副本正在被重建 →
+    /// macOS 报「已损坏」。
+    ///
+    /// 修法：锁文件（PID/START）和脚本日志本来就在磁盘上，直接拿它们当真相：
+    /// 面板打开/重建时读一次就知道"还有配置在跑"，并把磁盘日志尾部显示出来。
+    struct RunningSetupTask {
+        let pid: Int32
+        let start: String
+    }
+
+    /// 锁目录里记录的 PID 还活着 → 有一个配置任务在跑（可能是本 App，也可能是另一个实例/脚本）。
+    static func detectRunningSetupTask() -> RunningSetupTask? {
+        guard let text = try? String(contentsOf: URL(fileURLWithPath: lockInfoFile), encoding: .utf8) else {
+            return nil
+        }
+        var pid: Int32 = 0
+        var start = ""
+        for raw in text.split(separator: "\n") {
+            let line = String(raw).trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("PID=") { pid = Int32(line.dropFirst(4)) ?? 0 }
+            if line.hasPrefix("START=") { start = String(line.dropFirst(6)) }
+        }
+        guard pid > 0, kill(pid, 0) == 0 else { return nil }
+        return RunningSetupTask(pid: pid, start: start)
+    }
+
+    /// 脚本日志尾部（脚本一直在往这个文件写，面板关掉/App 重启都还在）。
+    static func readSetupLogTail(maxLines: Int = 80) -> String {
+        guard let text = try? String(contentsOf: URL(fileURLWithPath: logFile), encoding: .utf8) else {
+            return ""
+        }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        return lines.suffix(maxLines).joined(separator: "\n")
+    }
+
+    /// 上次配置的退出码要跨面板/跨 App 存活（UserDefaults），否则重开界面又变成"没信息"。
+    static let lastExitDefaultsKey = "codexSetupLastExitCode"
+    init() {
+        lastExitCode = (UserDefaults.standard.object(forKey: Self.lastExitDefaultsKey) as? NSNumber)?.int32Value
+    }
 
     // MARK: - 资源定位
 
@@ -388,6 +435,11 @@ final class CodexInstaller: ObservableObject {
                 self.drainPipes()
                 // 兜底把剩余缓冲读完（非阻塞；阻塞式 readToEnd 会被孤儿进程 hanging 住，已禁用）
                 var exitCode = p.terminationStatus
+                // 2026-10-22：互斥锁挡住了本次点击（另一个配置任务正在跑）——
+                // 这是"跳过"，不是失败。以前直接显示"[失败] 退出码 1 ❌"，用户会以为
+                // 配置坏了（2026-10-22 另一台机器就是这样被误会的）。
+                let busyMarker = "已有配置任务在运行中"
+                let wasBusy = exitCode != 0 && self.logText.contains(busyMarker)
                 if exitCode == 0 {
                     // 2026-10-20：安装器自身返回 0 也不当作成功；再读一次真实
                     // proxy/Go Key/副本状态，任何关键项不对都标失败。
@@ -404,9 +456,18 @@ final class CodexInstaller: ObservableObject {
                             self.logText += "\n[失败] 配置结束但 Codex 副本未同步（官方 \(s.officialVersion) / 副本 \(s.patchedVersion)）\n"
                         }
                     }
+                } else if wasBusy {
+                    exitCode = 0
+                    self.logText += "\n[提示] \(busyMarker)：另一个配置任务正在执行，本次未做任何更改。请等它完成再点。\n"
                 }
                 self.lastExitCode = exitCode
-                if exitCode == 0 {
+                // 2026-10-22：退出码落盘，面板关掉/重开/换 App 实例都还能显示"上次结果"
+                UserDefaults.standard.set(exitCode, forKey: Self.lastExitDefaultsKey)
+                if wasBusy {
+                    self.logText += "\n[跳过] 本次未做任何更改 —— 另一个配置任务正在运行，不是失败\n"
+                    // 用户填的 Key 仍然有效，照样存进 Keychain，省得再填一遍
+                    if !effectiveGo.isEmpty { KeychainStore.save(effectiveGo) }
+                } else if exitCode == 0 {
                     self.logText += "\n[完成] 退出码 0 ✅\n"
                     // 同步 Keychain：存"有效 Go Key"（含留空复用的旧值）供 Widget 直接用
                     if !effectiveGo.isEmpty { KeychainStore.save(effectiveGo) }

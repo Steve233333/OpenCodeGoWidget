@@ -36,9 +36,14 @@ struct CodexSetupView: View {
     @State private var runStart: Date? = nil
     @State private var elapsedSeconds = 0
     @State private var showFullLog = true
+    // 2026-10-22：跨界面/跨 App 的"配置还在跑"状态 + 磁盘上的脚本日志。
+    // 以前运行中状态是 @StateObject 私有的：退出面板再回来就没了，用户以为没在配 → 重复点击。
+    @State private var externalTask: CodexInstaller.RunningSetupTask? = nil
+    @State private var diskLog: String = ""
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    private var canRun: Bool { !installer.isRunning }
+    private var isBusy: Bool { installer.isRunning || externalTask != nil }
+    private var canRun: Bool { !isBusy }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -82,11 +87,24 @@ struct CodexSetupView: View {
             if let e = errorText {
                 Text(e).font(.caption2).foregroundStyle(.red)
             }
+            // 2026-10-22：别的实例/上一次的面板已经在跑配置 → 明确告诉用户在跑，别再点
+            if !installer.isRunning, let task = externalTask {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.6)
+                        Text("配置任务正在运行（PID \(task.pid)"
+                             + (task.start.isEmpty ? "" : "，开始于 \(task.start)") + "）")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
+                    Text("请等它跑完（约 1~2 分钟，重建 Codex 副本时更久）。期间不要重复点击，也别打开 Codex 副本 —— 副本正在被替换时打开会提示「已损坏」。下面的日志是它的实时进度。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
             if let code = installer.lastExitCode {
                 Text(code == 0 ? "上次配置成功 ✅" : "上次配置失败（\(code)），请查看日志")
                     .font(.caption2).foregroundStyle(code == 0 ? .green : .red)
             }
-            if installer.isRunning {
+            if isBusy {
                 HStack(spacing: 6) {
                     ProgressView().scaleEffect(0.6)
                     Text("配置中…已用时 \(formattedElapsed(elapsedSeconds))（重建约需 1~2 分钟，请勿重复点击）")
@@ -95,10 +113,10 @@ struct CodexSetupView: View {
                     Button(showFullLog ? "收起" : "展开") { showFullLog.toggle() }
                         .controlSize(.mini).buttonStyle(.plain).font(.caption2)
                 }
-                if showFullLog && !installer.logText.isEmpty {
+                if showFullLog && !visibleLog.isEmpty {
                     ScrollViewReader { proxy in
                         ScrollView {
-                            Text(installer.logText)
+                            Text(visibleLog)
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -107,12 +125,12 @@ struct CodexSetupView: View {
                         }
                         .frame(maxHeight: 170)
                         // macOS 14 起 onReceive 式的单参数 onChange(of:perform:) 已废弃，改成两参数版本
-                        .onChange(of: installer.logText) { _, _ in
+                        .onChange(of: visibleLog) { _, _ in
                             proxy.scrollTo("logEnd", anchor: .bottom)
                         }
                     }
                 }
-            } else if !installer.logText.isEmpty {
+            } else if !visibleLog.isEmpty {
                 HStack {
                     Spacer()
                     Button(showFullLog ? "收起日志" : "查看完整日志") { showFullLog.toggle() }
@@ -120,7 +138,7 @@ struct CodexSetupView: View {
                 }
                 if showFullLog {
                     ScrollView {
-                        Text(installer.logText)
+                        Text(visibleLog)
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -128,7 +146,7 @@ struct CodexSetupView: View {
                     }
                     .frame(maxHeight: 170)
                 } else {
-                    Text(installer.logText.split(separator: "\n").suffix(2).joined(separator: "\n"))
+                    Text(visibleLog.split(separator: "\n").suffix(2).joined(separator: "\n"))
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -140,7 +158,7 @@ struct CodexSetupView: View {
                 Button {
                     configure()
                 } label: {
-                    if installer.isRunning {
+                    if isBusy {
                         HStack(spacing: 6) { ProgressView().scaleEffect(0.6); Text("配置中…") }
                     } else {
                         Text("配置").frame(minWidth: 80)
@@ -165,6 +183,8 @@ struct CodexSetupView: View {
             installer.refreshStatus()
             // 缓存已存值，避免 body 每次重算时同步读文件
             reReadExisting()
+            // 2026-10-22：面板一进来就知道"是不是已经有配置在跑"（锁文件为真相）
+            refreshExternalState()
         }
         .onReceive(installer.$status) { _ in
             // 状态刷新后同步更新已存提示
@@ -191,6 +211,7 @@ struct CodexSetupView: View {
             )
         }
         .onReceive(tick) { _ in
+            refreshExternalState()
             if installer.isRunning, let s = runStart {
                 elapsedSeconds = Int(Date().timeIntervalSince(s))
             }
@@ -201,6 +222,25 @@ struct CodexSetupView: View {
                 runStart = nil
                 installer.openPatchedApp()
             }
+        }
+    }
+
+    /// 本 App 自己在跑 → 用内存里的实时日志；别的实例在跑（或面板刚重开）→ 用磁盘上的日志。
+    private var visibleLog: String {
+        if installer.isRunning { return installer.logText }
+        if externalTask != nil { return diskLog }
+        return installer.logText.isEmpty ? diskLog : installer.logText
+    }
+
+    /// 2026-10-22：从磁盘（锁文件 + 脚本日志）恢复"配置还在跑"的状态。
+    /// 面板关掉、App 重启、或者配置是另一个实例发起的，内存状态都没了 —— 磁盘有。
+    private func refreshExternalState() {
+        let task = CodexInstaller.detectRunningSetupTask()
+        if task?.pid != externalTask?.pid {
+            externalTask = task
+        }
+        if task != nil || installer.logText.isEmpty {
+            diskLog = CodexInstaller.readSetupLogTail()
         }
     }
 

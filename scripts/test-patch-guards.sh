@@ -50,6 +50,33 @@ grep -qF 'local current marker_ver' "$PATCH_SH" \
   && ok "install() 用的是版本比较而不是单一 is_patched" || bad "install() 缺版本比较"
 
 # ---------------------------------------------------------------------------
+# ②b 原子重建护栏（2026-10-22）
+# 事故：另一台机器点「配置」后弹"ChatGPT-Patched 已损坏，无法打开"。根因是重建
+# **在正式路径上原地做**：先把旧副本 mv 成备份，再把官方版 cp 到正式路径原地改 ——
+# 那一两分钟里正式路径上是个半成品（asar 已改、签名没重做、启动器没编好），
+# 用户此时双击就报"已损坏"；任务中途被取消/关机，半成品还会留在正式路径上。
+# 修法：先在暂存目录建好、验签通过，再原子换入 —— 正式路径上永远是好的。
+grep -qF 'STAGING="$(dirname "$PATCHED")/ChatGPT-Patched.new.' "$PATCH_SH" \
+  && ok "重建在暂存目录做（正式路径不再放半成品）" || bad "重建又变回正式路径原地做"
+grep -qF 'mv "$STAGING" "$PATCHED"' "$PATCH_SH" \
+  && ok "验签通过后换入暂存副本" || bad "缺暂存→正式的换入动作"
+grep -qF 'discard_staging()' "$PATCH_SH" \
+  && grep -qF 'discard_staging "byte-verify"' "$PATCH_SH" \
+  && ok "失败只丢暂存目录（旧副本不受影响）" || bad "缺失败清理逻辑"
+# 字节校验必须针对**暂存目录那份** asar：用全局 is_patched() 会去查正式路径 → 永远失败
+grep -qF 'discard_staging "byte-verify"' "$PATCH_SH" \
+  && ! grep -qF 'if ! is_patched; then' "$PATCH_SH" \
+  && ok "字节校验针对暂存副本（不再查正式路径）" || bad "字节校验又变回查正式路径"
+# 顺序：换入必须在验签之后
+verify_line=$(grep -n 'codesign verify passed' "$PATCH_SH" | head -1 | cut -d: -f1)
+swap_line=$(grep -n 'mv "$STAGING" "$PATCHED"' "$PATCH_SH" | head -1 | cut -d: -f1)
+if [ -n "$verify_line" ] && [ -n "$swap_line" ] && [ "$verify_line" -lt "$swap_line" ]; then
+  ok "顺序正确：先验签再换入"
+else
+  bad "换入发生在验签之前（半成品会先落到正式路径）"
+fi
+
+# ---------------------------------------------------------------------------
 # ③ 行为用例：把脚本里那段启动器选择逻辑抠出来，用受控的假 clang 跑
 sed -n '/^  launcher_ok=""/,/main executable wrapped with user-data-dir launcher/p' "$PATCH_SH" > "$WORK/block.sh"
 if [ ! -s "$WORK/block.sh" ]; then
