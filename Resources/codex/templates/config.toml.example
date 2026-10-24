@@ -1,5 +1,5 @@
-model = "muse-spark-1.2-contributor-go"
-model_reasoning_effort = "xhigh"
+model = "deepseek-v4.1-flash-go"
+model_reasoning_effort = "max"
 model_provider = "deepseek"
 preferred_auth_method = "apikey"
 forced_login_method = "api"
@@ -129,8 +129,8 @@ NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "7fe0e1c59da4bc68f9d6ab81ae8d349b53fe
 [memories]
 generate_memories = true
 use_memories = true
-extract_model = "mimo-v2.5-go"
-consolidation_model = "mimo-v2.5-go"
+extract_model = "deepseek-v4.1-flash-go"
+consolidation_model = "deepseek-v4.1-flash-go"
 min_rate_limit_remaining_percent = 0
 min_rollout_idle_hours = 1
 disable_on_external_context = false

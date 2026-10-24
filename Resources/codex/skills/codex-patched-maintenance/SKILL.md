@@ -144,7 +144,7 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 - 已删除（2026-08-18 精简）：hy3-free-zen、kimi-k2.7-code-go、kimi-k2.6-go、minimax-m2.7-go、grok-4.5-go（注：hy3-go 于 2026-08-21 按原生 responses 重新接入，见 §19，不再属删除列）
 - 曾实测不可用已移除：qwen3.x 全系+minimax-m3/m2.5+kimi-k3（anthropic-only，responses wire 401 "not supported for format openai"）、mimo-v2-pro/omni（404 已下架）、kimi-k2.5（503 端点不可用）（注：gpt-5.6-luna 原 403 已于 2026-08-20 经 VPN 复测 200 并接入见 §13；hy3-preview 原 400 已于 2026-08-21 复测可用但仅作拦截见 §19）
 - 推理档位：Go 网关对 reasoning.effort 全兼容（mimo 三档实测均 200），配置按 models.dev 官方能力裁剪即可
-- **默认模型**：config.toml `model = "deepseek-v4-flash"`（2026-08-18 起改回官方直连；此前为 deepseek-v4-flash-go，再此前 glm-5.3-go；mimo-v2.5-go 有 SSE 兼容修复后可切回，见故障 8；备份 config.toml.bak.*）
+- **默认模型**：config.toml `model = "deepseek-v4.1-flash-go"`、`model_reasoning_effort = "max"`；新机安装器的默认对话与记忆模型也统一到这一项。
 - **2026-08-18 全量核对**：8 个 Go 模型用带 assistant 历史消息的完整请求重放，全部 HTTP 200 且正常输出（mimo 232 字、glm-5.2 10 字+工具、glm-5.1 22 字+工具、glm-5.3 152 字、glm-5 310 字、mimo-pro 232 字、flash 148 字、pro 215 字）；官方直连 200；Zen 免费模型 429（限流，非不可用）（2026-08-21 已删 Zen 模型，当前 12 个 Go 模型均 200，见 §18/19）
 
 ### 8. Go 网关 chat 适配模型 SSE 事件缺失（mimo/glm/kimi/hy3"完成但无文本"）

@@ -8,8 +8,9 @@
 # 6. 选择默认模型 / 记忆模型 / base_url / bearer
 # ---------------------------------------------------------------------------
 DEFAULT_MODEL=""
-# 2026-10-20：之前无条件把默认模型设成 DeepSeek 直连；这在“只有 Go Key”的机器
-# 会生成一个不存在的模型。现在先看真正可用列表，再按偏好挑第一个存在的。
+DEFAULT_REASONING_EFFORT="max"
+# 2026-10-24：用户指定所有新配置默认使用 DeepSeek V4.1 Flash 的最高推理档。
+# 仍然先看真正可用列表，避免“只有 DeepSeek 直连 Key”的机器生成不存在的 Go 模型。
 pick_available_model() {
   local slug
   for slug in "$@"; do
@@ -20,34 +21,20 @@ pick_available_model() {
   return 1
 }
 
-if [[ "$HAS_DS" -eq 1 ]] && DEFAULT_MODEL="$(pick_available_model deepseek-v4-flash-vision-exp)"; then
-  :
-elif DEFAULT_MODEL="$(pick_available_model mimo-v2.5-go deepseek-v4-flash-go)"; then
+if DEFAULT_MODEL="$(pick_available_model \
+  deepseek-v4.1-flash-go \
+  deepseek-v4-flash-go \
+  deepseek-v4-flash-vision-exp-go \
+  deepseek-v4-flash-vision-exp \
+  deepseek-v4-pro-go \
+  deepseek-v4-pro)"; then
   :
 else
   DEFAULT_MODEL="${AVAIL_SLUGS%% *}"
 fi
 
-EXTRACT_MODEL=""
-# 2026-09-22：不再装 Zen 模型（含免费），下面两个 Zen 分支现在正常情况匹配不到，
-# 会自动落到 mimo-v2.5-go（Go 模型）—— 记忆管线的模型必须在 models.json 里真实存在。
-if [[ "$AVAIL_SLUGS" == *"mimo-v2.5-free-zen"* ]]; then
-  EXTRACT_MODEL="mimo-v2.5-free-zen"
-elif [[ "$AVAIL_SLUGS" == *"mimo-v2.5-free"* ]]; then
-  EXTRACT_MODEL="mimo-v2.5-free"
-elif [[ "$AVAIL_SLUGS" == *"mimo-v2.5-go"* ]]; then
-  EXTRACT_MODEL="mimo-v2.5-go"
-elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-vision-exp-go"* ]]; then
-  EXTRACT_MODEL="deepseek-v4-flash-vision-exp-go"
-elif [[ "$AVAIL_SLUGS" == *"deepseek-v4-flash-vision-exp"* ]]; then
-  EXTRACT_MODEL="deepseek-v4-flash-vision-exp"
-elif [[ -n "$DEFAULT_MODEL" ]]; then
-  # 2026-10-20：之前这里取“第一个可用模型”，但它可能是仅 DeepSeek 的模型；
-  # 纯 Go 配置下记忆任务会去调不存在的直连模型。优先跟随默认模型。
-  EXTRACT_MODEL="$DEFAULT_MODEL"
-else
-  EXTRACT_MODEL="${AVAIL_SLUGS%% *}"
-fi
+# 记忆提取/合并也跟随同一个默认模型，避免新会话与后台记忆任务使用不同模型。
+EXTRACT_MODEL="$DEFAULT_MODEL"
 
 if [[ -z "$DEFAULT_MODEL" || -z "$EXTRACT_MODEL" ]]; then
   # 分清真实原因，别再一律甩锅给 Key（2026-09-19：新机没装命令行工具时就是这里报错的）
@@ -87,9 +74,9 @@ else
 fi
 
 _config_out="$(python3 - "$RES_DIR/templates/config.toml" "$CODEX_HOME/config.toml" \
-  "$DEFAULT_MODEL" "$EXTRACT_MODEL" "$BASE_URL" "$BEARER" 2>&1 <<'PY'
+  "$DEFAULT_MODEL" "$DEFAULT_REASONING_EFFORT" "$EXTRACT_MODEL" "$BASE_URL" "$BEARER" 2>&1 <<'PY'
 import os, re, sys, tempfile
-src, dst, default_model, extract_model, base_url, bearer = sys.argv[1:7]
+src, dst, default_model, default_effort, extract_model, base_url, bearer = sys.argv[1:8]
 
 try:
     existing = ""
@@ -102,7 +89,7 @@ try:
         with open(src, encoding="utf-8") as handle:
             text = handle.read()
         text = text.replace("__DEFAULT_MODEL__", default_model)
-        text = text.replace("__REASONING_EFFORT__", "low")
+        text = text.replace("__REASONING_EFFORT__", default_effort)
         text = text.replace("__BASE_URL__", base_url)
         text = text.replace("__BEARER__", bearer)
         text = text.replace("__EXTRACT_MODEL__", extract_model)
@@ -111,7 +98,11 @@ try:
 
     if existing.strip():
         out = re.sub(r"^model\s*=.*", f'model = "{default_model}"', out, flags=re.MULTILINE)
-        out = re.sub(r"^model_reasoning_effort\s*=.*", 'model_reasoning_effort = "low"', out, flags=re.MULTILINE)
+        effort_line = f'model_reasoning_effort = "{default_effort}"'
+        if re.search(r"(?m)^model_reasoning_effort\s*=", out):
+            out = re.sub(r"^model_reasoning_effort\s*=.*", effort_line, out, flags=re.MULTILINE)
+        else:
+            out = re.sub(r"(?m)^(model\s*=.*)$", rf"\1\n{effort_line}", out, count=1)
         out = re.sub(r"base_url\s*=.*", f'base_url = "{base_url}"', out)
         # 2026-09-19：以前这行只会"替换已存在的行"。被「清除」按钮删过、或老配置里本来就没这行时，
         # 再点多少次「配置」也补不回来 —— Codex 发的请求于是没有 Authorization，
@@ -126,8 +117,35 @@ try:
                          lambda m: m.group(1) + f'experimental_bearer_token = "{bearer}"\n', out, count=1)
         else:
             out = out.rstrip("\n") + f'\nexperimental_bearer_token = "{bearer}"\n'
-        out = re.sub(r"extract_model\s*=.*", f'extract_model = "{extract_model}"', out)
-        out = re.sub(r"consolidation_model\s*=.*", f'consolidation_model = "{extract_model}"', out)
+        memory_lines = {
+            "extract_model": f'extract_model = "{extract_model}"',
+            "consolidation_model": f'consolidation_model = "{extract_model}"',
+            "generate_memories": "generate_memories = false",
+            "use_memories": "use_memories = false",
+            "disable_on_external_context": "disable_on_external_context = true",
+            "max_rollouts_per_startup": "max_rollouts_per_startup = 2",
+        }
+        memory_header = re.search(r"(?m)^\[memories\]\s*$", out)
+        if memory_header:
+            next_header = re.search(r"(?m)^\[[^\]]+\]\s*$", out[memory_header.end():])
+            section_end = memory_header.end() + (next_header.start() if next_header else len(out) - memory_header.end())
+            block = out[memory_header.start():section_end]
+            for key, line in memory_lines.items():
+                if re.search(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=", block):
+                    block = re.sub(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=.*$", line, block)
+                else:
+                    block = re.sub(r"(?m)^(\[memories\]\s*)$", rf"\1\n{line}", block, count=1)
+            out = out[:memory_header.start()] + block + out[section_end:]
+        else:
+            out = out.rstrip("\n") + (
+                "\n\n[memories]\n"
+                f'extract_model = "{extract_model}"\n'
+                f'consolidation_model = "{extract_model}"\n'
+                "generate_memories = false\n"
+                "use_memories = false\n"
+                "disable_on_external_context = true\n"
+                "max_rollouts_per_startup = 2\n"
+            )
         # 默认关闭记忆以省 token，用户可在 config.toml 手动改回 true
         out = re.sub(r"^generate_memories\s*=.*", 'generate_memories = false', out, flags=re.MULTILINE)
         out = re.sub(r"^use_memories\s*=.*", 'use_memories = false', out, flags=re.MULTILINE)
@@ -161,4 +179,4 @@ if [[ "$_config_rc" -ne 0 || ! -s "$CODEX_HOME/config.toml" ]]; then
   die "config.toml 写入失败：${_config_out:-未知错误}（目标：${CODEX_HOME}/config.toml）"
 fi
 chmod 600 "$CODEX_HOME/config.toml" 2>/dev/null || die "config.toml 已写入，但无法设置 600 权限：${CODEX_HOME}/config.toml"
-log "config.toml 已生成（默认模型 ${DEFAULT_MODEL}，记忆模型 ${EXTRACT_MODEL}，base_url ${BASE_URL}，记忆默认关闭）"
+log "config.toml 已生成（默认模型 ${DEFAULT_MODEL} / ${DEFAULT_REASONING_EFFORT}，记忆模型 ${EXTRACT_MODEL}，base_url ${BASE_URL}，记忆默认关闭）"

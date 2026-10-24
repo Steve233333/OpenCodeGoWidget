@@ -2,6 +2,16 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.75 — 新装默认统一为 DeepSeek V4.1 Flash Max
+
+**变更**：Codex 新配置的默认对话模型统一为 `deepseek-v4.1-flash-go`，推理档位为 `max`；记忆提取与合并模型也跟随同一模型，不再默认落到 MiMo。
+
+**兼容**：优先选择 DeepSeek V4.1 Flash (Go)；如果当前机器没有该模型（例如只有官方 DeepSeek 直连 Key），按 DeepSeek Flash/Pro 的真实可用列表依次回退，避免生成不存在的模型 slug。
+
+**验证**：config 生成用例断言 `model = "deepseek-v4.1-flash-go"`、`model_reasoning_effort = "max"`、`extract_model` / `consolidation_model` 同源；全量 `./build.sh --test` 通过后构建、安装并发版。
+
+版本 **1.1.11.75 (115)**。
+
 ### v1.1.11.74 — 已吊销的“临时”不再留在 Key 下拉框
 
 **现象**：官网 Service Accounts 里，Legacy 账号已经是 7 把 Key / 0 把 Active；方泽恩账号是 2 把 Key / 2 把 Active。但小组件下拉框仍显示 Legacy 下的“临时、方泽恩、丁雁”三把旧 Key，看起来像还在使用。

@@ -21,13 +21,16 @@ run_case() {
     log(){ :; }; die(){ echo "$*"; exit 1; }
     CODEX_HOME="$TMPROOT/codex"; RES_DIR="$TMPROOT/res"
     HAS_DS=0; HAS_GO=1; DS_KEY=""; DEFAULT_MODEL=""
-    AVAIL_SLUGS="mimo-v2.5-go glm-5.3-go"
+    AVAIL_SLUGS="deepseek-v4.1-flash-go glm-5.3-go"
     source "'"$ROOT"'/Resources/codex/setup/steps/70-defaults.sh"
   ' >/tmp/ocgw-config-case.log 2>&1 || { bad "${name}：脚本失败：$(tail -2 /tmp/ocgw-config-case.log | tr '\n' ' ')"; return; }
   local cfg="$home/codex/config.toml"
-  if [ -s "$cfg" ] && grep -q '^model = "mimo-v2.5-go"' "$cfg" \
+  if [ -s "$cfg" ] && grep -q '^model = "deepseek-v4.1-flash-go"' "$cfg" \
+     && grep -q '^model_reasoning_effort = "max"' "$cfg" \
      && grep -q '^base_url = "http://127.0.0.1:19100"' "$cfg" \
-     && grep -q '^experimental_bearer_token = "sk-relay-placeholder"' "$cfg"; then
+     && grep -q '^experimental_bearer_token = "sk-relay-placeholder"' "$cfg" \
+     && grep -q '^extract_model = "deepseek-v4.1-flash-go"' "$cfg" \
+     && grep -q '^consolidation_model = "deepseek-v4.1-flash-go"' "$cfg"; then
     ok "${name}：config.toml 可生成且关键字段正确"
   else
     bad "${name}：config.toml 内容不对"
