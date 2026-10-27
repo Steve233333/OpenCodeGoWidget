@@ -253,7 +253,7 @@ relay_functional_ready() {
   # 真正发一条 8-token 请求：200 才算端到端可用；429 说明 Key 有效但限流。
   local out code
   out="$(mktemp)"
-  code="$(/usr/bin/curl -s -o "$out" -w '%{http_code}' -m 30 \
+  code="$(/usr/bin/curl -s -o "$out" -w '%{http_code}' -m 45 \
     -X POST "http://127.0.0.1:$PORT/v1/responses" \
     -H 'Authorization: Bearer relay-functional-check' \
     -H 'Content-Type: application/json' \
@@ -270,6 +270,12 @@ relay_functional_ready() {
     5??)
       # 上游网关偶发 5xx，不能据此报“配置失败”；监听与 Key 检查照常保留。
       say "功能自检暂不可用（HTTP ${code} 上游故障，稍后自动重试）：$(head -c 160 "$out" 2>/dev/null | tr '\n' ' ')"
+      rm -f "$out"; return 2 ;;
+    000|"")
+      # 没拿到任何 HTTP 响应 = 上游连不上/超时，不是 Key 无效。
+      # 以前 000 落到 *) 返回 1，调用方会写 last_result=failed 并在下一轮跳过
+      # 这个解释器 —— 把一次网络抖动放大成“Key 被拒绝”。
+      say "功能自检超时（${code:-无响应}）：上游暂时不可达，先保留代理"
       rm -f "$out"; return 2 ;;
     *)
       say "功能自检异常（HTTP ${code:-无响应}）：$(head -c 160 "$out" 2>/dev/null | tr '\n' ' ')"

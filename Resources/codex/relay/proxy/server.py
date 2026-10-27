@@ -32,7 +32,6 @@ from .bridges_messages import (
 )
 from .config import (
     CODEX_HEADERS,
-    DIRECT_OPENER,
     GO_SUFFIX,
     GO_UPSTREAM,
     HOP_HEADERS,
@@ -63,6 +62,7 @@ from .config import (
     _log,
     load_env_file,
     normalize_route_model,
+    upstream_opener_chain,
 )
 from .muse import (
     _build_muse_retry_body,
@@ -296,26 +296,35 @@ class Proxy(RequestPipelineMixin):
             # (SSLEOFError / Connection reset)。以前直接把这个连接级错误翻成 502
             # 甩给 Codex，Codex 疯狂重试刷屏；这里对连接级瞬时错误退避重试几次。
             # 只在"没收到任何 HTTP 响应"时重试，不会重复计费/生成。
+            #
+            # 2026-10-27：先按系统代理走，连不上再回退直连。系统代理模式下
+            # （如 SakuraCat tun=false）只有代理端口能到境外上游；TUN 模式下没有
+            # 系统代理，链里就只剩直连。每次请求重读代理设置，VPN 后开也能跟上。
+            chain = upstream_opener_chain()
             attempts = 4
             last_exc = None
             for i in range(attempts):
-                try:
-                    return DIRECT_OPENER.open(request, timeout=600)
-                except urllib.error.HTTPError as exc:
-                    return exc
-                except urllib.error.URLError as exc:
-                    last_exc = exc
-                    reason = str(getattr(exc, "reason", exc))
-                    transient = any(s in reason for s in (
-                        "EOF occurred", "Connection reset", "Broken pipe",
-                        "Connection refused", "Cannot connect",
-                        "Network is unreachable", "Temporary failure",
-                    ))
-                    if i < attempts - 1 and transient:
-                        _log(f"[relay] upstream transient error ({reason}), retry {i + 1}/{attempts - 1}")
-                        time.sleep(RETRY_BACKOFF_BASE * (i + 1))
-                        continue
-                    raise
+                for idx, (label, opener) in enumerate(chain):
+                    try:
+                        return opener.open(request, timeout=600)
+                    except urllib.error.HTTPError as exc:
+                        return exc
+                    except urllib.error.URLError as exc:
+                        last_exc = exc
+                        reason = str(getattr(exc, "reason", exc))
+                        if idx < len(chain) - 1:
+                            _log(f"[relay] upstream via {label} failed ({reason}), trying {chain[idx + 1][0]}")
+                            continue
+                        transient = any(s in reason for s in (
+                            "EOF occurred", "Connection reset", "Broken pipe",
+                            "Connection refused", "Cannot connect",
+                            "Network is unreachable", "Temporary failure",
+                        ))
+                        if i < attempts - 1 and transient:
+                            _log(f"[relay] upstream transient error ({reason}), retry {i + 1}/{attempts - 1}")
+                            time.sleep(RETRY_BACKOFF_BASE * (i + 1))
+                            continue
+                        raise
             raise last_exc
 
         try:

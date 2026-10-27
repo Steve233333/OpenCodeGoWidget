@@ -668,6 +668,13 @@ class RequestPipelineMixin:
             turn = await self._turn_begin(reader, writer, txn)
             if turn is None:
                 return
+            # 探活专用：ensure-relay.sh 的 probe() 和 App 的 proxyResponds() 都 GET
+            # /v1/models，只要求"有 HTTP 响应"。以前这里把它转发到上游，上游不可达时
+            # 探活超时，watchdog 就会把"relay 活着但上游不通"误判成"relay 死了"并
+            # 反复重启（连带 Codex 显示 Reconnecting）。本地直接回 401，与脚本注释一致。
+            if turn["method"] == "GET" and turn["path"].rstrip("/").endswith("/v1/models"):
+                await self._send_error(writer, 401, "missing api key")
+                return
             await self._turn_execute(writer, turn, txn)
         except (ConnectionResetError, BrokenPipeError):
             txn["status"] = txn["status"] or 499

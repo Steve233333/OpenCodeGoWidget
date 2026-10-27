@@ -2,6 +2,26 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.76 — 本地代理探活与上游路由修复
+
+**现象**：Codex 周期性显示「Reconnecting… waiting for network」；小组件横幅报「代理没起来 (rc=-9)：ensure-relay.sh 超时（120 秒）」，点「修复」也无效；请求间歇性 502，relay 日志是 `[Errno 8]`（DNS）或 `[Errno 60]`（连接超时）。
+
+**根因**：
+
+- `ensure-relay.sh` 的 `probe()` 和 App 的 `proxyResponds()` 都用 `GET /v1/models` 探活，但 relay 没有本地处理，把它转发到了上游。上游不可达时探活超时，看护误判 relay 已死并反复重启；3 个候选解释器 × 约 40 秒正好超过 App 的 120 秒上限，修复被 SIGTERM 后显示 rc=-9。
+- 上游请求固定使用 `ProxyHandler({})` 强制直连。SakuraCat 系统代理模式（`tun=false`）下只有本机代理端口能到境外上游，直连得到 Errno 8/60，relay 再翻成 502。
+- 功能自检拿到 `000`（无 HTTP 响应）时落到 `*)` 返回 1，调用方写 `last_result=failed` 并在下一轮跳过该解释器，把一次网络抖动放大成「Key 被拒绝」。
+
+**修法**：
+
+- relay 本地响应 `GET /v1/models`（401），不再转发；探活只证明 HTTP 活着，上游是否可用交给功能自检。
+- 新增 `upstream_opener_chain()`：每次请求重读系统代理，优先系统代理、失败回退直连；没有系统代理时只直连，兼容 TUN。
+- `ensure-relay.sh` 把 `000`/空响应归类为「上游暂不可达」（保留代理，不再误报 Key 无效），功能自检超时 30→45 秒。
+
+**验证**：全量 171/171 通过（新增 opener 链回归）；备用端口探活 401、真实 `deepseek-v4.1-flash-go` 请求 200（2.5s）；正式服务 `--check-only` 返回 0、`/v1/models` 401（约 1ms）、功能自检 200（2.57s）。
+
+版本 **1.1.11.76 (116)**。
+
 ### v1.1.11.75 — 新装默认统一为 DeepSeek V4.1 Flash Max
 
 **变更**：Codex 新配置的默认对话模型统一为 `deepseek-v4.1-flash-go`，推理档位为 `max`；记忆提取与合并模型也跟随同一模型，不再默认落到 MiMo。

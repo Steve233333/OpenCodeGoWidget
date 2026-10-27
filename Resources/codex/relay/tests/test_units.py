@@ -739,6 +739,21 @@ def t_text_delta_pacer_drips_bursts_and_keeps_gradual_streams():
     assert pacer.rate > start_rate * 2, f"积压后应该加速（{start_rate} → {pacer.rate}）"
 
 
+def t_upstream_opener_chain_follows_system_proxy():
+    """有系统代理时先代理后直连；没有代理时只直连（VPN 后开也能跟上）"""
+    cfg = vp._config
+    original = cfg.urllib.request.getproxies
+    try:
+        cfg.urllib.request.getproxies = lambda: {
+            "http": "http://127.0.0.1:12450", "https": "http://127.0.0.1:12450"}
+        chain = cfg.upstream_opener_chain()
+        assert [label for label, _ in chain] == ["system proxy", "direct"], chain
+        cfg.urllib.request.getproxies = lambda: {}
+        assert [label for label, _ in cfg.upstream_opener_chain()] == ["direct"]
+    finally:
+        cfg.urllib.request.getproxies = original
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)

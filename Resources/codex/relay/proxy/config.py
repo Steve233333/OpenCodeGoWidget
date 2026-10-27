@@ -30,6 +30,29 @@ CODEX_HEADERS = {"originator", "session-id", "thread-id", "user-agent"}
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def upstream_opener_chain():
+    """本次上游请求要尝试的 [(label, opener), ...]，按优先级排列。
+
+    2026-10-27：以前上游只有 DIRECT_OPENER，强制绕过系统代理。OpenCode Go / Zen
+    的上游在境外，SakuraCat 系统代理模式（tun=false）下只有本机代理端口能出去；
+    直连会得到 Errno 8（DNS 解析失败）或 Errno 60（连接超时），relay 再翻成 502。
+    TUN 模式没有系统代理，直连本来就经过虚拟网卡，所以两种模式都保留直连兜底。
+
+    每次请求重新读系统代理：VPN 可能在 relay 启动之后才开关。
+    """
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        proxies = {}
+    if proxies.get("http") or proxies.get("https"):
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+        except Exception:
+            return [("direct", DIRECT_OPENER)]
+        return [("system proxy", opener), ("direct", DIRECT_OPENER)]
+    return [("direct", DIRECT_OPENER)]
+
+
 def relay_env(name: str, default=None):
     """读 `RELAY_*`；没设就回落到旧的 `VISION_*` 名字（2026-10-06 改名过渡用）。
 
