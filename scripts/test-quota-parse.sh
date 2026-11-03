@@ -13,5 +13,9 @@ if [ "${1:-}" = "--live" ]; then
   MODE="fixture + 真实页面"
 fi
 echo "==> 配额解析自检（${MODE}）"
-swiftc -O "$ROOT/Sources/GoQuotaRegistry.swift" "$ROOT/Tests/GoQuotaParseTests.swift" -o "$TMP/quota_parse_test"
+swiftc -O \
+  "$ROOT/Sources/PlatformConfig.swift" \
+  "$ROOT/Sources/GoQuotaRegistry.swift" \
+  "$ROOT/Tests/GoQuotaParseTests.swift" \
+  -o "$TMP/quota_parse_test"
 "$TMP/quota_parse_test" "$@"

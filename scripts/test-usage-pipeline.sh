@@ -11,6 +11,7 @@ trap 'rm -rf "$TMP"' EXIT
 echo "==> 用量管线自检（离线断言）"
 # 只编译纯数据层：不 import SwiftUI、不碰网络，所以能离线跑（谁把 UI/网络拽进来会直接编译失败）
 swiftc -O \
+  "$ROOT/Sources/PlatformConfig.swift" \
   "$ROOT/Sources/ChartFormatters.swift" \
   "$ROOT/Sources/BillingCycle.swift" \
   "$ROOT/Sources/UsageCostModels.swift" \

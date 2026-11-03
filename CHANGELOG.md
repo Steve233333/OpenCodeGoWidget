@@ -2,6 +2,16 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### iOS 1.0.0 — 原生 iPhone App + Widget（源码）
+
+- 新增 `iOS/` XcodeGen 工程：`OpenCodeGoIOS` App 与 `OpenCodeGoWidgetIOSExtension`。
+- 只使用 OpenCode 控制台账号会话，不要求 Go API Key；会话存 iOS Keychain。
+- 支持 5 小时/周/月额度、30 天历史、按 Key、按模型、配额表。
+- Widget 支持主屏小/中号与锁屏矩形样式。
+- 主 App 使用机会性 `BGAppRefreshTask`；Widget Extension 只读取 App Group 快照。
+- 最低 iOS 18.0，个人 Personal Team 自动签名；不改变 macOS `1.1.11.76` 版本与 Release。
+- 验证：iOS App、Widget、测试 target 均通过 `xcodebuild` arm64 编译；共享用量管线全量测试通过。
+
 ### v1.1.11.76 — 本地代理探活与上游路由修复
 
 **现象**：Codex 周期性显示「Reconnecting… waiting for network」；小组件横幅报「代理没起来 (rc=-9)：ensure-relay.sh 超时（120 秒）」，点「修复」也无效；请求间歇性 502，relay 日志是 `[Errno 8]`（DNS）或 `[Errno 60]`（连接超时）。

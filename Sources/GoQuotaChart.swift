@@ -212,7 +212,9 @@ private struct QuotaBarRowNested: View {
                         .font(.system(size: 7, weight: .semibold))
                         .lineLimit(1)
                         .foregroundStyle(Color.orange)
+#if os(macOS)
                         .help(quota.note ?? badge)
+#endif
                 }
             }
             .frame(width: 150, alignment: .leading)

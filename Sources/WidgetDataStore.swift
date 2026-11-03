@@ -76,7 +76,7 @@ struct WidgetSnapshotLoad {
 
 /// 历史回填的运行状态：界面用它决定要不要显示进度条、要不要每 5 秒把快照重读回界面。
 enum BackfillProgress {
-    static let suiteName = "2DC432GLL2.com.steve233.opencodego"
+        static let suiteName = PlatformConfig.appGroupID
     static func isRunning() -> Bool {
         let d = UserDefaults(suiteName: suiteName)
         guard d?.bool(forKey: "historyBackfillRunning") == true else { return false }
@@ -88,9 +88,13 @@ enum BackfillProgress {
 }
 
 enum WidgetDataStore {
-    static let suiteName = "2DC432GLL2.com.steve233.opencodego"
+    static let suiteName = PlatformConfig.appGroupID
     static let snapshotKey = "widget_snapshot"
+#if os(iOS)
+    static let widgetBundleID = "com.steve233.opencodego.ios.widget"
+#else
     static let widgetBundleID = "com.steve233.opencodego.widget"
+#endif
     static let widgetSubdir = "OpenCodeGoWidget"
     static let fileName = "widget_snapshot.json"
 
@@ -115,6 +119,10 @@ enum WidgetDataStore {
     /// 备用通道（宿主机视角）：主 App 往小组件容器里写的那份。
     /// 只在容器已经由系统创建过（小组件至少跑过一次）时才返回路径，绝不自己乱建 Containers 目录。
     static var widgetHostFileURL: URL? {
+#if os(iOS)
+        // iOS 的 App 与 Widget Extension 只通过 App Group 共享数据。
+        return nil
+#else
         let containerData = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Containers", isDirectory: true)
             .appendingPathComponent(widgetBundleID, isDirectory: true)
@@ -123,6 +131,17 @@ enum WidgetDataStore {
         return containerData
             .appendingPathComponent("Library/Application Support/\(widgetSubdir)", isDirectory: true)
             .appendingPathComponent(fileName)
+#endif
+    }
+
+    private static var writableSnapshotURLs: [URL] {
+        let candidates: [URL?]
+#if os(iOS)
+        candidates = [fileURL]
+#else
+        candidates = [fileURL, widgetHostFileURL, widgetOwnFileURL]
+#endif
+        return candidates.compactMap { $0 }
     }
 
     /// 所有能写的通道都写一遍：任意一条通，小组件就还有救。
@@ -131,7 +150,7 @@ enum WidgetDataStore {
     static func save(_ snap: WidgetSnapshot) -> Bool {
         guard let data = try? JSONEncoder().encode(snap) else { return false }
         var wrote = false
-        for url in [fileURL, widgetHostFileURL, widgetOwnFileURL].compactMap({ $0 }) {
+        for url in writableSnapshotURLs {
             do {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                         withIntermediateDirectories: true)
@@ -160,7 +179,7 @@ enum WidgetDataStore {
     @discardableResult
     static func wipeUsageCache() -> Bool {
         var removed = false
-        for url in [fileURL, widgetHostFileURL, widgetOwnFileURL].compactMap({ $0 }) {
+        for url in writableSnapshotURLs {
             if FileManager.default.fileExists(atPath: url.path) {
                 try? FileManager.default.removeItem(at: url)
                 removed = true
@@ -220,10 +239,18 @@ enum WidgetDataStore {
         let groupPath = groupContainerURL?.path
         let groupFile = fileURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         let widgetHost = widgetHostFileURL
-        let widgetWritable = widgetHost.map {
-            FileManager.default.isWritableFile(atPath: $0.deletingLastPathComponent().path)
-                || FileManager.default.isWritableFile(atPath: FileManager.default.homeDirectoryForCurrentUser.path)
-        } ?? false
+        let widgetWritable: Bool = {
+            guard let widgetHost else { return false }
+            var writable = FileManager.default.isWritableFile(
+                atPath: widgetHost.deletingLastPathComponent().path
+            )
+#if os(macOS)
+            writable = writable || FileManager.default.isWritableFile(
+                atPath: FileManager.default.homeDirectoryForCurrentUser.path
+            )
+#endif
+            return writable
+        }()
 
         func wrap(_ snap: WidgetSnapshot, _ source: String) -> WidgetSnapshotLoad {
             WidgetSnapshotLoad(snapshot: snap, source: source, groupContainerPath: groupPath,
@@ -284,7 +311,7 @@ enum WidgetDataStore {
 }
 
 enum WidgetConstants {
-    static let kind = "OpenCodeGoWidget"
+    static let kind = PlatformConfig.widgetKind
 }
 
 enum WidgetSnapshotRefresher {
@@ -305,7 +332,7 @@ enum WidgetSnapshotRefresher {
         // 用户点「刷新」等于什么都没干（历史丢了也永远补不回来）。
         let liveCycle = await CostCrawler.shared.fetchBillingCycleCosts(
             workspaceID: costShared?.string(forKey: "workspaceID") ?? "",
-            authCookie: costShared?.string(forKey: "authCookie") ?? "",
+            authCookie: ConsoleCredentials.auth(defaults: costShared),
             monthlyReset: usage.monthly.resetsAt)
         let cost: (total: Double, entries: [CostEntry], daily: [DailyCost], dailyByKey: [String: [DailyCost]])
         if alignment == .billing {

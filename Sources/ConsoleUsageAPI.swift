@@ -191,7 +191,7 @@ extension CostCrawler {
                 return .networkError
             }
             let text = String(data: data, encoding: .utf8) ?? ""
-            UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
+            UserDefaults(suiteName: PlatformConfig.appGroupID)?
                 .set(String(text.prefix(8000)), forKey: "lastConsoleAPISample")
             if (200...299).contains(http.statusCode) { return .success(data) }
             if (http.statusCode == 429 || http.statusCode == 503) && attempt == 0 {

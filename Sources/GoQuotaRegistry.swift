@@ -35,7 +35,7 @@ struct GoQuota: Codable, Equatable, Identifiable {
 
 /// 实时同步文档配额表：https://opencode.ai/docs/zh-cn/go/ 表 Model | 每5小时 | 每周 | 每月
 enum GoQuotaRegistry {
-    static let suiteName = "2DC432GLL2.com.steve233.opencodego"
+    static let suiteName = PlatformConfig.appGroupID
     // v2（2026-09-14）：解析器从「纯文本单元格」改成「剥标签 + 取 <strong> 当前值」，
     // 缓存键一并升级，否则升级后 12h TTL 内还会继续显示缺 V4.1 Flash 的旧列表。
     // v3（2026-09-17）：免费行判定加上「无限制」（Union Alpha Free 三格都写这个），

@@ -36,8 +36,7 @@ final class CostCrawler: @unchecked Sendable {
     /// 拿到真实样本后再收紧。
     func fetchConsoleAPI(workspaceID: String, authCookie: String, monthlyReset: Date) async -> MonthlyCost? {
         // 新控制台要两个 cookie：auth（老站）+ __Host-console_session（新会话，缺它必 401）
-        let session = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")?
-            .string(forKey: "consoleSession") ?? ""
+        let session = ConsoleCredentials.session()
         let cookie = Self.consoleCookieHeader(auth: authCookie, session: session)
 
         // 2026-09-26：`cost-by-day` 优先用**小时桶**（`&bucket=hour`）再按北京时间归日 ——
@@ -76,7 +75,7 @@ final class CostCrawler: @unchecked Sendable {
         }
         // 明细：`request-logs`（2026-09-26 起替代已下线的 `usage/rows`）每条带
         // serviceAPIKeyID + model + cost(美元) + startedAt(ms)。增量优先、今天整天窗口保完整。
-        let syncSuite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        let syncSuite = UserDefaults(suiteName: PlatformConfig.appGroupID)
         let lastSyncAt = syncSuite?.double(forKey: "lastRowSyncAt") ?? 0
         let syncNow = Date()
         let usableIncremental = lastSyncAt > 0 && syncNow.timeIntervalSince1970 - lastSyncAt < 24 * 3600
@@ -226,10 +225,10 @@ final class CostCrawler: @unchecked Sendable {
     /// “临时/方泽恩/丁雁”会无限期显示。现在把“登录失效 / 官网没有 Key / 临时网络故障”
     /// 分成不同状态；401/403 会立刻撤下旧列表并清除失效会话。
     func cachedOrFetchedKeys(force: Bool = false) async -> KeyDirectoryState {
-        let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
-        let ws = suite?.string(forKey: "workspaceID") ?? ""
-        let auth = suite?.string(forKey: "authCookie") ?? ""
-        let session = suite?.string(forKey: "consoleSession") ?? ""
+        let suite = UserDefaults(suiteName: PlatformConfig.appGroupID)
+        let ws = ConsoleCredentials.workspace(defaults: suite)
+        let auth = ConsoleCredentials.auth(defaults: suite)
+        let session = ConsoleCredentials.session(defaults: suite)
         let fingerprint = KeyDirectoryStore.fingerprint(
             workspaceID: ws, auth: auth, session: session
         )

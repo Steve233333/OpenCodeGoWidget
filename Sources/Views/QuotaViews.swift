@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 import UniformTypeIdentifiers
 import WidgetKit
 import Charts
@@ -10,17 +12,18 @@ struct QuotaRow: View {
     let percent: Int
     let reset: Date
     var body: some View {
+        let clamped = min(max(percent, 0), 100)
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label).font(.caption)
                 Spacer()
-                Text("\(percent)%").font(.caption.monospacedDigit().bold()).foregroundStyle(color(percent))
+                Text("\(percent)%").font(.caption.monospacedDigit().bold()).foregroundStyle(color(clamped))
                 Text("· \(resetText(reset))").font(.caption2).foregroundStyle(.secondary)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.1))
-                    Capsule().fill(color(percent)).frame(width: geo.size.width * CGFloat(percent) / 100)
+                    Capsule().fill(color(clamped)).frame(width: geo.size.width * CGFloat(clamped) / 100)
                 }
             }.frame(height: 6)
         }

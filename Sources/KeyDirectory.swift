@@ -88,7 +88,7 @@ enum KeyDirectoryReducer {
 }
 
 enum KeyDirectoryStore {
-    static let suiteName = "2DC432GLL2.com.steve233.opencodego"
+    static let suiteName = PlatformConfig.appGroupID
     static let stateKey = "keyDirectoryStateV2"
     static let rejectedSessionFingerprintKey = "rejectedSessionFingerprint"
     static let cacheSchemaKey = "keyDirectoryCacheSchemaVersion"
@@ -104,8 +104,8 @@ enum KeyDirectoryStore {
     static func currentFingerprint(defaults: UserDefaults? = UserDefaults(suiteName: suiteName)) -> String {
         fingerprint(
             workspaceID: defaults?.string(forKey: "workspaceID") ?? "",
-            auth: defaults?.string(forKey: "authCookie") ?? "",
-            session: defaults?.string(forKey: "consoleSession") ?? ""
+            auth: ConsoleCredentials.auth(defaults: defaults),
+            session: ConsoleCredentials.session(defaults: defaults)
         )
     }
 

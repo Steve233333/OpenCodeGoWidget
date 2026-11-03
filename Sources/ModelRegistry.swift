@@ -5,7 +5,7 @@ import os
 /// 真源：GET https://opencode.ai/zen/go/v1/models（无鉴权，OpenAI 风格 list）
 /// App Group 缓存 + 24h TTL + 硬编码回退，保证离线与首屏可用
 enum ModelRegistry {
-    static let suiteName = "2DC432GLL2.com.steve233.opencodego"
+    static let suiteName = PlatformConfig.appGroupID
     static let cacheKey = "go_model_ids"
     static let cacheDateKey = "go_model_ids_date"
     static let ttl: TimeInterval = 24 * 3600

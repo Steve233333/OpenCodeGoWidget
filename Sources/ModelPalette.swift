@@ -1,4 +1,9 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 enum ModelPalette {
     // Go 套餐模型顺序：实时同步 https://opencode.ai/zen/go/v1/models
@@ -139,9 +144,8 @@ struct BrandIconView: View {
     }
     var body: some View {
         Group {
-            if let path = Bundle.main.path(forResource: imageName, ofType: "png"),
-               let nsImg = NSImage(contentsOfFile: path) {
-                Image(nsImage: nsImg)
+            if let image = platformBrandImage() {
+                image
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
@@ -158,6 +162,19 @@ struct BrandIconView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.12, style: .continuous))
+    }
+
+    private func platformBrandImage() -> Image? {
+        guard let path = Bundle.main.path(forResource: imageName, ofType: "png") else { return nil }
+#if os(macOS)
+        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        return Image(nsImage: image)
+#elseif os(iOS)
+        guard let image = UIImage(contentsOfFile: path) else { return nil }
+        return Image(uiImage: image)
+#else
+        return nil
+#endif
     }
 }
 

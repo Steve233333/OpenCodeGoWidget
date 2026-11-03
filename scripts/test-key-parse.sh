@@ -15,6 +15,7 @@ swiftc -O "$ROOT/Sources/OpenCodeKeyFetcher.swift" "$ROOT/Tests/OpenCodeKeyParse
 # "只留 active 且没过期的钥匙"就是下拉框内容，以前零测试覆盖（新建 Key 永远不出现那次就栽在这）。
 echo "==> 控制台密钥列表解析自检（离线 fixture）"
 swiftc -O \
+  "$ROOT/Sources/PlatformConfig.swift" \
   "$ROOT/Sources/ChartFormatters.swift" \
   "$ROOT/Sources/BillingCycle.swift" \
   "$ROOT/Sources/UsageCostModels.swift" \
@@ -25,6 +26,7 @@ swiftc -O \
 
 echo "==> Key 目录状态机自检（离线；401/临时故障/会话变化）"
 swiftc -O \
+  "$ROOT/Sources/PlatformConfig.swift" \
   "$ROOT/Sources/ChartFormatters.swift" \
   "$ROOT/Sources/BillingCycle.swift" \
   "$ROOT/Sources/UsageCostModels.swift" \

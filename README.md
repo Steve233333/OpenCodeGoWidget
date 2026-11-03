@@ -1,6 +1,6 @@
 # OpenCode Go 套餐小组件
 
-> 把 OpenCode Go 的额度、花费和全模型配额表，钉在 macOS 桌面上的原生小组件。
+> 把 OpenCode Go 的额度、花费和全模型配额表，钉在 macOS 桌面和 iPhone 主屏上的原生小组件。
 
 <p align="center">
   <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest">
@@ -107,6 +107,12 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
+
+## iOS 源码版
+
+仓库包含独立 iOS 原生 App + Widget Extension，最低 iOS 18.0。iOS 版只需在 App 内登录 OpenCode 账号，不要求 Go API Key，支持主屏小/中号、锁屏组件、30 天历史、按 Key、按模型与配额表。
+
+个人设备使用 Xcode Personal Team 自动签名，免费账号通常需每 7 天重新构建安装。生成和安装步骤见 [iOS/README.md](iOS/README.md)。
 
 ## 更新日志
 

@@ -26,7 +26,7 @@ extension CostCrawler {
     }
 
     private func runBackfill() async -> Bool {
-        let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+        let suite = UserDefaults(suiteName: PlatformConfig.appGroupID)
         let snap0 = WidgetDataStore.load()
         let missing = UsageMerge.daysMissingDetail(daily: snap0?.dailyCosts ?? [],
                                                    dailyByKey: snap0?.dailyByKey ?? [:])
@@ -44,9 +44,9 @@ extension CostCrawler {
         guard !missing.isEmpty,
               (missing != lastMissing || (lastMemo?["logic"] as? String) != memoLogic || retryDue) else { return false }
         logger.info("CostCrawler: 历史明细缺失 \(missing.count) 天 → 触发回填")
-        let ws = suite?.string(forKey: "workspaceID") ?? ""
-        let auth = suite?.string(forKey: "authCookie") ?? ""
-        let session = suite?.string(forKey: "consoleSession") ?? ""
+        let ws = ConsoleCredentials.workspace(defaults: suite)
+        let auth = ConsoleCredentials.auth(defaults: suite)
+        let session = ConsoleCredentials.session(defaults: suite)
         guard !ws.isEmpty, !session.isEmpty else { return false }
         let cookie = Self.consoleCookieHeader(auth: auth, session: session)
 

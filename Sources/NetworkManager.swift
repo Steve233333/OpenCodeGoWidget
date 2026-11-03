@@ -6,7 +6,7 @@ enum NetworkError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured: return "未配置 ZEN_API_KEY，请在设置中粘贴"
-        case .authExpired: return "鉴权过期，请更新 API Key"
+        case .authExpired: return "控制台登录已失效，请重新登录"
         case .requestFailed: return "请求失败"
         case .parseError: return "解析失败"
         }
@@ -27,10 +27,16 @@ final class NetworkManager: @unchecked Sendable {
             logger.info("usage via console go/status: \(official.rolling.percent)/\(official.weekly.percent)/\(official.monthly.percent)")
             return official
         }
+#if os(macOS)
         guard let key = KeychainStore.resolvedKey(), !key.isEmpty else {
             logger.error("ZEN_API_KEY not configured")
             throw NetworkError.notConfigured
         }
+#else
+        // iOS 只使用账号会话；API Key 兜底不属于 iOS V1 的产品范围。
+        throw NetworkError.authExpired
+#endif
+#if os(macOS)
         var req = URLRequest(url: usageURL)
         req.httpMethod = "GET"
         req.timeoutInterval = 15
@@ -50,15 +56,16 @@ final class NetworkManager: @unchecked Sendable {
             logger.error("decode failed \(error.localizedDescription)")
             throw NetworkError.parseError
         }
+#endif
     }
 
     /// 控制台的 Go 订阅状态：`GET https://opencode.ai/console/api/go/status`
     /// 返回 access.meters.{fiveHour,week,month} 各自的 usedMicroCents / limitMicroCents。
     /// 官网那三个百分比就是 used/limit 四舍五入（实测 5.72% → 官网 6%）。
     func fetchConsoleGoStatus() async -> UsageStats? {
-        let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
-        let auth = d?.string(forKey: "authCookie") ?? ""
-        let session = d?.string(forKey: "consoleSession") ?? ""
+        let d = UserDefaults(suiteName: PlatformConfig.appGroupID)
+        let auth = ConsoleCredentials.auth(defaults: d)
+        let session = ConsoleCredentials.session(defaults: d)
         let ws = d?.string(forKey: "workspaceID") ?? ""
         guard !ws.isEmpty, !session.isEmpty else { return nil }
         var req = URLRequest(url: URL(string: "https://opencode.ai/console/api/go/status")!)
@@ -80,7 +87,7 @@ final class NetworkManager: @unchecked Sendable {
         // 本地缓存抹掉 —— 刷新是"保留旧天 + 合并"的增量逻辑，否则旧账号的历史会留在图上，
         // 变成两个账号的数据串在一起（用户明确担心过这一点）。
         if let sub = obj["subscriberUserId"] as? String, !sub.isEmpty {
-            let suite = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
+            let suite = UserDefaults(suiteName: PlatformConfig.appGroupID)
             if let old = suite?.string(forKey: "cachedAccountID"), !old.isEmpty, old != sub {
                 WidgetDataStore.wipeUsageCache()
                 logger.notice("账号已切换（\(old.prefix(12)) → \(sub.prefix(12))），本机用量缓存已清空，将按新账号重建")

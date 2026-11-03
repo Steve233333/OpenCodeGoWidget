@@ -6,7 +6,7 @@ enum ChartAlignment: String, Codable {
 }
 
 enum BillingCycle {
-    static let suiteName = "2DC432GLL2.com.steve233.opencodego"
+    static let suiteName = PlatformConfig.appGroupID
     static let alignmentKey = "chartAlignment"
     /// 日界跟着 `ChartFormatters.day` 走：**北京时间 0 点**（2026-09-23 用户拍板）。
     /// 账期/自然月的窗口边界、以及和快照里那些 `yyyy-MM-dd` 字符串的比较必须同一套日历，
