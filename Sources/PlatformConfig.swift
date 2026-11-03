@@ -3,7 +3,12 @@ import Foundation
 /// Platform-specific identities shared by networking, cache and WidgetKit code.
 enum PlatformConfig {
 #if os(iOS)
-    static let appGroupID = "group.com.steve233.opencodego.ios"
+    static let appGroupID: String = {
+        let bundled = Bundle.main.object(forInfoDictionaryKey: "OpenCodeAppGroupID") as? String
+        return bundled?.isEmpty == false
+            ? bundled!
+            : "group.com.steve233.opencodego.ios"
+    }()
     static let widgetKind = "OpenCodeGoWidgetIOS"
     static let appBundleID = "com.steve233.opencodego.ios"
     static let backgroundRefreshID = "com.steve233.opencodego.ios.refresh"

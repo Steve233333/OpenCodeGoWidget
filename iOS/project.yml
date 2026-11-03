@@ -14,9 +14,14 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_LANGUAGE: zh-Hans
     CURRENT_PROJECT_VERSION: "1"
-    MARKETING_VERSION: "1.0.0"
+    MARKETING_VERSION: "1.0.1"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     CLANG_ENABLE_MODULES: YES
+  configs:
+    Debug:
+      APP_GROUP_ID: group.com.steve233.opencodego.ios
+    Release:
+      APP_GROUP_ID: group.3e514c57016aaf19.1
 
 targets:
   OpenCodeGoIOS:
@@ -48,19 +53,20 @@ targets:
       - path: ../Sources/WidgetTimeline.swift
       - path: ../Sources/Views/ChartViews.swift
       - path: ../Sources/Views/QuotaViews.swift
-    resources:
+      - path: Resources/AppIcons
+        buildPhase: resources
       - path: ../Resources/BrandLight.png
+        buildPhase: resources
       - path: ../Resources/BrandDark.png
-      - path: Resources/Assets.xcassets
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.steve233.opencodego.ios
         PRODUCT_NAME: OpenCode Go
         PRODUCT_MODULE_NAME: OpenCodeGoIOS
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "1"
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "1.0.1"
+        CURRENT_PROJECT_VERSION: "2"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/OpenCodeGoIOS.entitlements
@@ -96,17 +102,18 @@ targets:
       - path: ../Sources/UsageRows.swift
       - path: ../Sources/WidgetDataStore.swift
       - path: ../Sources/WidgetTimeline.swift
-    resources:
       - path: ../Resources/BrandLight.png
+        buildPhase: resources
       - path: ../Resources/BrandDark.png
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.steve233.opencodego.ios.widget
         PRODUCT_NAME: OpenCodeGoWidgetIOSExtension
         PRODUCT_MODULE_NAME: OpenCodeGoWidgetIOSExtension
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.0.1"
+        CURRENT_PROJECT_VERSION: "2"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Widget/Info.plist
         CODE_SIGN_ENTITLEMENTS: Widget/OpenCodeGoWidgetIOS.entitlements

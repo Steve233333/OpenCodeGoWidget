@@ -6,6 +6,26 @@
     <string>zh_CN</string>
     <key>CFBundleDisplayName</key>
     <string>OpenCode Go</string>
+    <key>CFBundleIconFiles</key>
+    <array>
+        <string>AppIcon60x60</string>
+        <string>AppIcon76x76</string>
+        <string>AppIcon83.5x83.5</string>
+    </array>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+                <string>AppIcon76x76</string>
+                <string>AppIcon83.5x83.5</string>
+            </array>
+            <key>UIPrerenderedIcon</key>
+            <false/>
+        </dict>
+    </dict>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -35,6 +55,8 @@
     <array>
         <string>com.steve233.opencodego.ios.refresh</string>
     </array>
+    <key>OpenCodeAppGroupID</key>
+    <string>$(APP_GROUP_ID)</string>
     <key>UIBackgroundModes</key>
     <array>
         <string>fetch</string>

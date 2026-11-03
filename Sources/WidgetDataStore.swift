@@ -102,6 +102,7 @@ enum WidgetDataStore {
     static var groupContainerURL: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName)
     }
+    static var isAppGroupAvailable: Bool { groupContainerURL != nil }
     static var fileURL: URL? { groupContainerURL?.appendingPathComponent(fileName) }
     static var defaults: UserDefaults? { UserDefaults(suiteName: suiteName) }
 

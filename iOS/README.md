@@ -32,10 +32,20 @@ open OpenCodeGoIOS.xcodeproj
 
 主 App 在启动、回前台和手动刷新时同步数据。`BGAppRefreshTask` 会请求约 15 分钟后的机会性后台刷新，但执行时间由 iOS 决定。小组件只读取 App Group 中的快照；点击刷新或组件会打开 App。
 
+Release 构建固定使用签名描述文件中的 `group.3e514c57016aaf19.1`。第三方重签时必须同时签主 App 和 Widget Extension，并保留两者的 `com.apple.security.application-groups` entitlement，否则 App 有数据但磁贴会显示空态。安装后可在“设置 → 小组件”核对共享容器是否为“正常”。
+
 ## 离线检查
 
 ```bash
 ./iOS/check.sh
 ./iOS/typecheck.sh
 ./build.sh --test
+```
+
+`check.sh` 会额外构建 Release 产物，并校验版本、App Group、Widget 扩展声明和 App 图标文件，避免再次产出没有图标或磁贴读不到数据的包。
+
+在桌面生成可直接重签的 IPA：
+
+```bash
+./iOS/package-ipa.sh
 ```

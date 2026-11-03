@@ -73,6 +73,7 @@ final class IOSUsageController: ObservableObject {
     @Published private(set) var backfillRunning = false
     @Published private(set) var error: String?
     @Published private(set) var loginExpired = false
+    @Published private(set) var widgetSharingError: String?
 
     init() {
         reloadFromStorage()
@@ -118,6 +119,13 @@ final class IOSUsageController: ObservableObject {
         quotas = GoQuotaRegistry.cachedSync()
         quotaUpdatedAt = GoQuotaRegistry.cachedDate()
         backfillRunning = BackfillProgress.isRunning()
+        widgetSharingError = WidgetDataStore.isAppGroupAvailable
+            ? nil
+            : "小组件共享容器不可用：当前签名没有保留 App Group，请用新版 IPA 重新签名并同时签主 App 与小组件扩展。"
+    }
+
+    func reloadWidget() {
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     func clearLocalData() {
@@ -128,6 +136,7 @@ final class IOSUsageController: ObservableObject {
         quotaUpdatedAt = GoQuotaRegistry.cachedDate()
         error = nil
         loginExpired = false
+        widgetSharingError = nil
         WidgetCenter.shared.reloadAllTimelines()
     }
 

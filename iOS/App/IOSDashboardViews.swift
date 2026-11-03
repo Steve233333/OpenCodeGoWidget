@@ -6,6 +6,7 @@ struct IOSOverviewView: View {
     @ObservedObject var usage: IOSUsageController
     @ObservedObject var account: ConsoleAccountModel
     let onRelogin: () -> Void
+    @State private var chartAlignment: ChartAlignment = BillingCycle.loadAlignment()
 
     var body: some View {
         ScrollView {
@@ -23,9 +24,23 @@ struct IOSOverviewView: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
+                if let sharingError = usage.widgetSharingError {
+                    Text(sharingError)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
                 if let snapshot = usage.snapshot {
-                    let recent = IOSCostWindow.recent(snapshot.dailyCosts, days: 30)
-                    let recentTotal = recent.reduce(0) { $0 + $1.total }
+                    let chartKeys = ChartWindow.dateKeys(
+                        dailyCosts: snapshot.dailyCosts,
+                        monthlyReset: snapshot.monthlyReset,
+                        alignment: chartAlignment
+                    )
+                    let chartDaily = snapshot.dailyCosts.filter { chartKeys.contains($0.date) }
+                    let chartTotal = ChartWindow.total(
+                        dailyCosts: snapshot.dailyCosts,
+                        monthlyReset: snapshot.monthlyReset,
+                        alignment: chartAlignment
+                    )
 
                     HStack(spacing: 12) {
                         IOSMetricCard(
@@ -34,8 +49,8 @@ struct IOSOverviewView: View {
                             caption: "USD"
                         )
                         IOSMetricCard(
-                            title: "近 30 天",
-                            value: String(format: "$%.2f", recentTotal),
+                            title: chartAlignment == .billing ? "账期花费" : "本月花费",
+                            value: String(format: "$%.2f", chartTotal),
                             caption: "USD"
                         )
                     }
@@ -52,15 +67,20 @@ struct IOSOverviewView: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("近 30 天花费").font(.headline)
+                            Text(chartAlignment == .billing
+                                 ? BillingCycle.titleRange(monthlyReset: snapshot.monthlyReset)
+                                 : "自然月")
+                                .font(.headline)
                             Spacer()
-                            Text(recent.last?.date ?? "")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            IOSAlignmentPicker(selection: $chartAlignment)
                         }
-                        IOSRecentCostChart(dailyCosts: recent)
+                        MonthChartView(
+                            dailyCosts: snapshot.dailyCosts,
+                            monthlyReset: snapshot.monthlyReset,
+                            alignment: chartAlignment
+                        )
                             .frame(height: 210)
-                        let models = Array(Set(recent.flatMap { $0.entries.keys }))
+                        let models = Array(Set(chartDaily.flatMap { $0.entries.keys }))
                             .sorted { ModelPalette.displayName($0) < ModelPalette.displayName($1) }
                         if !models.isEmpty {
                             WrappingLegendView(models: models)
@@ -111,8 +131,41 @@ struct IOSOverviewView: View {
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("OpenCode Go")
+        .navigationBarTitleDisplayMode(.inline)
         .refreshable { await usage.refresh() }
         .task { await usage.refreshIfStale() }
+        .onChange(of: chartAlignment) { _, alignment in
+            BillingCycle.saveAlignment(alignment)
+        }
+    }
+}
+
+private struct IOSAlignmentPicker: View {
+    @Binding var selection: ChartAlignment
+
+    var body: some View {
+        HStack(spacing: 0) {
+            alignmentButton("账期", value: .billing)
+            alignmentButton("自然月", value: .calendar)
+        }
+        .padding(2)
+        .background(Color.primary.opacity(0.07))
+        .clipShape(Capsule())
+    }
+
+    private func alignmentButton(_ title: String, value: ChartAlignment) -> some View {
+        Button {
+            selection = value
+        } label: {
+            Text(title)
+                .font(.caption2.weight(selection == value ? .semibold : .regular))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(selection == value ? Color.accentColor : Color.clear)
+                .foregroundStyle(selection == value ? Color.white : Color.primary)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -211,6 +264,7 @@ struct IOSByKeyView: View {
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("按 Key")
+        .navigationBarTitleDisplayMode(.inline)
         .refreshable { await usage.refresh() }
         .task {
             reconcileSelectedKey()
@@ -316,6 +370,7 @@ struct IOSModelsView: View {
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("模型")
+        .navigationBarTitleDisplayMode(.inline)
         .refreshable { await usage.refresh() }
         .task { await usage.refreshIfStale() }
     }
@@ -325,16 +380,157 @@ struct IOSQuotaPage: View {
     @ObservedObject var usage: IOSUsageController
 
     var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            GoQuotaChart(quotas: usage.quotas, updatedAt: usage.quotaUpdatedAt)
-                .frame(minWidth: 730)
+        ScrollView(.vertical) {
+            IOSMobileQuotaList(quotas: usage.quotas, updatedAt: usage.quotaUpdatedAt)
                 .padding(16)
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Go 全模型配额")
+        .navigationBarTitleDisplayMode(.inline)
         .refreshable {
             _ = await GoQuotaRegistry.refreshIfNeeded(force: true)
             usage.reloadFromStorage()
+        }
+    }
+}
+
+private struct IOSMobileQuotaList: View {
+    let quotas: [GoQuota]
+    let updatedAt: Date?
+
+    private var sorted: [GoQuota] {
+        quotas.sorted { ($0.h5 ?? Int.max) < ($1.h5 ?? Int.max) }
+    }
+
+    private var baseline: Int {
+        quotas.compactMap(\.monthly).min() ?? 490
+    }
+
+    private var maxMonthly: Int {
+        quotas.compactMap(\.monthly).max() ?? baseline
+    }
+
+    private func widthFraction(for monthly: Int) -> CGFloat {
+        guard monthly > 0, maxMonthly > baseline else { return 1 }
+        let value = log10(1 + Double(monthly) / Double(baseline))
+        let maximum = log10(1 + Double(maxMonthly) / Double(baseline))
+        return CGFloat(max(0.08, min(1, value / maximum)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Go 模型配额").font(.headline)
+                    Text("按模型比较 5 小时、周、月请求额度")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let updatedAt {
+                    Text(updatedAt.formatted(date: .omitted, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 12) {
+                IOSQuotaLegend(color: .red, title: "5h")
+                IOSQuotaLegend(color: .orange, title: "周")
+                IOSQuotaLegend(color: .green, title: "月")
+            }
+            .padding(.bottom, 2)
+
+            ForEach(sorted) { quota in
+                if let monthly = quota.monthly, monthly > 0 {
+                    IOSQuotaModelCard(
+                        quota: quota,
+                        fraction: widthFraction(for: monthly)
+                    )
+                } else {
+                    HStack(spacing: 10) {
+                        Text("∞").font(.title3.bold()).foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(quota.displayName).font(.subheadline.weight(.semibold))
+                            Text(quota.note ?? "限时免费，不计配额")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("免费").font(.caption.bold()).foregroundStyle(.orange)
+                    }
+                    .padding(13)
+                    .background(Color.orange.opacity(0.09))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+
+            Text("同步自 opencode.ai 官方 Go 配额表；免费模型和配额可能随时变化。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct IOSQuotaModelCard: View {
+    let quota: GoQuota
+    let fraction: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(quota.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                if let badge = quota.badge {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                Text("5h \(quota.h5Display)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.07))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [.green.opacity(0.7), .orange, .red],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(8, geometry.size.width * fraction))
+                }
+            }
+            .frame(height: 7)
+
+            HStack {
+                Label("周 \(quota.weeklyDisplay)", systemImage: "calendar")
+                Spacer()
+                Label("月 \(quota.monthlyDisplay)", systemImage: "calendar.badge.clock")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(13)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct IOSQuotaLegend: View {
+    let color: Color
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title).font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
@@ -380,6 +576,21 @@ struct IOSSettingsPage: View {
                 }
             }
 
+            Section("小组件") {
+                LabeledContent("App Group", value: PlatformConfig.appGroupID)
+                LabeledContent(
+                    "共享容器",
+                    value: WidgetDataStore.isAppGroupAvailable ? "正常" : "不可用"
+                )
+                LabeledContent(
+                    "共享快照",
+                    value: usage.snapshot == nil ? "尚未写入" : "已写入"
+                )
+                Button("立即刷新小组件") {
+                    usage.reloadWidget()
+                }
+            }
+
             Section("关于") {
                 LabeledContent("版本", value: version)
                 Text("iOS 版仅使用 OpenCode 账号会话读取额度与用量，不保存 Go API Key。")
@@ -391,6 +602,7 @@ struct IOSSettingsPage: View {
             }
         }
         .navigationTitle("设置")
+        .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(
             "清除全部本地数据？",
             isPresented: $confirmClear,
