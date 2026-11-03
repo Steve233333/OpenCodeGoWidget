@@ -49,8 +49,8 @@ APP_GROUP="$(plutil -extract OpenCodeAppGroupID raw -o - "$APP/Info.plist")"
 WIDGET_GROUP="$(plutil -extract OpenCodeAppGroupID raw -o - "$WIDGET/Info.plist")"
 test "$APP_GROUP" = "$EXPECTED_GROUP"
 test "$WIDGET_GROUP" = "$EXPECTED_GROUP"
-test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Info.plist")" = "1.0.2"
-test "$(plutil -extract CFBundleVersion raw -o - "$APP/Info.plist")" = "3"
+test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Info.plist")" = "1.0.3"
+test "$(plutil -extract CFBundleVersion raw -o - "$APP/Info.plist")" = "4"
 test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$WIDGET/Info.plist")" \
   = "com.apple.widgetkit-extension"
 for icon in "${ICONS[@]}"; do

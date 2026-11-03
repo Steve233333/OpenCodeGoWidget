@@ -7,12 +7,12 @@ struct IOSQuotaPage: View {
         usage.quotas.sorted { ($0.h5 ?? Int.max) < ($1.h5 ?? Int.max) }
     }
 
-    private var ranges: [String: ClosedRange<Int>] {
-        [
-            "5h": range(for: \.h5),
-            "week": range(for: \.weekly),
-            "month": range(for: \.monthly),
-        ]
+    private var monthlyBaseline: Int {
+        sorted.compactMap(\.monthly).filter { $0 > 0 }.min() ?? 490
+    }
+
+    private var monthlyMaximum: Int {
+        sorted.compactMap(\.monthly).filter { $0 > 0 }.max() ?? monthlyBaseline
     }
 
     var body: some View {
@@ -25,18 +25,6 @@ struct IOSQuotaPage: View {
                     } ?? "官方 Go 模型额度"
                 )
 
-                IOSCard(padding: 13) {
-                    HStack(spacing: 14) {
-                        legend("5 小时", color: quotaRed)
-                        legend("周", color: quotaOrange)
-                        legend("月", color: quotaGreen)
-                        Spacer()
-                        Text("按模型独立比较")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
                 if sorted.isEmpty {
                     IOSEmptyState(
                         icon: "list.bullet.rectangle",
@@ -44,23 +32,35 @@ struct IOSQuotaPage: View {
                         detail: "下拉刷新后会从 OpenCode 官方文档同步。"
                     )
                 } else {
-                    ForEach(sorted) { quota in
-                        if quota.monthly == nil {
-                            IOSFreeQuotaCard(quota: quota)
-                        } else {
-                            IOSQuotaModelCard(
-                                quota: quota,
-                                ranges: ranges
+                    IOSCard(padding: 12) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            IOSMacQuotaHeader(
+                                containsFreeModels: sorted.contains { $0.monthly == nil }
                             )
+                            divider
+
+                            ForEach(Array(sorted.enumerated()), id: \.element.id) { index, quota in
+                                IOSMacQuotaRow(
+                                    quota: quota,
+                                    monthlyBaseline: monthlyBaseline,
+                                    monthlyMaximum: monthlyMaximum
+                                )
+                                if index < sorted.count - 1 {
+                                    divider
+                                }
+                            }
                         }
                     }
                 }
 
-                Text("数据同步自 opencode.ai 官方 Go 配额表；免费额度和促销倍率可能随时变化。")
-                    .font(.caption2)
+                Text("数据实时同步自 opencode.ai/docs/zh-cn/go/ 配额表；免费模型和促销倍率以官网为准。")
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 4)
-                    .padding(.bottom, 80)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 12)
+
+                Color.clear.frame(height: 80)
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -74,146 +74,186 @@ struct IOSQuotaPage: View {
         .toolbar(.hidden, for: .navigationBar)
     }
 
-    private func range(for keyPath: KeyPath<GoQuota, Int?>) -> ClosedRange<Int> {
-        let values = usage.quotas.compactMap { $0[keyPath: keyPath] }.filter { $0 > 0 }
-        let low = values.min() ?? 1
-        let high = values.max() ?? low
-        return low...max(low, high)
+    private var divider: some View {
+        Rectangle()
+            .fill(IOSTheme.stroke)
+            .frame(height: 0.5)
+    }
+}
+
+private struct IOSMacQuotaHeader: View {
+    let containsFreeModels: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Go 配额（每 5h / 周 / 月）")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                legend("5h", color: quotaRed)
+                legend("周", color: quotaOrange)
+                legend("月", color: quotaGreen)
+                if containsFreeModels {
+                    legend("免费", color: quotaGold)
+                }
+            }
+
+            HStack(spacing: 7) {
+                Text("模型")
+                    .frame(width: 138, alignment: .leading)
+                Text("请求数（嵌套三段）")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("周 / 月")
+                    .frame(width: 74, alignment: .leading)
+            }
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+        }
+        .padding(.bottom, 8)
     }
 
     private func legend(_ title: String, color: Color) -> some View {
-        HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 7, height: 7)
+        HStack(spacing: 3) {
+            Circle().fill(color).frame(width: 6, height: 6)
             Text(title)
-                .font(.caption2.weight(.medium))
+                .font(.system(size: 8))
                 .foregroundStyle(.secondary)
         }
     }
 }
 
-private struct IOSQuotaModelCard: View {
+private struct IOSMacQuotaRow: View {
     let quota: GoQuota
-    let ranges: [String: ClosedRange<Int>]
+    let monthlyBaseline: Int
+    let monthlyMaximum: Int
 
     var body: some View {
-        IOSCard(padding: 15) {
-            VStack(alignment: .leading, spacing: 13) {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(quota.displayName)
-                            .font(.headline)
-                            .lineLimit(2)
-                        if let note = quota.note, !note.isEmpty {
-                            Text(note)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer(minLength: 4)
-                    if let badge = quota.badge {
-                        Text(badge)
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(IOSTheme.warning)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(IOSTheme.warning.opacity(0.12))
-                            .clipShape(Capsule())
-                    }
-                }
-
-                HStack(alignment: .top, spacing: 9) {
-                    IOSQuotaMetric(
-                        title: "5 小时",
-                        value: quota.h5,
-                        color: quotaRed,
-                        range: ranges["5h"]
-                    )
-                    IOSQuotaMetric(
-                        title: "周",
-                        value: quota.weekly,
-                        color: quotaOrange,
-                        range: ranges["week"]
-                    )
-                    IOSQuotaMetric(
-                        title: "月",
-                        value: quota.monthly,
-                        color: quotaGreen,
-                        range: ranges["month"]
-                    )
-                }
-            }
+        if quota.monthly == nil {
+            freeRow.frame(height: 31)
+        } else {
+            paidRow.frame(height: 31)
         }
     }
-}
 
-private struct IOSQuotaMetric: View {
-    let title: String
-    let value: Int?
-    let color: Color
-    let range: ClosedRange<Int>?
-
-    private var fraction: CGFloat {
-        guard let value, value > 0, let range else { return 0.04 }
-        guard range.upperBound > range.lowerBound else { return 0.55 }
-        let low = log10(1 + Double(range.lowerBound))
-        let high = log10(1 + Double(range.upperBound))
-        let current = log10(1 + Double(value))
-        guard high > low else { return 0.55 }
-        return CGFloat(max(0.07, min(1, (current - low) / (high - low))))
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(title)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-            Text(GoQuota.fmt(value ?? 0))
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(IOSTheme.track)
-                    Capsule()
-                        .fill(color)
-                        .frame(width: max(5, geometry.size.width * fraction))
+    private var paidRow: some View {
+        HStack(spacing: 7) {
+            HStack(spacing: 5) {
+                Text(GoQuota.fmt(quota.h5 ?? 0))
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .frame(width: 38, alignment: .trailing)
+                    .lineLimit(1)
+                Text(quota.displayName)
+                    .font(.system(size: 10.5))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                if let badge = quota.badge {
+                    Text(badge)
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(IOSTheme.warning)
+                        .lineLimit(1)
                 }
             }
-            .frame(height: 5)
+            .frame(width: 138, alignment: .leading)
+
+            IOSMacNestedBar(
+                quota: quota,
+                monthlyBaseline: monthlyBaseline,
+                monthlyMaximum: monthlyMaximum
+            )
+            .frame(height: 8)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("周 \(GoQuota.fmt(quota.weekly ?? 0))")
+                Text("月 \(GoQuota.fmt(quota.monthly ?? 0))")
+            }
+            .font(.system(size: 8).monospacedDigit())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+            .frame(width: 74, alignment: .leading)
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(color.opacity(0.075))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
-}
 
-private struct IOSFreeQuotaCard: View {
-    let quota: GoQuota
-
-    var body: some View {
-        IOSCard(padding: 15) {
-            HStack(spacing: 12) {
+    private var freeRow: some View {
+        HStack(spacing: 7) {
+            HStack(spacing: 5) {
                 Text("∞")
-                    .font(.system(size: 25, weight: .bold, design: .rounded))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(quotaGold)
-                    .frame(width: 40)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(quota.displayName)
-                        .font(.headline)
-                    Text(quota.note ?? "限时免费，不计入普通配额")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .frame(width: 38, alignment: .trailing)
+                Text(quota.displayName)
+                    .font(.system(size: 10.5))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(width: 138, alignment: .leading)
+
+            Text("免费拉满")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 6)
+                .frame(height: 8)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 1, green: 0.82, blue: 0.06), quotaGold],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .clipShape(Capsule())
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("限时免费")
+                Text("∞")
+            }
+            .font(.system(size: 8))
+            .foregroundStyle(quotaGold)
+            .frame(width: 74, alignment: .leading)
+        }
+    }
+}
+
+private struct IOSMacNestedBar: View {
+    let quota: GoQuota
+    let monthlyBaseline: Int
+    let monthlyMaximum: Int
+
+    private var monthlyLength: CGFloat {
+        guard let monthly = quota.monthly, monthly > 0 else { return 0 }
+        guard monthlyMaximum > monthlyBaseline else { return 1 }
+        let value = log10(1 + Double(monthly) / Double(max(1, monthlyBaseline)))
+        let maximum = log10(1 + Double(monthlyMaximum) / Double(max(1, monthlyBaseline)))
+        guard maximum > 0 else { return 1 }
+        return CGFloat(max(0.12, min(1, value / maximum)))
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let totalWidth = geometry.size.width * monthlyLength
+            let monthly = max(1, quota.monthly ?? 1)
+            let h5Width = totalWidth * CGFloat(quota.h5 ?? 0) / CGFloat(monthly)
+            let weeklyOnlyWidth = totalWidth
+                * CGFloat(max(0, (quota.weekly ?? 0) - (quota.h5 ?? 0)))
+                / CGFloat(monthly)
+            let monthlyOnlyWidth = max(0, totalWidth - h5Width - weeklyOnlyWidth)
+
+            ZStack(alignment: .leading) {
+                Capsule().fill(IOSTheme.track)
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(quotaRed)
+                        .frame(width: h5Width)
+                    Rectangle()
+                        .fill(quotaOrange)
+                        .frame(width: weeklyOnlyWidth)
+                    Rectangle()
+                        .fill(quotaGreen)
+                        .frame(width: monthlyOnlyWidth)
                 }
-                Spacer()
-                Text("不限量")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(quotaGold)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(quotaGold.opacity(0.12))
-                    .clipShape(Capsule())
+                .frame(width: totalWidth, alignment: .leading)
+                .clipShape(Capsule())
             }
         }
     }

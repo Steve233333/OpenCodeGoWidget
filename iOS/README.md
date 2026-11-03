@@ -11,6 +11,7 @@
 - 账号登录、失效重登与本地数据清理
 - 总览内统一账期/自然月与 Key 筛选
 - Mac 风格彩色模型堆叠磁贴
+- 全出血 App 图标，避免 iOS 圆角蒙版产生白色锯齿边
 
 ## 生成工程
 
@@ -45,6 +46,12 @@ Release 构建固定使用签名描述文件中的 `group.3e514c57016aaf19.1`。
 ```
 
 `check.sh` 会额外构建 Release 产物，并校验版本、App Group、Widget 扩展声明和 App 图标文件，避免再次产出没有图标或磁贴读不到数据的包。
+
+如需从源图重新生成 App 图标：
+
+```bash
+./iOS/scripts/generate-app-icons.py
+```
 
 在桌面生成可直接重签的 IPA：
 

@@ -93,7 +93,7 @@ struct OpenCodeGoIOSWidgetView: View {
         VStack(alignment: .leading, spacing: 7) {
             widgetHeader
 
-            HStack(alignment: .top, spacing: 16) {
+            HStack(alignment: .top, spacing: 14) {
                 VStack(spacing: 7) {
                     IOSWidgetQuotaLine(
                         label: "5小时",
@@ -114,7 +114,7 @@ struct OpenCodeGoIOSWidgetView: View {
                         showsReset: true
                     )
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: 132)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -320,38 +320,35 @@ private struct IOSWidgetWeekChart: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 4) {
+        HStack(alignment: .bottom, spacing: 3) {
             ForEach(values, id: \.date) { value in
                 VStack(spacing: 3) {
                     GeometryReader { geometry in
-                        ZStack(alignment: .bottom) {
-                            Capsule()
-                                .fill(IOSTheme.track.opacity(0.65))
-                            VStack(spacing: 0) {
-                                Spacer(minLength: 0)
-                                ForEach(
-                                    ModelPalette.foldedEntries(value.entries)
-                                        .sorted { $0.value > $1.value },
-                                    id: \.key
-                                ) { item in
-                                    Rectangle()
-                                        .fill(modelColor(item.key))
-                                        .frame(
-                                            height: geometry.size.height
-                                                * CGFloat(item.value / maximum)
-                                        )
-                                }
+                        VStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            ForEach(
+                                ModelPalette.foldedEntries(value.entries)
+                                    .sorted { $0.value > $1.value },
+                                id: \.key
+                            ) { item in
+                                Rectangle()
+                                    .fill(modelColor(item.key))
+                                    .frame(
+                                        height: geometry.size.height
+                                            * CGFloat(item.value / maximum)
+                                    )
                             }
-                            .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                         }
+                        .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                     }
                     .frame(height: 47)
 
                     Text(ChartFormatters.weekLabel.string(from: value.date))
-                        .font(.system(size: 7, weight: .medium))
+                        .font(.system(size: 6.5, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.65)
+                        .minimumScaleFactor(0.55)
+                        .allowsTightening(true)
                 }
                 .frame(maxWidth: .infinity)
             }
