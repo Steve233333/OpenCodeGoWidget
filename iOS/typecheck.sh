@@ -39,12 +39,18 @@ APP=(
   "$ROOT/iOS/App/ConsoleLoginWebView.swift"
   "$ROOT/iOS/App/IOSUsageRefresher.swift"
   "$ROOT/iOS/App/BackgroundRefresh.swift"
+  "$ROOT/iOS/Shared/IOSTheme.swift"
+  "$ROOT/iOS/App/IOSDesignSystem.swift"
+  "$ROOT/iOS/App/IOSDashboardSelection.swift"
   "$ROOT/iOS/App/IOSDashboardViews.swift"
+  "$ROOT/iOS/App/IOSQuotaViews.swift"
+  "$ROOT/iOS/App/IOSSettingsViews.swift"
 )
 
 WIDGET=(
   "${COMMON[@]}"
   "$ROOT/iOS/App/IOSSessionStore.swift"
+  "$ROOT/iOS/Shared/IOSTheme.swift"
   "$ROOT/iOS/Widget/OpenCodeGoIOSWidget.swift"
 )
 

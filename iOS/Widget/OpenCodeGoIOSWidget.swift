@@ -12,15 +12,15 @@ struct IOSWidgetProvider: TimelineProvider {
         IOSWidgetEntry(
             date: Date(),
             snapshot: WidgetSnapshot(
-                rolling: 42,
-                weekly: 31,
-                monthly: 18,
-                rollingReset: Date().addingTimeInterval(3_600),
-                weeklyReset: Date().addingTimeInterval(86_400),
-                monthlyReset: Date().addingTimeInterval(604_800),
-                costTotal: 0.82,
-                costEntries: ["deepseek-v4.1-flash": 0.6, "glm-5.3": 0.22],
-                dailyCosts: [],
+                rolling: 8,
+                weekly: 13,
+                monthly: 74,
+                rollingReset: Date().addingTimeInterval(6_900),
+                weeklyReset: Date().addingTimeInterval(5 * 86_400),
+                monthlyReset: Date().addingTimeInterval(15 * 86_400),
+                costTotal: 2.35,
+                costEntries: ["deepseek-v4.1-flash": 2.1, "glm-5.3": 0.25],
+                dailyCosts: Self.placeholderDailyCosts(),
                 updatedAt: Date()
             ),
             state: nil
@@ -46,6 +46,26 @@ struct IOSWidgetProvider: TimelineProvider {
             state: KeyDirectoryStore.load()
         )
     }
+
+    private static func placeholderDailyCosts() -> [DailyCost] {
+        let calendar = BillingCycle.calendar
+        let formatter = ChartFormatters.day
+        let today = calendar.startOfDay(for: Date())
+        let values = [1.2, 0.8, 4.1, 1.5, 0.7, 3.2, 1.1]
+        return (0..<7).compactMap { index in
+            guard let date = calendar.date(byAdding: .day, value: index - 6, to: today) else {
+                return nil
+            }
+            return DailyCost(
+                date: formatter.string(from: date),
+                entries: [
+                    "deepseek-v4.1-flash": values[index] * 0.72,
+                    "glm-5.3": values[index] * 0.18,
+                    ModelPalette.otherName: values[index] * 0.10,
+                ]
+            )
+        }
+    }
 }
 
 struct OpenCodeGoIOSWidgetView: View {
@@ -57,7 +77,11 @@ struct OpenCodeGoIOSWidgetView: View {
             if family == .accessoryRectangular {
                 accessoryView
             } else if let snapshot = entry.snapshot {
-                standardView(snapshot)
+                if family == .systemSmall {
+                    smallView(snapshot)
+                } else {
+                    mediumView(snapshot)
+                }
             } else {
                 emptyView
             }
@@ -65,9 +89,122 @@ struct OpenCodeGoIOSWidgetView: View {
         .widgetURL(URL(string: "opencodego://refresh"))
     }
 
+    private func mediumView(_ snapshot: WidgetSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            widgetHeader
+
+            HStack(alignment: .top, spacing: 16) {
+                VStack(spacing: 7) {
+                    IOSWidgetQuotaLine(
+                        label: "5小时",
+                        value: snapshot.rolling,
+                        reset: snapshot.rollingReset,
+                        showsReset: true
+                    )
+                    IOSWidgetQuotaLine(
+                        label: "周",
+                        value: snapshot.weekly,
+                        reset: snapshot.weeklyReset,
+                        showsReset: true
+                    )
+                    IOSWidgetQuotaLine(
+                        label: "月",
+                        value: snapshot.monthly,
+                        reset: snapshot.monthlyReset,
+                        showsReset: true
+                    )
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("近 7 天")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Text("$\(IOSWidgetWeek.total(snapshot.dailyCosts), specifier: "%.2f") USD")
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                    }
+                    IOSWidgetWeekChart(dailyCosts: snapshot.dailyCosts)
+                        .frame(height: 68)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            Spacer(minLength: 0)
+            widgetFooter(snapshot)
+        }
+        .padding(15)
+    }
+
+    private func smallView(_ snapshot: WidgetSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            widgetHeader
+            IOSWidgetQuotaLine(
+                label: "5小时",
+                value: snapshot.rolling,
+                reset: snapshot.rollingReset,
+                showsReset: false
+            )
+            IOSWidgetQuotaLine(
+                label: "周",
+                value: snapshot.weekly,
+                reset: snapshot.weeklyReset,
+                showsReset: false
+            )
+            IOSWidgetQuotaLine(
+                label: "月",
+                value: snapshot.monthly,
+                reset: snapshot.monthlyReset,
+                showsReset: false
+            )
+            Spacer(minLength: 0)
+            HStack(alignment: .firstTextBaseline) {
+                Text("今日")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("$\(snapshot.costTotal, specifier: "%.2f")")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+            }
+        }
+        .padding(14)
+    }
+
+    private var widgetHeader: some View {
+        HStack(spacing: 7) {
+            BrandIconView(size: 15)
+            Text("OpenCode Go")
+                .font(.system(size: 12, weight: .bold))
+            Spacer()
+        }
+    }
+
+    private func widgetFooter(_ snapshot: WidgetSnapshot) -> some View {
+        HStack(spacing: 5) {
+            Text("更新于 \(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))")
+            Spacer()
+            if entry.state?.status == .loginRequired {
+                Text("需重登")
+                    .foregroundStyle(IOSTheme.warning)
+            } else if let error = snapshot.error {
+                Text(error)
+                    .lineLimit(1)
+            }
+        }
+        .font(.system(size: 8))
+        .foregroundStyle(.secondary)
+    }
+
     private var accessoryView: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("OpenCode Go").font(.caption2.bold())
+            HStack(spacing: 4) {
+                BrandIconView(size: 11)
+                Text("OpenCode Go")
+                    .font(.caption2.bold())
+            }
             if let snapshot = entry.snapshot {
                 Text("5h \(snapshot.rolling)% · 周 \(snapshot.weekly)% · 月 \(snapshot.monthly)%")
                     .font(.caption.monospacedDigit())
@@ -75,75 +212,18 @@ struct OpenCodeGoIOSWidgetView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {
-                Text("打开 App 登录").font(.caption)
+                Text("打开 App 同步数据")
+                    .font(.caption)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func standardView(_ snapshot: WidgetSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                BrandIconView(size: 15)
-                Text("OpenCode Go").font(.caption.bold())
-                Spacer()
-                Link(destination: URL(string: "opencodego://refresh")!) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.caption.bold())
-                }
-            }
-
-            if family == .systemSmall {
-                IOSWidgetQuotaLine(label: "5h", value: snapshot.rolling)
-                IOSWidgetQuotaLine(label: "周", value: snapshot.weekly)
-                IOSWidgetQuotaLine(label: "月", value: snapshot.monthly)
-                Spacer(minLength: 0)
-                HStack {
-                    Text("今日").foregroundStyle(.secondary)
-                    Spacer()
-                    Text("$\(snapshot.costTotal, specifier: "%.2f")")
-                        .font(.caption.monospacedDigit().bold())
-                }
-            } else {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(spacing: 8) {
-                        IOSWidgetQuotaLine(label: "5h", value: snapshot.rolling)
-                        IOSWidgetQuotaLine(label: "周", value: snapshot.weekly)
-                        IOSWidgetQuotaLine(label: "月", value: snapshot.monthly)
-                    }
-                    Divider()
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("近 7 天").font(.caption2).foregroundStyle(.secondary)
-                            Spacer()
-                            Text("$\(IOSWidgetWeek.total(snapshot.dailyCosts), specifier: "%.2f")")
-                                .font(.caption2.monospacedDigit().bold())
-                        }
-                        IOSWidgetWeekChart(dailyCosts: snapshot.dailyCosts)
-                            .frame(height: 56)
-                    }
-                }
-            }
-
-            HStack(spacing: 4) {
-                Text(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))
-                Spacer()
-                if entry.state?.status == .loginRequired {
-                    Text("需重登").foregroundStyle(.orange)
-                } else if let error = snapshot.error {
-                    Text(error).lineLimit(1)
-                }
-            }
-            .font(.system(size: 8))
-            .foregroundStyle(.secondary)
-        }
-        .padding(family == .systemSmall ? 13 : 15)
-    }
-
     private var emptyView: some View {
         VStack(spacing: 8) {
             BrandIconView(size: 28)
-            Text("OpenCode Go").font(.caption.bold())
+            Text("OpenCode Go")
+                .font(.caption.bold())
             Text(entry.state?.status == .loginRequired ? "打开 App 重新登录" : "打开 App 同步数据")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -157,31 +237,51 @@ struct OpenCodeGoIOSWidgetView: View {
 private struct IOSWidgetQuotaLine: View {
     let label: String
     let value: Int
+    let reset: Date
+    let showsReset: Bool
 
-    private var tint: Color {
-        if value >= 80 { return .red }
-        if value >= 50 { return .orange }
-        return .green
-    }
+    private var clamped: Int { min(max(value, 0), 100) }
+    private var tint: Color { IOSTheme.quotaColor(clamped) }
 
     var body: some View {
-        VStack(spacing: 2) {
-            HStack {
-                Text(label).font(.caption2)
-                Spacer()
-                Text("\(min(max(value, 0), 100))%")
-                    .font(.caption2.monospacedDigit().bold())
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 3) {
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                Text("\(clamped)%")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(tint)
+                if showsReset {
+                    Text("· \(IOSWidgetReset.text(reset))")
+                        .font(.system(size: 9).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
             }
-            GeometryReader { geo in
+            GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.primary.opacity(0.1))
-                    Capsule().fill(tint)
-                        .frame(width: geo.size.width * CGFloat(min(max(value, 0), 100)) / 100)
+                    Capsule().fill(IOSTheme.track)
+                    Capsule()
+                        .fill(tint)
+                        .frame(width: geometry.size.width * CGFloat(clamped) / 100)
                 }
             }
             .frame(height: 4)
         }
+    }
+}
+
+private enum IOSWidgetReset {
+    static func text(_ date: Date) -> String {
+        let seconds = max(0, Int(date.timeIntervalSinceNow))
+        let hours = seconds / 3_600
+        let minutes = (seconds % 3_600) / 60
+        if hours >= 24 { return "\(hours / 24)d" }
+        if hours > 0 { return "\(hours)h\(minutes)m" }
+        return "\(minutes)m"
     }
 }
 
@@ -222,30 +322,46 @@ private struct IOSWidgetWeekChart: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 4) {
             ForEach(values, id: \.date) { value in
-                VStack(spacing: 2) {
-                    GeometryReader { geo in
-                        VStack(spacing: 0) {
-                            Spacer(minLength: 0)
-                            ForEach(
-                                ModelPalette.foldedEntries(value.entries)
-                                    .sorted { $0.value > $1.value },
-                                id: \.key
-                            ) { item in
-                                Rectangle()
-                                    .fill(ModelPalette.color(for: item.key))
-                                    .frame(height: geo.size.height * CGFloat(item.value / maximum))
+                VStack(spacing: 3) {
+                    GeometryReader { geometry in
+                        ZStack(alignment: .bottom) {
+                            Capsule()
+                                .fill(IOSTheme.track.opacity(0.65))
+                            VStack(spacing: 0) {
+                                Spacer(minLength: 0)
+                                ForEach(
+                                    ModelPalette.foldedEntries(value.entries)
+                                        .sorted { $0.value > $1.value },
+                                    id: \.key
+                                ) { item in
+                                    Rectangle()
+                                        .fill(modelColor(item.key))
+                                        .frame(
+                                            height: geometry.size.height
+                                                * CGFloat(item.value / maximum)
+                                        )
+                                }
                             }
+                            .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                         }
                     }
-                    .frame(height: 38)
+                    .frame(height: 47)
+
                     Text(ChartFormatters.weekLabel.string(from: value.date))
-                        .font(.system(size: 7))
+                        .font(.system(size: 7, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.65)
                 }
                 .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    private func modelColor(_ model: String) -> Color {
+        model == ModelPalette.otherName
+            ? Color.secondary.opacity(0.45)
+            : ModelPalette.color(for: model)
     }
 }
 
@@ -257,11 +373,11 @@ struct OpenCodeGoIOSWidget: Widget {
         ) { entry in
             OpenCodeGoIOSWidgetView(entry: entry)
                 .containerBackground(for: .widget) {
-                    Color.clear
+                    Color(uiColor: .systemBackground)
                 }
         }
         .configurationDisplayName("OpenCode Go")
-        .description("额度、今日与近 7 天花费")
+        .description("与 Mac 版一致的额度、今日花费和近 7 天用量")
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
         .contentMarginsDisabled()
     }

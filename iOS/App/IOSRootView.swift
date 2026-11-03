@@ -86,28 +86,34 @@ private struct IOSLoginLandingView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    Spacer(minLength: 44)
-                    BrandIconView(size: 78)
+                    Spacer(minLength: 54)
+                    BrandIconView(size: 72)
                     VStack(spacing: 8) {
-                        Text("OpenCode Go").font(.largeTitle.bold())
+                        Text("OpenCode Go")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
                         Text("额度、花费、模型与 Key 用量")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 14) {
                         LoginFeature(icon: "gauge.with.dots.needle.50percent", title: "三档额度", detail: "5 小时、周、月与重置倒计时")
-                        LoginFeature(icon: "chart.bar.xaxis", title: "完整用量", detail: "30 天历史、按模型和按 Key")
+                        LoginFeature(icon: "chart.bar.xaxis", title: "完整体验", detail: "账期、自然月、按模型和按 Key")
                         LoginFeature(icon: "square.grid.3x3.fill", title: "主屏与锁屏组件", detail: "不用输入 API Key")
                     }
                     .padding(18)
-                    .background(Color.primary.opacity(0.045))
+                    .background(IOSTheme.cardBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(IOSTheme.stroke, lineWidth: 0.75)
+                    }
                     Button(action: login) {
                         Label("登录 OpenCode 账号", systemImage: "person.crop.circle.badge.checkmark")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
+                    .tint(IOSTheme.brand)
                     Text("登录信息仅保存在本机 Keychain；小组件只读取 App Group 中的用量快照。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -115,8 +121,10 @@ private struct IOSLoginLandingView: View {
                 }
                 .padding(24)
             }
-            .navigationTitle("OpenCode Go")
+            .background(IOSTheme.pageBackground)
+            .toolbar(.hidden, for: .navigationBar)
         }
+        .tint(IOSTheme.brand)
     }
 }
 
@@ -130,7 +138,7 @@ private struct LoginFeature: View {
             Image(systemName: icon)
                 .font(.title3)
                 .frame(width: 30)
-                .foregroundStyle(.tint)
+                .foregroundStyle(IOSTheme.brand)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.headline)
                 Text(detail).font(.caption).foregroundStyle(.secondary)
@@ -151,7 +159,9 @@ private struct IOSLoginErrorView: View {
         } actions: {
             Button("重新登录", action: retry)
                 .buttonStyle(.borderedProminent)
+                .tint(IOSTheme.brand)
         }
+        .tint(IOSTheme.brand)
     }
 }
 
@@ -160,39 +170,53 @@ private struct IOSDashboardTabs: View {
     @ObservedObject var usage: IOSUsageController
     @Binding var selectedTab: Int
     let onRelogin: () -> Void
+    @State private var chartAlignment: ChartAlignment = BillingCycle.loadAlignment()
+    @State private var selectedKeyID: String? = UserDefaults(
+        suiteName: PlatformConfig.appGroupID
+    )?.string(forKey: "selectedCostKeyId")
 
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                IOSOverviewView(usage: usage, account: account, onRelogin: onRelogin)
+                IOSDashboardView(
+                    usage: usage,
+                    chartAlignment: $chartAlignment,
+                    selectedKeyID: $selectedKeyID,
+                    onRelogin: onRelogin
+                )
             }
-            .tabItem { Label("概览", systemImage: "gauge.with.dots.needle.50percent") }
+            .tabItem { Label("总览", systemImage: "gauge.with.dots.needle.50percent") }
             .tag(0)
-
-            NavigationStack {
-                IOSByKeyView(usage: usage)
-            }
-            .tabItem { Label("按 Key", systemImage: "key.fill") }
-            .tag(1)
-
-            NavigationStack {
-                IOSModelsView(usage: usage)
-            }
-            .tabItem { Label("模型", systemImage: "chart.bar.doc.horizontal") }
-            .tag(2)
 
             NavigationStack {
                 IOSQuotaPage(usage: usage)
             }
             .tabItem { Label("配额", systemImage: "list.bullet.rectangle.portrait") }
-            .tag(3)
+            .tag(1)
 
             NavigationStack {
                 IOSSettingsPage(account: account, usage: usage, onRelogin: onRelogin)
             }
             .tabItem { Label("设置", systemImage: "gearshape") }
-            .tag(4)
+            .tag(2)
         }
-        .tint(.blue)
+        .tint(IOSTheme.brand)
+        .onChange(of: chartAlignment) { _, value in
+            BillingCycle.saveAlignment(value)
+        }
+        .onChange(of: selectedKeyID) { _, value in
+            let defaults = UserDefaults(suiteName: PlatformConfig.appGroupID)
+            if let value {
+                defaults?.set(value, forKey: "selectedCostKeyId")
+            } else {
+                defaults?.removeObject(forKey: "selectedCostKeyId")
+            }
+        }
+        .onChange(of: usage.keyDirectory) { _, directory in
+            guard !KeyDirectoryStore.selectedKeyIsAvailable(selectedKeyID, in: directory) else {
+                return
+            }
+            selectedKeyID = nil
+        }
     }
 }

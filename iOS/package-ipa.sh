@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/iOS/build/Release-iphoneos/OpenCode Go.app"
-OUTPUT="${1:-$HOME/Desktop/OpenCodeGoIOS-1.0.1-unsigned.ipa}"
+OUTPUT="${1:-$HOME/Desktop/OpenCodeGoIOS-1.0.2-unsigned.ipa}"
 STAGE="$(mktemp -d /tmp/opencodego-ipa.XXXXXX)"
 
 cd "$ROOT/iOS"

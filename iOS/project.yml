@@ -13,8 +13,8 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_LANGUAGE: zh-Hans
-    CURRENT_PROJECT_VERSION: "1"
-    MARKETING_VERSION: "1.0.1"
+    CURRENT_PROJECT_VERSION: "3"
+    MARKETING_VERSION: "1.0.2"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     CLANG_ENABLE_MODULES: YES
   configs:
@@ -30,6 +30,7 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: App
+      - path: Shared/IOSTheme.swift
       - path: ../Sources/PlatformConfig.swift
       - path: ../Sources/BillingCycle.swift
       - path: ../Sources/ChartFormatters.swift
@@ -65,8 +66,8 @@ targets:
         PRODUCT_NAME: OpenCode Go
         PRODUCT_MODULE_NAME: OpenCodeGoIOS
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.0.1"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "1.0.2"
+        CURRENT_PROJECT_VERSION: "3"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: App/Info.plist
         CODE_SIGN_ENTITLEMENTS: App/OpenCodeGoIOS.entitlements
@@ -83,6 +84,7 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: Widget
+      - path: Shared/IOSTheme.swift
       - path: App/IOSSessionStore.swift
       - path: ../Sources/PlatformConfig.swift
       - path: ../Sources/BillingCycle.swift
@@ -112,8 +114,8 @@ targets:
         PRODUCT_NAME: OpenCodeGoWidgetIOSExtension
         PRODUCT_MODULE_NAME: OpenCodeGoWidgetIOSExtension
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.0.1"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "1.0.2"
+        CURRENT_PROJECT_VERSION: "3"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Widget/Info.plist
         CODE_SIGN_ENTITLEMENTS: Widget/OpenCodeGoWidgetIOS.entitlements

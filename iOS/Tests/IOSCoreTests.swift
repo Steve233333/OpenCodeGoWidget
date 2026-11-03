@@ -52,6 +52,77 @@ final class IOSCoreTests: XCTestCase {
         XCTAssertEqual(snapshot.filteredCostTotal(for: "missing"), 0)
     }
 
+    func testDashboardPeriodUsesSelectedKeyAndAlignment() {
+        let calendar = BillingCycle.calendar
+        let reset = calendar.date(from: DateComponents(
+            year: 2026,
+            month: 11,
+            day: 18
+        ))!
+        let allDays = [
+            DailyCost(date: "2026-10-20", entries: ["model-a": 1]),
+            DailyCost(date: "2026-11-01", entries: ["model-a": 2]),
+            DailyCost(date: "2026-11-10", entries: ["model-a": 3]),
+            DailyCost(date: "2026-11-18", entries: ["model-a": 4]),
+        ]
+        let snapshot = WidgetSnapshot(
+            rolling: 0,
+            weekly: 0,
+            monthly: 0,
+            rollingReset: Date(),
+            weeklyReset: Date(),
+            monthlyReset: reset,
+            costTotal: 0,
+            costEntries: [:],
+            dailyCosts: allDays,
+            dailyByKey: ["keyA": allDays],
+            updatedAt: Date()
+        )
+
+        let billing = IOSDashboardData.periodDaily(
+            snapshot: snapshot,
+            selectedKeyID: "keyA",
+            alignment: .billing
+        )
+        let calendarMonth = IOSDashboardData.periodDaily(
+            snapshot: snapshot,
+            selectedKeyID: "keyA",
+            alignment: .calendar
+        )
+
+        XCTAssertEqual(billing.map(\.date), ["2026-10-20", "2026-11-01", "2026-11-10"])
+        XCTAssertEqual(IOSDashboardData.total(billing), 6, accuracy: 0.000_001)
+        XCTAssertEqual(calendarMonth.map(\.date), ["2026-11-01", "2026-11-10", "2026-11-18"])
+        XCTAssertEqual(IOSDashboardData.total(calendarMonth), 9, accuracy: 0.000_001)
+    }
+
+    func testFoldedModelTotalsPreserveTopModelsAndOther() {
+        let daily = [
+            DailyCost(
+                date: "2026-11-01",
+                entries: [
+                    "model-a": 5,
+                    "model-b": 4,
+                    "model-c": 3,
+                    "model-d": 2,
+                ]
+            ),
+            DailyCost(
+                date: "2026-11-02",
+                entries: [
+                    "model-b": 1,
+                    "model-e": 1,
+                ]
+            ),
+        ]
+        let folded = IOSDashboardData.foldedModelTotals(daily, topCount: 2)
+
+        XCTAssertEqual(folded.count, 3)
+        XCTAssertEqual(folded[0], IOSModelAmount(model: "model-a", amount: 5))
+        XCTAssertEqual(folded[1], IOSModelAmount(model: "model-b", amount: 5))
+        XCTAssertEqual(folded[2], IOSModelAmount(model: ModelPalette.otherName, amount: 6))
+    }
+
     func testSelectedKeyIsRemovedWhenDirectoryChanges() {
         let state = KeyDirectoryState(
             status: .live,
