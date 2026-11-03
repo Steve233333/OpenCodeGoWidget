@@ -90,11 +90,11 @@ struct OpenCodeGoIOSWidgetView: View {
     }
 
     private func mediumView(_ snapshot: WidgetSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 9) {
             widgetHeader
 
-            HStack(alignment: .top, spacing: 14) {
-                VStack(spacing: 7) {
+            HStack(alignment: .top, spacing: 18) {
+                VStack(spacing: 10) {
                     IOSWidgetQuotaLine(
                         label: "5小时",
                         value: snapshot.rolling,
@@ -114,9 +114,9 @@ struct OpenCodeGoIOSWidgetView: View {
                         showsReset: true
                     )
                 }
-                .frame(width: 132)
+                .frame(maxWidth: .infinity)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("近 7 天")
                             .font(.system(size: 10, weight: .medium))
@@ -125,18 +125,19 @@ struct OpenCodeGoIOSWidgetView: View {
                         Text("$\(IOSWidgetWeek.total(snapshot.dailyCosts), specifier: "%.2f") USD")
                             .font(.system(size: 11, weight: .semibold).monospacedDigit())
                             .lineLimit(1)
-                            .minimumScaleFactor(0.78)
+                            .minimumScaleFactor(0.72)
                     }
                     IOSWidgetWeekChart(dailyCosts: snapshot.dailyCosts)
-                        .frame(height: 68)
+                        .frame(height: 66)
                 }
                 .frame(maxWidth: .infinity)
             }
 
             Spacer(minLength: 0)
+                .frame(maxHeight: 2)
             widgetFooter(snapshot)
         }
-        .padding(15)
+        .padding(16)
     }
 
     private func smallView(_ snapshot: WidgetSnapshot) -> some View {
@@ -187,14 +188,14 @@ struct OpenCodeGoIOSWidgetView: View {
             Text("更新于 \(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))")
             Spacer()
             if entry.state?.status == .loginRequired {
-                Text("需重登")
+                Text("需重新登录")
                     .foregroundStyle(IOSTheme.warning)
             } else if let error = snapshot.error {
                 Text(error)
                     .lineLimit(1)
             }
         }
-        .font(.system(size: 8))
+        .font(.system(size: 9))
         .foregroundStyle(.secondary)
     }
 
@@ -316,11 +317,11 @@ private struct IOSWidgetWeekChart: View {
     }
 
     private var maximum: Double {
-        max(1, values.map(\.total).max() ?? 0)
+        max(0.01, (values.map(\.total).max() ?? 0) * 1.08)
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 3) {
+        HStack(alignment: .bottom, spacing: 4) {
             ForEach(values, id: \.date) { value in
                 VStack(spacing: 3) {
                     GeometryReader { geometry in
@@ -341,24 +342,36 @@ private struct IOSWidgetWeekChart: View {
                         }
                         .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                     }
-                    .frame(height: 47)
+                    .frame(height: 48)
 
-                    Text(ChartFormatters.weekLabel.string(from: value.date))
-                        .font(.system(size: 6.5, weight: .medium))
-                        .foregroundStyle(.secondary)
+                    Text(weekdayLabel(value.date))
+                        .font(.system(size: 10, weight: isToday(value.date) ? .bold : .medium))
+                        .foregroundStyle(isToday(value.date) ? IOSTheme.brand : Color.secondary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.55)
-                        .allowsTightening(true)
                 }
                 .frame(maxWidth: .infinity)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "最近七天花费 \(String(format: "%.2f", IOSWidgetWeek.total(dailyCosts))) 美元"
+        )
     }
 
     private func modelColor(_ model: String) -> Color {
         model == ModelPalette.otherName
             ? Color.secondary.opacity(0.45)
             : ModelPalette.color(for: model)
+    }
+
+    private func isToday(_ date: Date) -> Bool {
+        BillingCycle.calendar.isDateInToday(date)
+    }
+
+    private func weekdayLabel(_ date: Date) -> String {
+        let labels = ["日", "一", "二", "三", "四", "五", "六"]
+        let index = BillingCycle.calendar.component(.weekday, from: date) - 1
+        return labels[max(0, min(labels.count - 1, index))]
     }
 }
 
@@ -374,7 +387,7 @@ struct OpenCodeGoIOSWidget: Widget {
                 }
         }
         .configurationDisplayName("OpenCode Go")
-        .description("与 Mac 版一致的额度、今日花费和近 7 天用量")
+        .description("近 7 天用量、三档额度与今日花费")
         .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
         .contentMarginsDisabled()
     }

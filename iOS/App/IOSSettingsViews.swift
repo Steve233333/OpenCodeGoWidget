@@ -8,8 +8,8 @@ struct IOSSettingsPage: View {
     @State private var confirmClear = false
 
     private var version: String {
-        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.3"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "4"
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.4"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "5"
         return "\(short) (\(build))"
     }
 
