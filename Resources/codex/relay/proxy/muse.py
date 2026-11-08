@@ -35,6 +35,15 @@ def _is_muse_model(model):
     return isinstance(model, str) and model.startswith(MUSE_MODEL_PREFIX)
 
 
+def _is_crouton_model(model):
+    return isinstance(model, str) and model.startswith("crouton-alpha")
+
+
+def _uses_tool_discipline(model):
+    """Models that must act instead of stopping after a narration-only preface."""
+    return _is_muse_model(model) or _is_crouton_model(model)
+
+
 def _split_namespaced_tool_name(name):
     """'multi_agent_v1.spawn_agent' -> ('multi_agent_v1', 'spawn_agent')；不是点号名则 None。"""
     if not isinstance(name, str) or "." not in name or any(ch.isspace() for ch in name):
@@ -248,8 +257,8 @@ def _sanitize_muse_tool_schemas(parsed):
 
 
 def _inject_muse_no_preamble(parsed):
-    """Muse 专属：instructions 里补一条「要么工具调用要么最终答复」的硬约束（幂等）。"""
-    if not isinstance(parsed, dict) or not _is_muse_model(parsed.get("model")):
+    """给容易只叙述不行动的模型补「要么工具调用、要么最终答复」约束（幂等）。"""
+    if not isinstance(parsed, dict) or not _uses_tool_discipline(parsed.get("model")):
         return False
     if not _muse_flag("RELAY_MUSE_NO_PREAMBLE"):
         return False
@@ -262,8 +271,8 @@ def _inject_muse_no_preamble(parsed):
 
 
 def _inject_muse_tool_first(parsed):
-    """Muse 专属：input 末尾（模型最后读到的地方）再压一条工具优先约束（幂等）。"""
-    if not isinstance(parsed, dict) or not _is_muse_model(parsed.get("model")):
+    """给容易只叙述不行动的模型补工具优先约束（幂等）。"""
+    if not isinstance(parsed, dict) or not _uses_tool_discipline(parsed.get("model")):
         return False
     if not _muse_flag("RELAY_MUSE_NO_PREAMBLE"):
         return False

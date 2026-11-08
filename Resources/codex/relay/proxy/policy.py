@@ -50,6 +50,11 @@ MODEL_FAMILIES: dict[str, ModelPolicy] = {
     "gpt-": ModelPolicy(route=ROUTE_NATIVE, native_search=True),
     "muse-spark": ModelPolicy(route=ROUTE_NATIVE, native_search=True,
                               stall_guard=True, min_output_tokens=MUSE_MIN_OUTPUT_TOKENS),
+    # Crouton uses native Responses and tools, but can answer a goal continuation
+    # with a short acknowledgement ("收到，我会保持...") and stop without acting.
+    # Enable the same bounded narration-only retry used by Muse; no output-budget
+    # floor is needed because its official output limit is already very large.
+    "crouton-alpha": ModelPolicy(route=ROUTE_NATIVE, stall_guard=True),
     # chat 适配家族：先试原生，坏了走桥（并且记住这个模型坏了，按指数退避）
     "mimo": ModelPolicy(route=ROUTE_NATIVE_OR_BRIDGE),
     "glm": ModelPolicy(route=ROUTE_NATIVE_OR_BRIDGE),

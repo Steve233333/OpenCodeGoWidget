@@ -15,6 +15,7 @@ enum ModelRegistry {
     // 2026-09-17 刷新：补 union-alpha / omen-alpha / hy4-preview / qwen3.8-flash / glm-5.3-flash /
     // longcat-2.0 / grok-4.6 / deepseek-v4.1-flash / deepseek-flash；ox-alpha-free 8-28 已下架，移除。
     static let fallbackOrdered: [String] = [
+        "crouton-alpha-free",
         "minimax-m3",
         "minimax-m2.7",
         "minimax-m2.5",
@@ -56,7 +57,7 @@ enum ModelRegistry {
     ]
 
     /// 缓存里必须出现的模型，缺任何一个都视为过期（否则数量凑够也发现不了漏抓）
-    static let requiredKeys: Set<String> = ["kimi-k3", "qwen3.7-max", "qwen3.7-plus", "mimo-v2-pro", "union-alpha"]
+    static let requiredKeys: Set<String> = ["crouton-alpha-free", "kimi-k3", "qwen3.7-max", "qwen3.7-plus", "mimo-v2-pro", "union-alpha"]
 
     private static let logger = Logger(subsystem: "com.steve233.opencodego", category: "ModelRegistry")
     private static let endpoint = URL(string: "https://opencode.ai/zen/go/v1/models")!

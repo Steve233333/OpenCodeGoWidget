@@ -665,7 +665,7 @@ class Proxy(RequestPipelineMixin):
             writer.write(chunk)
             await writer.drain()
 
-    async def _guard_muse_stall(self, response, status, headers, retry, attempts_left=None):
+    async def _guard_muse_stall(self, response, status, headers, retry, attempts_left=None, model=None):
         """Muse 的「只叙述不调用工具」空转守卫 —— 有限扣留版（2026-09-23）。
 
         以前是**把整段响应读完**再判断：muse 于是从来不逐字流式（实测长回合 63~82 秒里
@@ -709,7 +709,7 @@ class Proxy(RequestPipelineMixin):
             final_status = getattr(response, "status", None) or status
             return _BufferedResponse(final_status, headers, bytes(body)), status, headers
         # 流结束了还扣着：这时候才做空转判定（短叙述 + 没工具调用 + 有终态）
-        if _sse_looks_like_stall(body):
+        if _sse_looks_like_stall(body, model):
             attempt_no = MUSE_MAX_STALL_RETRIES - attempts_left + 1
             if not _muse_retry_allowed(bytes(body)):
                 _log(f"[relay] muse stall detected but circuit breaker open (#{attempt_no}); forwarding as-is")
@@ -728,7 +728,7 @@ class Proxy(RequestPipelineMixin):
                     nxt_status = getattr(nxt, "status", None) or getattr(nxt, "code", 0) or status
                     nxt_headers = list(nxt.headers.items()) if hasattr(nxt, "headers") else headers
                     return await self._guard_muse_stall(
-                        nxt, nxt_status, nxt_headers, retry, attempts_left - 1)
+                        nxt, nxt_status, nxt_headers, retry, attempts_left - 1, model)
         final_status = getattr(response, "status", None) or status
         return _BufferedResponse(final_status, headers, bytes(body)), status, headers
 
@@ -738,7 +738,7 @@ class Proxy(RequestPipelineMixin):
         frame is forwarded byte-identical (including its delimiter). Any
         parse/transform error forwards the raw frame."""
         if retry is not None:
-            response, status, headers = await self._guard_muse_stall(response, status, headers, retry)
+            response, status, headers = await self._guard_muse_stall(response, status, headers, retry, model=model)
         pol = policy_for(model)                    # 宽限/平滑都查策略表（2026-09-23 收敛）
         await self._write_head(writer, status, headers, None)
         read_chunk = getattr(response, "read1", response.read)

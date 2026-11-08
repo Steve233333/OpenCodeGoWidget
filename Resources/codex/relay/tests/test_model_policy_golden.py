@@ -48,6 +48,7 @@ GOLDEN = [
     ("grok-4.7-go", "native", False),                    # 4.7 原生可用（唯一的 grok 覆盖）
     ("muse-spark-1.3-contributor-go", "native", True),    # muse：原生 + 自带搜索 + 空转守卫 + 预算下限
     ("muse-spark-1.2-contributor-go", "native", True),
+    ("crouton-alpha-free-go", "native", False),            # 原生 Responses + 空转守卫，无原生搜索
     ("deepseek-v4.1-flash-go", "native", True),
     ("deepseek-v4-pro-go", "native", True),
     ("deepseek-v4-flash-go", "native", True),
@@ -85,6 +86,8 @@ def t_policy_matches_pre_refactor_baseline():
 def t_muse_quirks_live_in_one_place():
     p = policy_for("muse-spark-1.3-contributor-go")
     assert p.stall_guard and p.min_output_tokens == 16384, p
+    c = policy_for("crouton-alpha-free-go")
+    assert c.stall_guard and c.min_output_tokens is None, c
     assert family_of("muse-spark-1.2-contributor-free") == "muse-spark"
     for slug in ("mimo-v2.6-flash-go", "glm-5.3-go", "deepseek-v4.1-flash-go"):
         q = policy_for(slug)

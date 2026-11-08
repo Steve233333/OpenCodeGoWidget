@@ -306,6 +306,12 @@ _JSON_SCHEMA_TYPES = {"object", "array", "string", "number", "integer", "boolean
 
 _MUSE_STALL_MARKERS = ("正在", "马上", "这就", "已定位", "我来看看", "I'll", "I will", "let me", "Let me")
 
+# Crouton tends to acknowledge an automatic goal continuation instead of doing
+# the next action. These markers are only applied to the Crouton family in
+# _sse_looks_like_stall, so ordinary short final answers from other models are
+# not reinterpreted as stalls.
+_CROUTON_STALL_MARKERS = ("收到", "我会保持", "会继续保持", "将在后续", "后续会", "继续保持")
+
 
 MUSE_NO_PREAMBLE_INSTRUCTION = (
     "严格约束（本条优先级最高）：本轮回复要么直接发起工具调用，要么给出最终答复，"

@@ -1,4 +1,11 @@
 {
+ "crouton-alpha-free": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
  "glm-5": [
   "high",
   "max"

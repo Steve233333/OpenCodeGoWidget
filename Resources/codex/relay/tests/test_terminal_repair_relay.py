@@ -25,6 +25,7 @@ sys.path.insert(0, ROOT)
 
 from proxy.server import Proxy  # noqa: E402
 from proxy.config import MUSE_MAX_STALL_RETRIES  # noqa: E402
+from proxy.sse import _sse_looks_like_stall  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -420,6 +421,26 @@ def t_muse_short_narration_still_gets_retried():
     out = asyncio.run(proxy._guard_muse_stall(up, 200, [("Content-Type", "text/event-stream")], retry))
     assert calls["n"] == 1, f"重发一次就该拿到正常回答，实际重发 {calls['n']} 次"
     assert b"response.completed" in out[0].read(65536)
+
+    crouton_ack = _muse_frames("收到，我会保持这条目标；后续会继续处理。")
+    assert _sse_looks_like_stall(crouton_ack, "crouton-alpha-free")
+
+    crouton_calls = {"n": 0}
+
+    async def crouton_retry(_attempt):
+        crouton_calls["n"] += 1
+        return SlowMuseUpstream([_muse_frames(good)])
+
+    crouton_up = SlowMuseUpstream([crouton_ack])
+    crouton_out = asyncio.run(proxy._guard_muse_stall(
+        crouton_up,
+        200,
+        [("Content-Type", "text/event-stream")],
+        crouton_retry,
+        model="crouton-alpha-free",
+    ))
+    assert crouton_calls["n"] == 1
+    assert b"response.completed" in crouton_out[0].read(65536)
 
 
 def t_muse_retry_gives_up_after_max_attempts():

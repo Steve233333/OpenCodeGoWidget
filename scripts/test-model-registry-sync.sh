@@ -25,6 +25,7 @@ if missing or mismatch:
 # 新模型可能先被线上目录自动发现，模板还没同步。这里单列本轮已实测的档位，
 # 防止“运行时有五档、仓库真源又退回只有 high”的漂移。
 required = {
+    'crouton-alpha-free': ['low', 'medium', 'high', 'xhigh', 'max'],
     'beam-free': ['low', 'medium', 'high', 'xhigh', 'max'],
     'minimax-m3.1-flash-free': ['low', 'medium', 'high', 'xhigh', 'max'],
 }

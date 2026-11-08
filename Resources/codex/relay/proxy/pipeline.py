@@ -30,6 +30,54 @@ from .toolfix import (_fix_tool_required, _normalize_fc_args_history,
                       _sanitize_input_ids)
 
 
+_CROUTON_GOAL_INSTRUCTION = (
+    "当前输入是 Codex 持久目标的自动续跑，不是单纯状态询问。"
+    "禁止只回复“收到”“我会保持”“将继续”“后续会处理”等确认文字；"
+    "必须立即调用所需工具推进目标。只有目标确已完成时，才可以直接给出最终结果，并附完成证据。"
+)
+
+
+def _request_has_goal_continuation(parsed):
+    if not isinstance(parsed, dict):
+        return False
+    for item in parsed.get("input") or []:
+        if not isinstance(item, dict):
+            continue
+        for part in item.get("content") or []:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if not isinstance(text, str) or "<codex_internal_context" not in text:
+                continue
+            if 'source="goal"' in text or 'source="user_goal"' in text:
+                return True
+    return False
+
+
+def _inject_crouton_goal_instruction(parsed):
+    model = parsed.get("model") if isinstance(parsed, dict) else None
+    if not (isinstance(model, str) and model.startswith("crouton-alpha")):
+        return False
+    if not _request_has_goal_continuation(parsed):
+        return False
+    items = parsed.get("input")
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, dict) or item.get("role") != "developer":
+            continue
+        for part in item.get("content") or []:
+            if isinstance(part, dict) and part.get("text") == _CROUTON_GOAL_INSTRUCTION:
+                return False
+    items.append({
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": _CROUTON_GOAL_INSTRUCTION}],
+    })
+    _log("[relay] crouton goal-continuation action constraint appended")
+    return True
+
+
 
 
 def _header_value(headers, name):
@@ -210,6 +258,7 @@ class RequestPipelineMixin:
             muse_schema_changed = (zen_changed or go_changed) and _sanitize_muse_tool_schemas(parsed)
             muse_preamble_changed = (zen_changed or go_changed) and _inject_muse_no_preamble(parsed)
             muse_first_changed = (zen_changed or go_changed) and _inject_muse_tool_first(parsed)
+            crouton_goal_changed = (zen_changed or go_changed) and _inject_crouton_goal_instruction(parsed)
             # Muse 的推理也吃 max_output_tokens（实测 80 预算里 reasoning 占 77 → 一个字没吐就 incomplete）。
             # 只抬高客户端显式给的小值，没给就照上游默认（2026-09-23）。
             _min_budget = policy_for(model).min_output_tokens
@@ -232,7 +281,7 @@ class RequestPipelineMixin:
                     or fca_changed or id_changed or reasoning_history_changed
                     or id_prefix_changed or req_changed or reasoning_changed
                     or muse_schema_changed
-                    or muse_preamble_changed or muse_first_changed):
+                    or muse_preamble_changed or muse_first_changed or crouton_goal_changed):
                 body = bytearray(json.dumps(parsed).encode())
             # 2026-09-30：请求体减肥 —— 历史里累积的 base64（截图/工具输出）会把 body 顶到
             # ~48MB，上游随机 413；超 45MB 时按"从旧到新"丢弃（图片优先），只改发出去这一份。
@@ -598,7 +647,12 @@ class RequestPipelineMixin:
             # 2026-09-20：Muse 空转兜底（narration-only turn）。是不是空转要读完整段响应才知道，
             # 所以重发只能在 _send_response 里做；这里把「拿同一份请求体重发一次」的能力传进去。
             stall_retry = None
-            if (not fallback_now) and pol.stall_guard and _muse_flag("RELAY_MUSE_STALL_RETRY"):
+            stall_guard_this_turn = pol.stall_guard
+            if isinstance(model, str) and model.startswith("crouton-alpha"):
+                # Crouton 的普通短回答可能是正常最终答复；只有持久目标续跑
+                # 才启用“收到但不行动”的空转重试。
+                stall_guard_this_turn = _request_has_goal_continuation(parsed)
+            if (not fallback_now) and stall_guard_this_turn and _muse_flag("RELAY_MUSE_STALL_RETRY"):
                 retry_base = bytes(body)
 
                 async def stall_retry(attempt, _base=retry_base, _path=path, _headers=list(headers),

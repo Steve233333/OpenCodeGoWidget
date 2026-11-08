@@ -1,4 +1,11 @@
 {
+  "crouton-alpha-free": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
   "deepseek-v4-flash-vision-exp": [
     "low",
     "high",

@@ -669,6 +669,24 @@ def t_muse_min_output_tokens_floor():
     p = {"model": "deepseek-v4.1-flash-go", "max_output_tokens": 10}
     assert vp._muse_enforce_min_output_tokens(p) == (False, None, None) and p["max_output_tokens"] == 10
 
+    # Crouton 不设预算下限，但目标续跑时要强制先行动而不是只回“收到”。
+    p = {"model": "crouton-alpha-free", "max_output_tokens": 80}
+    assert vp._muse_enforce_min_output_tokens(p) == (False, None, None)
+    assert p["max_output_tokens"] == 80
+    goal = {
+        "model": "crouton-alpha-free",
+        "input": [{"role": "user", "content": [{
+            "type": "input_text",
+            "text": '<codex_internal_context source="goal">继续同步</codex_internal_context>',
+        }]}],
+    }
+    assert vp._inject_crouton_goal_instruction(goal) is True
+    assert vp._inject_crouton_goal_instruction(goal) is False
+    assert goal["input"][-1]["role"] == "developer"
+    assert "禁止只回复" in goal["input"][-1]["content"][0]["text"]
+    normal = {"model": "crouton-alpha-free", "input": [{"role": "user", "content": "hi"}]}
+    assert vp._inject_crouton_goal_instruction(normal) is False
+
 
 def t_history_arguments_are_always_valid_json():
     """2026-09-23：回放历史里的坏 `arguments` 会让上游 400（`arguments` must be valid JSON）。

@@ -12,6 +12,7 @@ from .apply_patch import (
 from .config import (
     MUSE_STALL_TEXT_LIMIT,
     SSE_MAX_BUFFERED_FRAME,
+    _CROUTON_STALL_MARKERS,
     _MUSE_STALL_MARKERS,
     _log,
 )
@@ -85,8 +86,8 @@ def _sse_has_terminal_event(body):
                for frame in _iter_sse_data_frames(body))
 
 
-def _sse_looks_like_stall(body):
-    """判断一次 Muse 响应是不是「只叙述、不调用工具」的空转。
+def _sse_looks_like_stall(body, model=None):
+    """判断一次受保护模型响应是不是「只叙述、不调用工具」的空转。
 
     没有终态事件（真截断）不算——那种情况下面有 response.failed 兜底，重发只会白花钱。
     """
@@ -100,7 +101,10 @@ def _sse_looks_like_stall(body):
         return True
     if len(stripped) > MUSE_STALL_TEXT_LIMIT:
         return False
-    return any(marker in stripped for marker in _MUSE_STALL_MARKERS)
+    markers = _MUSE_STALL_MARKERS
+    if isinstance(model, str) and model.startswith("crouton-alpha"):
+        markers = markers + _CROUTON_STALL_MARKERS
+    return any(marker in stripped for marker in markers)
 
 
 def _sse_event(event_type, payload):

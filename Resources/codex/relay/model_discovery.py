@@ -94,6 +94,7 @@ DISPLAY_NAME_OVERRIDES = {
     # "GPT-5.6-Luna (Go)"，列表里显示成 "5.6 Luna (Go)"，用户来问"前面的 GPT 去哪了"）。
     # 换成空格写法（和官方文档 "GPT 5.6 Luna" 一致）绕开它的前缀规则。
     "gpt-5.6-luna": "GPT 5.6 Luna",
+    "crouton-alpha-free": "Crouton Alpha Free",
 }
 
 # 手工实测档位覆盖层（唯一权威手工来源；首次运行自动从 reasoning_registry.json 迁移）
@@ -136,6 +137,7 @@ def _sanitize_modalities(mod):
 
 # Fallback 31 ids (2026-08-28 live snapshot)
 FALLBACK_IDS = [
+    "crouton-alpha-free",
     "minimax-m3","minimax-m2.7","minimax-m2.5","kimi-k3","kimi-k2.7-code","kimi-k2.6",
     "longcat-2.0","kimi-k2.5","glm-5.2","glm-5.3-flash","glm-5.3","glm-5.1","glm-5",
     "deepseek-v4-pro","deepseek-v4-flash","deepseek-v4-flash-vision-exp",
@@ -149,6 +151,7 @@ GO_ALIASES = {"ox-alpha": "ox-alpha-free"}  # keep for compat, but not needed fo
 
 # Display name -> id map for quota table (normalized)
 DISPLAY_TO_ID = {
+    "crouton alpha free": "crouton-alpha-free",
     "kimi k3": "kimi-k3",
     "qwen3.8 max": "qwen3.8-max",
     "grok 4.6": "grok-4.6",
