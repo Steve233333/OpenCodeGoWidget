@@ -1,6 +1,10 @@
 {
  "longcat-2.5-free": [
-  "high"
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
  ],
  "crouton-alpha-free": [
   "low",

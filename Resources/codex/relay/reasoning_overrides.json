@@ -7,7 +7,11 @@
     "max"
   ],
   "longcat-2.5-free": [
-    "high"
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
   ],
   "longcat-2.5-preview-free": [
     "high"

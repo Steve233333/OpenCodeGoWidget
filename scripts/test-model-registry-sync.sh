@@ -26,7 +26,7 @@ if missing or mismatch:
 # 防止“运行时有五档、仓库真源又退回只有 high”的漂移。
 required = {
     'crouton-alpha-free': ['low', 'medium', 'high', 'xhigh', 'max'],
-    'longcat-2.5-free': ['high'],
+    'longcat-2.5-free': ['low', 'medium', 'high', 'xhigh', 'max'],
     'beam-free': ['low', 'medium', 'high', 'xhigh', 'max'],
     'minimax-m3.1-flash-free': ['low', 'medium', 'high', 'xhigh', 'max'],
 }
