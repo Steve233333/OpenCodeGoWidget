@@ -101,7 +101,7 @@ UNPATCHED_MARK="$(grep -cF 'grep -aqE "$PATCHED_REGEX" "$asar"' "$PATCH_SH" || t
 if [ -z "$U_RE" ] || [ -z "$P_RE" ]; then
   bad "缺 PATTERN_REGEX / PATCHED_REGEX 定义（pattern 校验串必须集中管理）"
 elif [ "$UNPATCHED_MARK" -lt 2 ]; then
-  bad "is_patched / 字节校验没有引用 \$PATCHED_REGEX（又硬编码了？）"
+  bad "is_patched / 字节校验没有引用 \${PATCHED_REGEX}（又硬编码了？）"
 else
   ok "pattern 正则集中在 PATTERN_REGEX / PATCHED_REGEX，且两处校验都引用它"
   # 用受控样例跑真正则：历史形态 + 26.1103 形态都必须各命中 1，已打补丁形态必须 0
