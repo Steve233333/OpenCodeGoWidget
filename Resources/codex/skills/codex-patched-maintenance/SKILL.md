@@ -60,8 +60,8 @@ description: 维护 ChatGPT 桌面版 DeepSeek 双开副本（ChatGPT-Patched.ap
 1. **确认副本已退出**（`pgrep -f ChatGPT-Patched`），否则脚本拒绝重建
 2. **核对新版 asar 中 patch pattern 是否仍唯一存在**：
    ```bash
-   grep -aboF 'i.useHiddenModels&&r!==' /Applications/ChatGPT.app/Contents/Resources/app.asar | wc -l   # 必须 = 1（26.820 旧）；26.825 已改为正则 useHiddenModels&&[^`]*!==`amazonBedrock`
-   grep -aboE 'useHiddenModels&&[^`]*!==`amazonBedrock`' .../app.asar | wc -l                           # 26.825 必须 = 1
+   # 26.1103+ 用集中正则（同时吃旧形态「i!==`amazonBedrock`」和新形态「"amazonBedrock"!==a」）
+   grep -aboE 'useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*!==|!==[[:space:]]*["`]amazonBedrock["`])' .../app.asar | wc -l   # 必须 = 1
    grep -aboF 'https://persistent.oaistatic.com/codex-app-prod/appcast.xml' .../app.asar | wc -l        # 必须 = 1（feed URL）
    ```
 3. **若 pattern 变更**（上游重构代码），按此方法定位新 pattern：
@@ -449,3 +449,54 @@ grep -a -c "Failed to get integrity" ~/Library/Logs/DiagnosticReports/ChatGPT.bi
 - **纪律**：线上 `~/.codex/picker-patch/patch.sh` 的任何修复，必须当轮 `sync-from-home` 回仓库再重建 —— 安装器 `sync_newer_file` 是「内容不同就用包里的」（只留 `.bak.<ts>`），不回流就等于下次重建把修复冲掉。
 
 教训：**「签名通过」≠「能启动」**。凡是「重建产物」的脚本，签名前必须校验**产物本身**（存在、非空、是 Mach-O），并把「改过 bundle 内容 → 所有嵌入摘要/哈希同步」写成脚本的硬步骤，别依赖平台默认 fail-open。
+
+### 34. 26.1103 模型可见性 pattern 失配 → 重建 ABORTED → 副本退化成官方原版（2026-11-10）
+
+症状：官方升到 `26.1103.60933` 后点「配置」，最后报 **「双开副本：失败」+「ERROR: ChatGPT-Patched.app 没有完成同步」**（退出码 1）。日志里关键三行：
+
+```
+检测到官方已升级（26.1027.61615 -> 26.1103.60933），副本仍在运行，尝试自动退出重建...
+ERROR: pattern occurrences=0 (expected 1) for regex useHiddenModels&&[^`]*!==`amazonBedrock`, refusing to patch.
+ABORTED:pattern-count
+WARN: 正式路径上没有可用的副本，放一份官方原版进去（能打开，模型过滤未打补丁）
+已放置官方原版副本（未打补丁）
+```
+
+**根因（单点，但后果连锁）**：26.1103 把模型可见性条件重写了——**字面量挪到运算符前面，并把模板串换成双引号**：
+
+```js
+// <= 26.1027（旧正则能吃）
+o.useHiddenModels&&r!==`amazonBedrock`?o.availableModels.has(e.model):!e.hidden
+// 26.1103+（旧正则吃不到：`amazonBedrock` 在 !== 左边，且是双引号）
+o.useHiddenModels&&"amazonBedrock"!==a?o.availableModels.has(e.model):!e.hidden
+```
+
+连锁：正则 0 命中 → 脚本按纪律 `discard_staging`（这是对的，绝不带病签包）→ 但「保底留一个能打开的副本」逻辑把**未打补丁的官方原版**放到正式路径 → 副本能开、下拉里却没 DeepSeek 模型；同时 `patch-state.json` 仍是旧版本号，安装器新加的版本核对（§33 后那条）如实报「没有完成同步」→ 用户看到「配置失败」。
+
+**定位方法**（本次实测最快路径）：
+
+```bash
+ASAR=/Applications/ChatGPT.app/Contents/Resources/app.asar
+grep -aboF 'useHiddenModels' "$ASAR" | wc -l          # 33 处（会误伤，别直接用）
+for off in $(grep -aboF 'useHiddenModels' "$ASAR" | cut -d: -f1); do
+  dd if="$ASAR" bs=1 skip=$((off-160)) count=420 2>/dev/null | tr -d '\000'; echo
+done | grep -n 'amazonBedrock'                        # 只看带 amazonBedrock 的那处
+```
+
+真正要改的还是**唯一那一处** `useHiddenModels&&…amazonBedrock…!==`（26.1103 在 offset 321328766，`!==` 在 321328798）。另一处 `o&&!a&&"amazonBedrock"!==n`（`!isCustomModelProvider` 分支，offset ≈114361288）**不要动**：自定义 provider 走的是 `!hidden` 分支，改了反而影响官方账号的模型可见性。
+
+**修复（已进仓库 + 门禁）**：
+
+- `patch.sh` 顶部把两种形态收进一个正则，并新增 `PATCHED_REGEX`（体检/字节校验共用，不再各写一份）：
+  ```bash
+  PATTERN_REGEX='useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*!==|!==[[:space:]]*["`]amazonBedrock["`])'
+  PATCHED_REGEX='useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*===|===[[:space:]]*["`]amazonBedrock["`])'
+  ```
+  `[^=!]*` 而不是 `[^`]*`：既能跨过旧形态的标识符，也不会吞掉 `!==`/`===` 造成回退误判。
+- `scripts/test-patch-guards.sh` 新增 ②d：从脚本里抠出真正则，用 7 个受控样例断言「旧形态 1 / 新形态 1 / 已打补丁 0 / 体检认已打补丁 1 / 体检不误判未打补丁 0」，并检查 `is_patched` 与字节校验都引用 `$PATCHED_REGEX`（防again硬编码）。
+- `relay/tests/test_installer_patch_robust.py`、`test_model_discovery_robust.py` 的正则与用例同步（新增 26.1103 形态）。
+
+**验证链（2026-11-10 本机实测）**：`--install` → `pattern ... patched (===) at offset 321328798` → `asar integrity refreshed` → `launcher compiled with clang` → `codesign verify passed` → `marker written: 26.1103.60933` → 副本带 `--user-data-dir` 驻留、`codesign --verify --deep --strict` 通过、补丁字节 `321328766:useHiddenModels&&"amazonBedrock"===`、DiagnosticReports 无新增崩溃。
+
+教训：**pattern 失配必须是「可诊断的失败」，不能悄悄降级成「能开但没功能」的官方原版**。看「配置失败」先看 `patch.log` 里是 `ABORTED:pattern-count` 还是签名/启动失败——前者只需更新正则，别急着重装或换 key。
+

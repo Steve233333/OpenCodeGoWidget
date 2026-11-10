@@ -16,15 +16,18 @@ SIGN_IDENTITY="Codex Patched Signing"
 SIGN_KEYCHAIN="$HOME/Library/Keychains/codex-signing.keychain-db"
 SIGN_KEYCHAIN_PASS="$(cat "$HOME/.codex/picker-patch/.keychain-pass" 2>/dev/null | tr -d " \n\r" || true)"; [[ -z "$SIGN_KEYCHAIN_PASS" ]] && SIGN_KEYCHAIN_PASS="0000"  # fallback 兼容旧机，回退后 TCC 会提示重授
 
-# 26.810+: model visibility filter was rewritten. Old pattern was
-# 'i&&t!==`amazonBedrock`' (26.803-); new code is
-# n.filter(e=>i.useHiddenModels&&r!==`amazonBedrock`?i.availableModels.has(e.model):!e.hidden)
-# 26.825: variables renamed to a.useHiddenModels&&i!==`amazonBedrock`
-# Patch flips `!==` -> `===` so the non-Bedrock filter path is skipped and
-# custom (DeepSeek) models are never filtered out by availableModels.
-# Keep both candidates for compatibility; auto-detect which exists.
+# 模型可见性过滤：把 `authMethod !== amazonBedrock ? availableModels.has(...) : !hidden`
+# 里的 `!==` 翻成 `===`，非 Bedrock 账号就走 `!hidden` 分支，自定义（DeepSeek）
+# 模型不会再被 availableModels 过滤掉。
+#
+# 上游改写过三次形态，正则必须同时吃下历史与当前两种字面量位置：
+#   26.810-26.1027：useHiddenModels&&r!==`amazonBedrock`      （标识符在前，模板串在后）
+#   26.1103+      ：useHiddenModels&&"amazonBedrock"!==a      （字面量在前，双引号）
+# 事故：26.1103 只把字面量挪到运算符前面 + 换成双引号，旧正则 occurrences=0 →
+# ABORTED:pattern-count → 安装器退化成放一份未打补丁的官方原版（下拉里没有 DeepSeek 模型）。
 PATTERNS=('a.useHiddenModels&&i!==`amazonBedrock`' 'i.useHiddenModels&&r!==`amazonBedrock`')
-PATTERN_REGEX='useHiddenModels&&[^`]*!==`amazonBedrock`'
+PATTERN_REGEX='useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*!==|!==[[:space:]]*["`]amazonBedrock["`])'
+PATCHED_REGEX='useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*===|===[[:space:]]*["`]amazonBedrock["`])'
 PATTERN="$PATTERN_REGEX"
 PATCH_FROM='!=='
 PATCH_TO='==='
@@ -73,7 +76,7 @@ get_marker_version() {
 is_patched() {
   local asar="$PATCHED/Contents/Resources/app.asar"
   [ -f "$asar" ] || return 1
-  grep -aqE 'useHiddenModels&&[^`]*===`amazonBedrock`' "$asar" 2>/dev/null
+  grep -aqE "$PATCHED_REGEX" "$asar" 2>/dev/null
 }
 
 # 2026-10-22：副本**体检**。光看 asar 里有没有补丁特征不够 ——
@@ -222,7 +225,7 @@ build_patched() {
 
   # 2026-10-22：必须校验**暂存目录里这份** asar。is_patched() 读的是正式路径，
   # 原子重建后正式路径上还是旧包（甚至还没建），拿它校验会永远失败。
-  if ! grep -aqE 'useHiddenModels&&[^`]*===`amazonBedrock`' "$asar" 2>/dev/null; then
+  if ! grep -aqE "$PATCHED_REGEX" "$asar" 2>/dev/null; then
     log "ERROR: patch byte verification failed, discarding staged copy"
     discard_staging "byte-verify"
   fi

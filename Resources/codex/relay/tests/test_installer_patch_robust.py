@@ -192,13 +192,17 @@ def t_detect_status_malformed_files():
 
 def t_patch_regex_various_asar():
     import tempfile, pathlib
-    regex = re.compile(r'useHiddenModels&&[^`]*!==`amazonBedrock`')
+    # 26.1103：上游把字面量挪到运算符前面并换成双引号
+    # （useHiddenModels&&"amazonBedrock"!==a），正则必须同时吃下历史形态。
+    regex = re.compile(r'useHiddenModels&&[^=!]*(["`]amazonBedrock["`]\s*!==|!==\s*["`]amazonBedrock["`])')
     cases = [
-        (b'a.useHiddenModels&&i!==`amazonBedrock`', 1, True),
+        (b'a.useHiddenModels&&i!==`amazonBedrock`', 1, True),   # <=26.1027
         (b'i.useHiddenModels&&r!==`amazonBedrock`', 1, True),
         (b'x.useHiddenModels&&y!==`amazonBedrock`', 1, True),
-        (b'useHiddenModels&&!==`amazonBedrock`', 1, True), # [^`]* can be zero, so this actually matches
+        (b'useHiddenModels&&!==`amazonBedrock`', 1, True), # [^=!]* can be zero, so this actually matches
+        (b'o.useHiddenModels&&"amazonBedrock"!==a', 1, True),   # 26.1103+
         (b'a.useHiddenModels&&i===`amazonBedrock`', 0, False), # already patched
+        (b'o.useHiddenModels&&"amazonBedrock"===a', 0, False), # already patched (26.1103)
         (b'a.useHiddenModels&&i!==`amazonBedrock` a.useHiddenModels&&i!==`amazonBedrock`', 2, False), # duplicate -> should refuse
     ]
     for content, expected_count, should_allow in cases:

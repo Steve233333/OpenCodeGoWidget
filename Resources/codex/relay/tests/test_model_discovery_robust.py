@@ -508,13 +508,14 @@ def t_patch_regex_various():
         'a.useHiddenModels&&i!==`amazonBedrock`',
         'i.useHiddenModels&&r!==`amazonBedrock`',
         'x.useHiddenModels&&y!==`amazonBedrock`',
+        'o.useHiddenModels&&"amazonBedrock"!==a',     # 26.1103 字面量前置 + 双引号
         'a.useHiddenModels && i !== `amazonBedrock`',  # spaced should not match current regex
     ]
-    regex = re.compile(r'useHiddenModels&&[^`]*!==`amazonBedrock`')
-    for pat in patterns[:3]:
+    regex = re.compile(r'useHiddenModels&&[^=!]*(["`]amazonBedrock["`]\s*!==|!==\s*["`]amazonBedrock["`])')
+    for pat in patterns[:4]:
         assert regex.search(pat), f"should match {pat}"
     # spaced variant should not match, which is expected to trigger rebuild failure path (good)
-    assert not regex.search(patterns[3])
+    assert not regex.search(patterns[4])
 
 def t_installer_key_validation():
     # simulate installer key checks: length <8 is suspicious

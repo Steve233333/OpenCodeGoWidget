@@ -90,6 +90,36 @@ grep -qF 'exit 2' "$PATCH_SH" \
   && ok "降级用退出码 2（App 显示黄色提示而不是失败）" || bad "缺降级退出码"
 
 # ---------------------------------------------------------------------------
+# ②d 模型可见性 patch 正则（2026-11-10，26.1103）
+# 事故：官方把条件里的字面量挪到运算符前面并换成双引号
+# （useHiddenModels&&"amazonBedrock"!==a），旧正则 `...[^`]*!==`amazonBedrock``
+# 命中 0 → ABORTED:pattern-count → 安装器退化成「放一份未打补丁的官方原版」，
+# 副本能开但下拉里没有自定义模型，且 patch-state 版本对不上 → 配置报失败。
+U_RE="$(sed -nE 's/^PATTERN_REGEX='"'"'(.*)'"'"'$/\1/p' "$PATCH_SH" | head -1)"
+P_RE="$(sed -nE 's/^PATCHED_REGEX='"'"'(.*)'"'"'$/\1/p' "$PATCH_SH" | head -1)"
+UNPATCHED_MARK="$(grep -cF 'grep -aqE "$PATCHED_REGEX" "$asar"' "$PATCH_SH" || true)"
+if [ -z "$U_RE" ] || [ -z "$P_RE" ]; then
+  bad "缺 PATTERN_REGEX / PATCHED_REGEX 定义（pattern 校验串必须集中管理）"
+elif [ "$UNPATCHED_MARK" -lt 2 ]; then
+  bad "is_patched / 字节校验没有引用 \$PATCHED_REGEX（又硬编码了？）"
+else
+  ok "pattern 正则集中在 PATTERN_REGEX / PATCHED_REGEX，且两处校验都引用它"
+  # 用受控样例跑真正则：历史形态 + 26.1103 形态都必须各命中 1，已打补丁形态必须 0
+  re_case() {  # $1=名称 $2=文本 $3=要用的正则 $4=期望命中数
+    printf '%s' "$2" > "$WORK/re.txt"
+    local got; got=$(grep -cE "$3" "$WORK/re.txt" 2>/dev/null || true)
+    if [ "$got" = "$4" ]; then ok "正则·$1（命中 ${got}）"; else bad "正则·$1 命中 ${got}，期望 $4"; fi
+  }
+  re_case "旧形态 <=26.1027" 'a.useHiddenModels&&i!==`amazonBedrock`' "$U_RE" 1
+  re_case "新形态 26.1103" 'o.useHiddenModels&&"amazonBedrock"!==a' "$U_RE" 1
+  re_case "已打补丁（旧形态）" 'a.useHiddenModels&&i===`amazonBedrock`' "$U_RE" 0
+  re_case "已打补丁（新形态）" 'o.useHiddenModels&&"amazonBedrock"===a' "$U_RE" 0
+  re_case "体检认已打补丁（旧）" 'a.useHiddenModels&&i===`amazonBedrock`' "$P_RE" 1
+  re_case "体检认已打补丁（新）" 'o.useHiddenModels&&"amazonBedrock"===a' "$P_RE" 1
+  re_case "体检不误判未打补丁" 'o.useHiddenModels&&"amazonBedrock"!==a' "$P_RE" 0
+fi
+
+# ---------------------------------------------------------------------------
 # ③ 行为用例：把脚本里那段启动器选择逻辑抠出来，用受控的假 clang 跑
 sed -n '/^  launcher_ok=""/,/main executable wrapped with user-data-dir launcher/p' "$PATCH_SH" > "$WORK/block.sh"
 if [ ! -s "$WORK/block.sh" ]; then
