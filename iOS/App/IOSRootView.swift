@@ -5,39 +5,18 @@ struct IOSRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var account = ConsoleAccountModel()
     @StateObject private var usage = IOSUsageController()
+    @StateObject private var themeStore = IOSThemeStore()
     @State private var showLogin = false
     @State private var forceFreshLogin = false
     @State private var selectedTab = 0
+    @AppStorage(IOSPreferences.appearanceKey) private var appearance = IOSAppearance.system.rawValue
 
     var body: some View {
         Group {
-            switch account.phase {
-            case .checking:
-                ProgressView("正在验证登录…")
-            case .loggedOut, .expired:
-                IOSLoginLandingView {
-                    forceFreshLogin = account.phase == .expired
-                    showLogin = true
-                }
-            case .loggingIn:
-                ProgressView("正在保存登录…")
-            case .loggedIn:
-                IOSDashboardTabs(
-                    account: account,
-                    usage: usage,
-                    selectedTab: $selectedTab,
-                    onRelogin: {
-                        forceFreshLogin = true
-                        showLogin = true
-                    }
-                )
-            case .error(let message):
-                IOSLoginErrorView(message: message) {
-                    forceFreshLogin = true
-                    showLogin = true
-                }
-            }
+            content
         }
+        .id(themeStore.theme.rawValue)
+        .environmentObject(themeStore)
         .fullScreenCover(isPresented: $showLogin) {
             ConsoleLoginSheet(forceFreshLogin: forceFreshLogin) { detected in
                 await account.receiveLogin(
@@ -51,17 +30,46 @@ struct IOSRootView: View {
             }
         }
         .task {
+#if DEBUG
+            if IOSDemoMode.isWidgetPreviewEnabled {
+                return
+            }
+            if IOSDemoMode.isEnabled {
+                account.loadDemoAccount()
+                usage.loadDemoData()
+                let arguments = ProcessInfo.processInfo.arguments
+                if let index = arguments.firstIndex(of: "-theme"),
+                   index + 1 < arguments.count,
+                   let theme = IOSColorTheme(rawValue: arguments[index + 1]) {
+                    themeStore.select(theme)
+                }
+                if let index = arguments.firstIndex(of: "-tab"),
+                   index + 1 < arguments.count,
+                   let tab = Int(arguments[index + 1]) {
+                    selectedTab = tab
+                }
+                if arguments.contains("-cycle-theme") {
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        themeStore.select(.peach)
+                    }
+                }
+                return
+            }
+#endif
             await account.bootstrap()
             if account.isLoggedIn {
                 await usage.refreshIfStale()
             }
         }
         .onChange(of: account.phase) { _, phase in
+            guard !isDemo else { return }
             if phase == .loggedIn {
                 Task { await usage.refreshIfStale() }
             }
         }
         .onChange(of: scenePhase) { _, phase in
+            guard !isDemo else { return }
             if phase == .active, account.isLoggedIn {
                 Task { await usage.refreshIfStale(maxAge: 120) }
             } else if phase == .background {
@@ -70,11 +78,83 @@ struct IOSRootView: View {
         }
         .onOpenURL { url in
             guard url.scheme == "opencodego" else { return }
-            selectedTab = 0
-            Task { await usage.refresh() }
+            switch url.host {
+            case "quota":
+                selectedTab = 1
+            case "settings":
+                selectedTab = 2
+            case "overview":
+                selectedTab = 0
+            default:
+                selectedTab = 0
+            }
+            if !isDemo {
+                Task { await usage.refresh() }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            guard !isDemo else { return }
             usage.reloadFromStorage()
+        }
+        .preferredColorScheme(IOSAppearance(rawValue: appearance)?.colorScheme)
+        .tint(IOSTheme.brand)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+#if DEBUG
+        if IOSDemoMode.isWidgetPreviewEnabled {
+            IOSWidgetPreviewScreen()
+        } else if IOSDemoMode.isEnabled {
+            IOSDashboardTabs(
+                account: account,
+                usage: usage,
+                selectedTab: $selectedTab,
+                onRelogin: {}
+            )
+        } else {
+            accountContent
+        }
+#else
+        accountContent
+#endif
+    }
+
+    private var isDemo: Bool {
+#if DEBUG
+        IOSDemoMode.isEnabled
+#else
+        false
+#endif
+    }
+
+    @ViewBuilder
+    private var accountContent: some View {
+        switch account.phase {
+        case .checking:
+            ProgressView("正在验证登录…")
+        case .loggedOut, .expired:
+            IOSLoginLandingView {
+                forceFreshLogin = account.phase == .expired
+                showLogin = true
+            }
+        case .loggingIn:
+            ProgressView("正在保存登录…")
+        case .loggedIn:
+            IOSDashboardTabs(
+                account: account,
+                usage: usage,
+                selectedTab: $selectedTab,
+                onRelogin: {
+                    forceFreshLogin = true
+                    showLogin = true
+                }
+            )
+        case .error(let message):
+            IOSLoginErrorView(message: message) {
+                forceFreshLogin = true
+                showLogin = true
+            }
         }
     }
 }
@@ -102,18 +182,21 @@ private struct IOSLoginLandingView: View {
                     }
                     .padding(18)
                     .background(IOSTheme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: IOSTheme.Radius.card, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        RoundedRectangle(cornerRadius: IOSTheme.Radius.card, style: .continuous)
                             .stroke(IOSTheme.stroke, lineWidth: 0.75)
                     }
                     Button(action: login) {
                         Label("登录 OpenCode 账号", systemImage: "person.crop.circle.badge.checkmark")
+                            .font(.headline)
                             .frame(maxWidth: .infinity)
+                            .frame(height: 52)
+                            .foregroundStyle(IOSTheme.brandOn)
+                            .background(IOSTheme.brand)
+                            .clipShape(RoundedRectangle(cornerRadius: IOSTheme.Radius.tile, style: .continuous))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .tint(IOSTheme.brand)
+                    .buttonStyle(.plain)
                     Text("登录信息仅保存在本机 Keychain；小组件只读取 App Group 中的用量快照。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -138,7 +221,7 @@ private struct LoginFeature: View {
             Image(systemName: icon)
                 .font(.title3)
                 .frame(width: 30)
-                .foregroundStyle(IOSTheme.brand)
+                .foregroundStyle(IOSTheme.brandText)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.headline)
                 Text(detail).font(.caption).foregroundStyle(.secondary)
@@ -201,6 +284,7 @@ private struct IOSDashboardTabs: View {
             .tag(2)
         }
         .tint(IOSTheme.brand)
+        .modifier(IOSTabBarMinimizeModifier())
         .onChange(of: chartAlignment) { _, value in
             BillingCycle.saveAlignment(value)
         }
@@ -217,6 +301,16 @@ private struct IOSDashboardTabs: View {
                 return
             }
             selectedKeyID = nil
+        }
+    }
+}
+
+private struct IOSTabBarMinimizeModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            content
         }
     }
 }

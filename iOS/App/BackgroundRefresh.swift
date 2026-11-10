@@ -17,9 +17,21 @@ enum IOSBackgroundRefresh {
     }
 
     static func schedule() {
+        guard IOSPreferences.backgroundRefreshEnabled else {
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: PlatformConfig.backgroundRefreshID)
+            return
+        }
         let request = BGAppRefreshTaskRequest(identifier: PlatformConfig.backgroundRefreshID)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         try? BGTaskScheduler.shared.submit(request)
+    }
+
+    static func setEnabled(_ enabled: Bool) {
+        if enabled {
+            schedule()
+        } else {
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: PlatformConfig.backgroundRefreshID)
+        }
     }
 
     private static func handle(_ task: BGAppRefreshTask) {

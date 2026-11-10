@@ -57,8 +57,16 @@ enum IOSSessionStore {
     static func applyToAppGroup(_ session: IOSStoredSession) {
         let oldWorkspace = defaults?.string(forKey: "workspaceID") ?? ""
         defaults?.set(session.workspaceID, forKey: "workspaceID")
-        // Login secrets stay in Keychain. Remove values written by older builds
-        // so the widget App Group never contains a reusable console cookie.
+        // App 自己仍只读 Keychain。小组件扩展没法读 App 的 Keychain，
+        // 所以这里镜像一份到 App Group，仅用于小组件自己刷新额度。
+        // App Group 只有主 App 和它的小组件能读。
+        defaults?.set(session.consoleSession, forKey: "widgetConsoleSession")
+        if let authCookie = session.authCookie, !authCookie.isEmpty {
+            defaults?.set(authCookie, forKey: "widgetAuthCookie")
+        } else {
+            defaults?.removeObject(forKey: "widgetAuthCookie")
+        }
+        // 清理旧版本写过的非命名空间副本。
         defaults?.removeObject(forKey: "consoleSession")
         defaults?.removeObject(forKey: "authCookie")
         let oldState = KeyDirectoryStore.load(defaults: defaults)
@@ -85,7 +93,8 @@ enum IOSSessionStore {
         ]
         SecItemDelete(query as CFDictionary)
         for key in [
-            "consoleSession", "authCookie", "workspaceID", "availableKeys",
+            "consoleSession", "authCookie", "widgetConsoleSession", "widgetAuthCookie",
+            "workspaceID", "availableKeys",
             KeyDirectoryStore.rejectedSessionFingerprintKey, "selectedCostKeyId",
         ] {
             defaults?.removeObject(forKey: key)

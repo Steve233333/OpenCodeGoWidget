@@ -29,19 +29,11 @@ enum IOSUsageRefresher {
         do {
             snapshot = try await WidgetSnapshotRefresher.fetch(forceKeys: true)
         } catch NetworkError.authExpired {
-            IOSSessionStore.clearCredentials()
+            // 只提示，不立刻抹 Keychain：一次 WAF/网络抖动返回 401 不该把有效会话删掉。
+            // 用户在横幅里点「重试」；确实过期再走重新登录。
             throw IOSUsageRefreshError.loginRequired
         } catch {
-            if KeyDirectoryStore.load()?.status == .loginRequired {
-                IOSSessionStore.clearCredentials()
-                throw IOSUsageRefreshError.loginRequired
-            }
             throw error
-        }
-
-        if KeyDirectoryStore.load()?.status == .loginRequired {
-            IOSSessionStore.clearCredentials()
-            throw IOSUsageRefreshError.loginRequired
         }
 
         _ = WidgetDataStore.save(snapshot)
@@ -80,6 +72,9 @@ final class IOSUsageController: ObservableObject {
     }
 
     func refresh() async {
+#if DEBUG
+        if IOSDemoMode.isEnabled { return }
+#endif
         guard !loading else { return }
         loading = true
         error = nil
@@ -95,7 +90,6 @@ final class IOSUsageController: ObservableObject {
             error = IOSUsageRefreshError.loginRequired.localizedDescription
             reloadFromStorage()
         } catch NetworkError.authExpired {
-            IOSSessionStore.clearCredentials()
             loginExpired = true
             error = IOSUsageRefreshError.loginRequired.localizedDescription
             reloadFromStorage()
@@ -106,6 +100,7 @@ final class IOSUsageController: ObservableObject {
     }
 
     func refreshIfStale(maxAge: TimeInterval = 300) async {
+        guard IOSPreferences.autoRefreshEnabled else { return }
         guard !loading else { return }
         if let snapshot, Date().timeIntervalSince(snapshot.updatedAt) < maxAge {
             return
@@ -163,4 +158,70 @@ final class IOSUsageController: ObservableObject {
             }
         }
     }
+
+#if DEBUG
+    /// 仅 Debug 构建：给模拟器截图用的确定性数据，不影响 Release 和真实缓存。
+    func loadDemoData() {
+        let calendar = BillingCycle.calendar
+        let formatter = ChartFormatters.day
+        let today = calendar.startOfDay(for: Date())
+        let weights: [(String, Double)] = [
+            ("deepseek-v4.1-flash", 0.52),
+            ("glm-5.3", 0.21),
+            ("kimi-k3", 0.14),
+            ("qwen3.8-max", 0.08),
+            ("minimax-m3", 0.05),
+        ]
+
+        var daily: [DailyCost] = []
+        for index in 0..<30 {
+            guard let date = calendar.date(byAdding: .day, value: index - 29, to: today) else {
+                continue
+            }
+            let dayTotal = 0.7 + 1.1 * abs(sin(Double(index) * 0.7)) + Double(index % 7) * 0.12
+            var entries: [String: Double] = [:]
+            for (model, weight) in weights {
+                entries[model] = dayTotal * weight
+            }
+            daily.append(DailyCost(date: formatter.string(from: date), entries: entries))
+        }
+
+        let last = daily.last
+        let todayTotal = last?.total ?? 0
+        let keys = [
+            ApiKeyInfo(id: "key_primary", displayName: "个人 - 主 Key"),
+            ApiKeyInfo(id: "key_ci", displayName: "个人 - CI"),
+        ]
+
+        snapshot = WidgetSnapshot(
+            rolling: 8,
+            weekly: 13,
+            monthly: 74,
+            rollingReset: Date().addingTimeInterval(2 * 3_600 + 24 * 60),
+            weeklyReset: Date().addingTimeInterval(5 * 86_400),
+            monthlyReset: Date().addingTimeInterval(15 * 86_400),
+            costTotal: todayTotal,
+            costEntries: last?.entries ?? [:],
+            dailyCosts: daily,
+            availableKeys: keys,
+            updatedAt: Date()
+        )
+        keyDirectory = KeyDirectoryState(
+            status: .live,
+            keys: keys,
+            checkedAt: Date(),
+            sessionFingerprint: "demo",
+            detail: nil
+        )
+        quotas = GoQuotaRegistry.fallbackQuotas + [
+            GoQuota(slug: "union-alpha", displayName: "Union Alpha Free", h5: nil, weekly: nil, monthly: nil),
+        ]
+        quotaUpdatedAt = Date()
+        loading = false
+        error = nil
+        loginExpired = false
+        widgetSharingError = nil
+        backfillRunning = false
+    }
+#endif
 }

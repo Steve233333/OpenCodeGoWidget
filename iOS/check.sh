@@ -37,25 +37,18 @@ xcodebuild -quiet \
 APP="$ROOT/iOS/build/Release-iphoneos/OpenCode Go.app"
 WIDGET="$APP/PlugIns/OpenCodeGoWidgetIOSExtension.appex"
 EXPECTED_GROUP="group.3e514c57016aaf19.1"
-ICONS=(
-  "AppIcon60x60@2x.png"
-  "AppIcon60x60@3x.png"
-  "AppIcon76x76@2x.png"
-  "AppIcon83.5x83.5@2x.png"
-)
 
 echo "==> validate Release metadata and resources"
 APP_GROUP="$(plutil -extract OpenCodeAppGroupID raw -o - "$APP/Info.plist")"
 WIDGET_GROUP="$(plutil -extract OpenCodeAppGroupID raw -o - "$WIDGET/Info.plist")"
 test "$APP_GROUP" = "$EXPECTED_GROUP"
 test "$WIDGET_GROUP" = "$EXPECTED_GROUP"
-test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Info.plist")" = "1.0.4"
-test "$(plutil -extract CFBundleVersion raw -o - "$APP/Info.plist")" = "5"
+test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Info.plist")" = "1.0.16"
+test "$(plutil -extract CFBundleVersion raw -o - "$APP/Info.plist")" = "17"
 test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$WIDGET/Info.plist")" \
   = "com.apple.widgetkit-extension"
-for icon in "${ICONS[@]}"; do
-  test -s "$APP/$icon"
-done
+test -s "$APP/Assets.car"
+test "$(plutil -extract CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName raw -o - "$APP/Info.plist")" = "AppIcon"
 
 echo "==> validate iOS design regressions"
 if grep -R -n -E '\.blue|tint\(\.blue\)|Color\.accentColor|近 30 天|最近 30 天' \

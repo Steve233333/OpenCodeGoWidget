@@ -24,8 +24,17 @@ enum PlatformConfig {
 /// macOS keeps its existing App Group storage; iOS reads the login secret only
 /// from Keychain and never duplicates it into the shared widget preferences.
 enum ConsoleCredentials {
+    /// iOS App 仍只从 Keychain 读；小组件扩展读 App Group 里的镜像副本，
+    /// 这样它可以在 App 不在前台/没被后台唤醒时自己刷新额度。
+    private static var isWidgetExtension: Bool {
+        Bundle.main.bundleIdentifier == "com.steve233.opencodego.ios.widget"
+    }
+
     static func auth(defaults: UserDefaults? = UserDefaults(suiteName: PlatformConfig.appGroupID)) -> String {
 #if os(iOS)
+        if isWidgetExtension {
+            return defaults?.string(forKey: "widgetAuthCookie") ?? ""
+        }
         return IOSSessionStore.load()?.authCookie ?? ""
 #else
         return defaults?.string(forKey: "authCookie") ?? ""
@@ -34,6 +43,9 @@ enum ConsoleCredentials {
 
     static func session(defaults: UserDefaults? = UserDefaults(suiteName: PlatformConfig.appGroupID)) -> String {
 #if os(iOS)
+        if isWidgetExtension {
+            return defaults?.string(forKey: "widgetConsoleSession") ?? ""
+        }
         return IOSSessionStore.load()?.consoleSession ?? ""
 #else
         return defaults?.string(forKey: "consoleSession") ?? ""

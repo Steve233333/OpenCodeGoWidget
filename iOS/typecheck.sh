@@ -45,6 +45,11 @@ APP=(
   "$ROOT/iOS/App/IOSDashboardViews.swift"
   "$ROOT/iOS/App/IOSQuotaViews.swift"
   "$ROOT/iOS/App/IOSSettingsViews.swift"
+  "$ROOT/iOS/App/IOSPreferences.swift"
+  "$ROOT/iOS/App/IOSThemeStore.swift"
+  "$ROOT/iOS/App/IOSDemoMode.swift"
+  "$ROOT/iOS/App/IOSWidgetPreview.swift"
+  "$ROOT/iOS/Widget/WidgetViews.swift"
 )
 
 WIDGET=(
@@ -52,6 +57,7 @@ WIDGET=(
   "$ROOT/iOS/App/IOSSessionStore.swift"
   "$ROOT/iOS/Shared/IOSTheme.swift"
   "$ROOT/iOS/Widget/OpenCodeGoIOSWidget.swift"
+  "$ROOT/iOS/Widget/WidgetViews.swift"
 )
 
 echo "==> iOS App typecheck"

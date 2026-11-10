@@ -265,8 +265,11 @@ final class CostCrawler: @unchecked Sendable {
             } else {
                 outcome = .temporaryFailure("密钥接口返回了无法解析的数据")
             }
-        case .httpError(401), .httpError(403):
-            outcome = .loginRequired("控制台登录已失效，请重新登录")
+        case .httpError(401):
+            outcome = .loginRequired("密钥接口 401，登录可能已失效")
+        case .httpError(403):
+            // 403 常见于地区/WAF/权限限制，不能据此清掉整个控制台会话。
+            outcome = .temporaryFailure("密钥接口 HTTP 403（可能是地区或网络限制）")
         case .httpError(let code):
             outcome = .temporaryFailure("密钥接口 HTTP \(code)")
         case .networkError:
@@ -285,12 +288,9 @@ final class CostCrawler: @unchecked Sendable {
             KeyDirectoryStore.clearRejectedSession(defaults: suite)
             logger.info("密钥目录刷新：\(state.keys.count) 把有效（\(state.detail ?? "无跳过项")）")
         case .loginRequired:
-            // 只清控制台会话，不动 Go API Key / DeepSeek Key / 历史用量。
-            suite?.removeObject(forKey: "consoleSession")
-            suite?.removeObject(forKey: "selectedCostKeyId")
-            suite?.synchronize()
-            KeyDirectoryStore.rejectSession(fingerprint, defaults: suite)
-            logger.error("密钥目录刷新：控制台登录失效 → 已撤下旧 Key，等待重新登录")
+            // 只把 Key 目录标成不可用；不再清会话、不再 reject 整个登录。
+            // 用量接口如果也 401，上层会负责真正的重新登录。
+            logger.error("密钥目录刷新：401，Key 列表暂不可用；会话是否失效由用量接口决定")
         case .noActiveKeys:
             suite?.removeObject(forKey: "selectedCostKeyId")
             suite?.synchronize()

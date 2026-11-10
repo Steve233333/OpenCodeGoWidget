@@ -16,20 +16,22 @@ struct WidgetSnapshot: Codable {
     var costEntriesByKey: [String: [String: Double]] = [:]
     var costTotalByKey: [String: Double] = [:]
     var updatedAt: Date
+    /// 小组件独立刷新 5h/周/月额度的时间；花费明细仍以 `updatedAt` 为准。
+    var quotaUpdatedAt: Date? = nil
     var error: String?
 
     enum CodingKeys: String, CodingKey {
         case rolling, weekly, monthly, rollingReset, weeklyReset, monthlyReset
         case costTotal, costEntries, dailyCosts
         case availableKeys, dailyByKey, costEntriesByKey, costTotalByKey
-        case updatedAt, error
+        case updatedAt, quotaUpdatedAt, error
     }
-    init(rolling: Int, weekly: Int, monthly: Int, rollingReset: Date, weeklyReset: Date, monthlyReset: Date, costTotal: Double, costEntries: [String: Double], dailyCosts: [DailyCost] = [], availableKeys: [ApiKeyInfo] = [], dailyByKey: [String: [DailyCost]] = [:], costEntriesByKey: [String: [String: Double]] = [:], costTotalByKey: [String: Double] = [:], updatedAt: Date, error: String? = nil) {
+    init(rolling: Int, weekly: Int, monthly: Int, rollingReset: Date, weeklyReset: Date, monthlyReset: Date, costTotal: Double, costEntries: [String: Double], dailyCosts: [DailyCost] = [], availableKeys: [ApiKeyInfo] = [], dailyByKey: [String: [DailyCost]] = [:], costEntriesByKey: [String: [String: Double]] = [:], costTotalByKey: [String: Double] = [:], updatedAt: Date, quotaUpdatedAt: Date? = nil, error: String? = nil) {
         self.rolling = rolling; self.weekly = weekly; self.monthly = monthly
         self.rollingReset = rollingReset; self.weeklyReset = weeklyReset; self.monthlyReset = monthlyReset
         self.costTotal = costTotal; self.costEntries = costEntries; self.dailyCosts = dailyCosts
         self.availableKeys = availableKeys; self.dailyByKey = dailyByKey; self.costEntriesByKey = costEntriesByKey; self.costTotalByKey = costTotalByKey
-        self.updatedAt = updatedAt; self.error = error
+        self.updatedAt = updatedAt; self.quotaUpdatedAt = quotaUpdatedAt; self.error = error
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -47,6 +49,7 @@ struct WidgetSnapshot: Codable {
         costEntriesByKey = try c.decodeIfPresent([String: [String: Double]].self, forKey: .costEntriesByKey) ?? [:]
         costTotalByKey = try c.decodeIfPresent([String: Double].self, forKey: .costTotalByKey) ?? [:]
         updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        quotaUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .quotaUpdatedAt)
         error = try c.decodeIfPresent(String.self, forKey: .error)
     }
     func filteredDaily(for keyId: String?) -> [DailyCost] {
@@ -450,7 +453,76 @@ enum WidgetSnapshotRefresher {
             costEntriesByKey: byKeyEntries,
             costTotalByKey: byKeyTotal,
             updatedAt: Date(),
+            quotaUpdatedAt: Date(),
             error: nil
         )
     }
+
+    /// 小组件自己的轻量刷新：只取 5h/周/月额度，不碰花费明细。
+    /// 花费仍由 App 的 BGAppRefreshTask / 打开 App 时的完整刷新负责。
+    static func refreshQuotaForWidget() async -> WidgetSnapshot? {
+        guard WidgetDataStore.load() != nil else { return nil }
+        do {
+            let usage = try await withThrowingTaskGroup(of: UsageStats.self) { group in
+                group.addTask {
+                    try await NetworkManager().fetchUsage()
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 12_000_000_000)
+                    throw WidgetQuotaRefreshTimeout()
+                }
+                guard let first = try await group.next() else {
+                    throw WidgetQuotaRefreshTimeout()
+                }
+                group.cancelAll()
+                return first
+            }
+
+            guard var latest = WidgetDataStore.load() else { return nil }
+            latest.rolling = usage.rolling.percent
+            latest.weekly = usage.weekly.percent
+            latest.monthly = usage.monthly.percent
+            latest.rollingReset = usage.rolling.resetsAt
+            latest.weeklyReset = usage.weekly.resetsAt
+            latest.monthlyReset = usage.monthly.resetsAt
+            latest.quotaUpdatedAt = Date()
+            _ = WidgetDataStore.save(latest)
+            return latest
+        } catch {
+            return WidgetDataStore.load()
+        }
+    }
+
+    /// 小组件完整刷新：额度 + 花费一起拉。
+    /// WidgetKit 的 timeline 时间有限，20 秒拿不下就先用缓存；
+    /// 明确失败时退回轻量的额度刷新，至少不让 5h/周/月 停在旧值。
+    static func refreshAllForWidget() async -> WidgetSnapshot? {
+        let cached = WidgetDataStore.load()
+        do {
+            let snapshot = try await withThrowingTaskGroup(of: WidgetSnapshot.self) { group in
+                group.addTask {
+                    try await fetch(forceKeys: false)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 20_000_000_000)
+                    throw WidgetFullRefreshTimeout()
+                }
+                guard let first = try await group.next() else {
+                    throw WidgetFullRefreshTimeout()
+                }
+                group.cancelAll()
+                return first
+            }
+            _ = WidgetDataStore.save(snapshot)
+            return snapshot
+        } catch {
+            if error is WidgetFullRefreshTimeout {
+                return cached
+            }
+            return await refreshQuotaForWidget()
+        }
+    }
 }
+
+private struct WidgetQuotaRefreshTimeout: Error {}
+private struct WidgetFullRefreshTimeout: Error {}

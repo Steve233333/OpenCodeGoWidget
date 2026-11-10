@@ -1,6 +1,12 @@
 import Foundation
 import os
 
+enum ConsoleGoStatusResult {
+    case success(UsageStats)
+    case authExpired
+    case unavailable
+}
+
 enum NetworkError: Error, LocalizedError {
     case notConfigured, authExpired, requestFailed, parseError
     var errorDescription: String? {
@@ -23,7 +29,8 @@ final class NetworkManager: @unchecked Sendable {
         // 2026-09-20：优先用**控制台官方口径**（官网页面就是拿它算百分比的）。
         // 网关 /zen/go/v1/usage 是另一套计数且**向下取整** —— 实测官网 5.72% 显示 6%，
         // 网关只给 5%，用户一眼看出"月用量不准"。控制台给的是 used/limit 原始微美分，四舍五入即可。
-        if let official = await fetchConsoleGoStatus() {
+        let status = await fetchConsoleGoStatusResult()
+        if case .success(let official) = status {
             logger.info("usage via console go/status: \(official.rolling.percent)/\(official.weekly.percent)/\(official.monthly.percent)")
             return official
         }
@@ -33,8 +40,12 @@ final class NetworkManager: @unchecked Sendable {
             throw NetworkError.notConfigured
         }
 #else
-        // iOS 只使用账号会话；API Key 兜底不属于 iOS V1 的产品范围。
-        throw NetworkError.authExpired
+        switch status {
+        case .authExpired:
+            throw NetworkError.authExpired
+        default:
+            throw NetworkError.requestFailed
+        }
 #endif
 #if os(macOS)
         var req = URLRequest(url: usageURL)
@@ -62,12 +73,13 @@ final class NetworkManager: @unchecked Sendable {
     /// 控制台的 Go 订阅状态：`GET https://opencode.ai/console/api/go/status`
     /// 返回 access.meters.{fiveHour,week,month} 各自的 usedMicroCents / limitMicroCents。
     /// 官网那三个百分比就是 used/limit 四舍五入（实测 5.72% → 官网 6%）。
-    func fetchConsoleGoStatus() async -> UsageStats? {
+    func fetchConsoleGoStatusResult() async -> ConsoleGoStatusResult {
         let d = UserDefaults(suiteName: PlatformConfig.appGroupID)
         let auth = ConsoleCredentials.auth(defaults: d)
         let session = ConsoleCredentials.session(defaults: d)
         let ws = d?.string(forKey: "workspaceID") ?? ""
-        guard !ws.isEmpty, !session.isEmpty else { return nil }
+        guard !session.isEmpty else { return .authExpired }
+        guard !ws.isEmpty else { return .unavailable }
         var req = URLRequest(url: URL(string: "https://opencode.ai/console/api/go/status")!)
         req.httpMethod = "GET"
         req.timeoutInterval = 20
@@ -78,10 +90,13 @@ final class NetworkManager: @unchecked Sendable {
         req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
                      forHTTPHeaderField: "User-Agent")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let http = resp as? HTTPURLResponse else { return .unavailable }
+        // 只有 401 才是明确的会话失效；403 可能是地区/WAF/权限，不能据此清登录。
+        if http.statusCode == 401 { return .authExpired }
+        guard (200...299).contains(http.statusCode),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let access = obj["access"] as? [String: Any],
-              let meters = access["meters"] as? [String: Any] else { return nil }
+              let meters = access["meters"] as? [String: Any] else { return .unavailable }
 
         // 2026-09-20：账号识别（subscriberUserId = acc_…）。换了账号必须把上一个账号的
         // 本地缓存抹掉 —— 刷新是"保留旧天 + 合并"的增量逻辑，否则旧账号的历史会留在图上，
@@ -120,18 +135,18 @@ final class NetworkManager: @unchecked Sendable {
             guard let m = meters[key] as? [String: Any] else { return nil }
             return iso(m["resetsAt"])
         }
-        guard let h5 = percent("fiveHour"), let wk = percent("week"), let mo = percent("month") else { return nil }
+        guard let h5 = percent("fiveHour"), let wk = percent("week"), let mo = percent("month") else { return .unavailable }
         // 月度的 resetsAt 接口不给，用订阅周期结束时间（官网就是显示成续费倒计时）。
         // 2026-10-20：兜底也要按北京日历加一个月，不能硬加 30 天（2 月/31 天月会漂）。
         let monthReset = iso(access["endsAt"])
             ?? BillingCycle.calendar.date(byAdding: .month, value: 1, to: Date())
             ?? Date().addingTimeInterval(30 * 86400)
-        return UsageStats(
+        return .success(UsageStats(
             rolling: UsageItem(status: "ok", percent: h5,
                                resetsAt: reset("fiveHour") ?? Date().addingTimeInterval(5 * 3600)),
             weekly: UsageItem(status: "ok", percent: wk,
                               resetsAt: reset("week") ?? Date().addingTimeInterval(7 * 86400)),
-            monthly: UsageItem(status: "ok", percent: mo, resetsAt: monthReset))
+            monthly: UsageItem(status: "ok", percent: mo, resetsAt: monthReset)))
     }
 
     // 2026-09-23 Phase 1：老接口（fetchCostToday / fetchCostTodayPerKey / tryCostJSON /

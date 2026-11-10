@@ -69,12 +69,17 @@
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
     <key>UILaunchScreen</key>
-    <dict/>
+    <dict>
+        <key>UIColorName</key>
+        <string>LaunchBackground</string>
+        <key>UIImageName</key>
+        <string>LaunchLogo</string>
+        <key>UIImageRespectsSafeAreaInsets</key>
+        <true/>
+    </dict>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
