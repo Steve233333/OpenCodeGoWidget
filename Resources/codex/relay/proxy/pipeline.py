@@ -171,7 +171,10 @@ def _rewrite_go_model(parsed):
         return False
     bare = model[: -len(GO_SUFFIX)]
     # Friendly alias: ox-alpha-go -> ox-alpha-free (Go upstream id is ox-alpha-free; Zen is x-preview-f-free)
-    GO_ALIASES = {"ox-alpha": "ox-alpha-free"}
+    GO_ALIASES = {
+        "ox-alpha": "ox-alpha-free",
+        "longcat-2.5-preview-free": "longcat-2.5-free",
+    }
     mapped = GO_ALIASES.get(bare, bare)
     parsed["model"] = mapped
     _log(f"[relay] go model compat {raw} -> {parsed['model']}" + (f" (alias {bare} -> {mapped})" if mapped != bare else ""))

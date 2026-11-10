@@ -69,6 +69,8 @@ enum ModelPalette {
         "kimi-k2.7-code": Color(red: 0.72, green: 0.68, blue: 0.92), // 紫
         "kimi-k3": Color(red: 0.60, green: 0.72, blue: 0.95), // K3 深蓝
         "crouton-alpha-free": Color(red: 0.96, green: 0.72, blue: 0.46), // 焦糖橙
+        "longcat-2.5-free": Color(red: 0.38, green: 0.82, blue: 0.70), // 青绿
+        "longcat-2.5-preview-free": Color(red: 0.52, green: 0.82, blue: 0.70), // 兼容旧 ID
         "mimo-v2.5": Color(red: 0.62, green: 0.88, blue: 0.82), // 青绿
         "mimo-v2.5-pro": Color(red: 0.72, green: 0.78, blue: 0.92),
         "mimo-v2-pro": Color(red: 0.58, green: 0.80, blue: 0.88),

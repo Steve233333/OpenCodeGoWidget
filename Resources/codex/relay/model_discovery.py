@@ -138,6 +138,7 @@ def _sanitize_modalities(mod):
 # Fallback 31 ids (2026-08-28 live snapshot)
 FALLBACK_IDS = [
     "crouton-alpha-free",
+    "longcat-2.5-free",
     "minimax-m3","minimax-m2.7","minimax-m2.5","kimi-k3","kimi-k2.7-code","kimi-k2.6",
     "longcat-2.0","kimi-k2.5","glm-5.2","glm-5.3-flash","glm-5.3","glm-5.1","glm-5",
     "deepseek-v4-pro","deepseek-v4-flash","deepseek-v4-flash-vision-exp",
@@ -147,7 +148,10 @@ FALLBACK_IDS = [
     "union-alpha",
 ]
 
-GO_ALIASES = {"ox-alpha": "ox-alpha-free"}  # keep for compat, but not needed for new ids
+GO_ALIASES = {
+    "ox-alpha": "ox-alpha-free",
+    "longcat-2.5-preview-free": "longcat-2.5-free",
+}
 
 # Display name -> id map for quota table (normalized)
 DISPLAY_TO_ID = {

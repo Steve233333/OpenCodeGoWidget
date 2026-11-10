@@ -57,6 +57,14 @@ enum GoQuotaRegistry {
             monthly: nil,
             note: "限时免费 · 不限量"
         ),
+        GoQuota(
+            slug: "longcat-2.5-free",
+            displayName: "LongCat 2.5 Free",
+            h5: nil,
+            weekly: nil,
+            monthly: nil,
+            note: "限时免费 · 不限量"
+        ),
         GoQuota(slug: "kimi-k3", displayName: "Kimi K3", h5: 110, weekly: 250, monthly: 490),
         GoQuota(slug: "qwen3.8-max", displayName: "Qwen3.8 Max", h5: 160, weekly: 400, monthly: 810),
         GoQuota(slug: "grok-4.7", displayName: "Grok 4.7", h5: 169, weekly: 423, monthly: 845),
@@ -269,6 +277,7 @@ enum GoQuotaRegistry {
     /// 显示名归一后 ≠ 网关真实 id 的对照表
     static let slugAliases: [String: String] = [
         "crouton-alpha-free": "crouton-alpha-free",
+        "longcat-2.5-preview-free": "longcat-2.5-free",
         "union-alpha-free": "union-alpha",
     ]
 

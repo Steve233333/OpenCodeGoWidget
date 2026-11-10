@@ -31,6 +31,8 @@ GOLDEN = [
     ("kimi-k2.7-code-go", "native-or-bridge", False),
     ("kimi-k2.6-go", "native-or-bridge", False),
     ("longcat-2.0-go", "native-or-bridge", False),
+    ("longcat-2.5-free-go", "native", False),
+    ("longcat-2.5-preview-free-go", "bridge", False),
     ("mimo-v2.6-flash-go", "native-or-bridge", False),
     ("mimo-v2.6-pro-go", "native-or-bridge", False),
     ("mimo-v2.5-go", "native-or-bridge", False),

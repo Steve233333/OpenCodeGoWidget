@@ -90,6 +90,9 @@ MODEL_OVERRIDES: dict[str, dict] = {
     # longcat-2.5-preview-free 的 /responses 恒 400 "ModelProtocolUnsupported"，
     # 而 chat 都是 200 —— 所以直接走桥，不浪费那一次注定失败的探测。
     "longcat-2.5-preview-free": {"route": ROUTE_BRIDGE},
+    # 2026-11-10: current Go slug. Tested /responses and /chat both return 200;
+    # old preview slug is rewritten to this ID before routing.
+    "longcat-2.5-free": {"route": ROUTE_NATIVE},
     # 2026-10-14：又上了三个免费/预览模型，实测协议如下（见当天的真机探测）——
     #   step-5-preview-free / cat-jam-free：/responses 恒 400 ModelProtocolUnsupported，chat/completions 200（Bearer）
     #   claude-haiku-5-5：/responses 400、chat 401，**只有 /v1/messages 认**（Anthropic 系，跟 union-alpha 同类）

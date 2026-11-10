@@ -159,6 +159,9 @@ def t_go_alias_correctness():
     vp._rewrite_zen_model(p)
     # Zen alias ox-alpha -> x-preview-f-free
     assert p["model"] == "x-preview-f-free", p
+    p = {"model": "longcat-2.5-preview-free-go"}
+    vp._rewrite_go_model(p)
+    assert p["model"] == "longcat-2.5-free", p
 
 # ---------- 4. _parse_chat_stream_chunks 鲁莽 ----------
 
