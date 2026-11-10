@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.77.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.78.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.77.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.78.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -102,8 +102,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.77.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.77.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.78.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.78.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -118,34 +118,27 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
 
-### v1.1.11.50 — 重建小组件不再搞坏 Codex 副本
+### v1.1.11.78 — LongCat 2.5 Free 接入与五档推理
 
-今天官方升级到 26.930 后副本坏了两处：clang 编译失败却继续签名（主可执行文件根本没生成，而 `codesign`
-照样报通过），加上新版 Electron 的框架摘要校验 fail-closed（摘要不同步就 FATAL）。修复当时只在本机脚本里，
-仓库那份落后 86 行 —— 安装器按内容覆盖，等于**下次重建就复发**。本版把修复**固化进仓库**，加门禁
-`scripts/test-patch-guards.sh`（4 条护栏 + 5 个行为用例）进 `./build.sh --test`；重建收尾顺手维护
-`~/.local/bin/codex` 软链；手册补 §33。
+接入当前 `longcat-2.5-free`，隐藏旧 Preview；Codex 安装包开放
+`low / medium / high / xhigh / max` 五档，本机 ZCode 也同步使用相同档位。模型默认使用 `low`，
+旧 ID 只保留内部兼容别名。
 
-版本 **1.1.11.50 (90)**。
+版本 **1.1.11.78 (118)**。
 
-### v1.1.11.49 — 「今日」写错一次不再永久锁死
+### v1.1.11.77 — 修复官方 26.1103 升级后的“配置失败”
 
-过了 0 点后「今日模型」显示 **$2.29**（其实那是**昨天整天**的 $2.2893），而按 Key 的今天只有 $0.50、
-控制台日志今天 0 点至今只有 **$0.51** —— 而且**怎么刷新都不动**：合并规则「只增不减」挡住了"变小"的修正。
-现在只在**今天这一格**、且这一轮**整天窗口抓成功**时，用日志整窗重算它（历史天一个字节不动；
-窗口失败或空窗口时保持旧值）。真机验证：刷新一次 $2.29 → **$0.51**。
+`patch.sh` 同时匹配官方新旧模型可见性条件，重建、自检和字节校验共用 `PATCHED_REGEX`，
+避免补丁 0 命中后留下“能打开但没有自定义模型”的副本。
 
-版本 **1.1.11.49 (89)**。
+版本 **1.1.11.77 (117)**。
 
-### v1.1.11.48 — 会话被截图撑爆不再卡死（45MB 自动丢老图）
+### v1.1.11.76 — 本地代理探活与上游路由修复
 
-做图像迭代的会话会把截图和 `view_image` 结果的 base64 永久留在上下文里，每轮重发 → 撞上游
-**48.4 MiB** 上限 → 413/502 反复，线程自己永远恢复不了（实测卡在 50.7MB、累计 192 次 413）。
-现在代理在请求体超 **45MB** 时按时间从旧到新丢（图片优先，**永远保住最新 1 张**，其次大块工具输出），
-只改发往上游这一份、不动磁盘会话，并留下一行 `请求体减肥` 日志。
-真机 A/B：同一个 64.1MB 请求，旧代码 502（172 秒失败）、新代码 **200**（减到 32.1MB，15 秒）。
+`GET /v1/models` 改为本地健康响应，不再因为上游抖动误杀代理；请求按系统代理优先、直连回退，
+解决 SakuraCat 非 TUN 模式下周期性 `waiting for network` 和 502。
 
-版本 **1.1.11.48 (88)**。
+版本 **1.1.11.76 (116)**。
 
 ## 本地构建
 
