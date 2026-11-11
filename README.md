@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.79.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.80.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.79.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.80.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -102,8 +102,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.79.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.79.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.80.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.80.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -117,6 +117,14 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.80 — 修复旧代理 label 残留导致「修复」无效
+
+旧 `com.agent-vision-toolkit.proxy` 已加载但不监听时，原逻辑不会清理它；手动“修复”
+也没有强制重启，可能直接判定“已在运行”后退出。现在会精确摘掉旧任务，并用
+`--force-restart` 重新挂载、验证 agent-relay。
+
+版本 **1.1.11.80 (120)**。
 
 ### v1.1.11.79 — 适配 OpenCode 组织级控制台（org_）
 
@@ -134,12 +142,6 @@ workspace 为空、额度和费用停止刷新。现在 API、登录 URL、手�
 
 版本 **1.1.11.78 (118)**。
 
-### v1.1.11.77 — 修复官方 26.1103 升级后的“配置失败”
-
-`patch.sh` 同时匹配官方新旧模型可见性条件，重建、自检和字节校验共用 `PATCHED_REGEX`，
-避免补丁 0 命中后留下“能打开但没有自定义模型”的副本。
-
-版本 **1.1.11.77 (117)**。
 
 ## 本地构建
 

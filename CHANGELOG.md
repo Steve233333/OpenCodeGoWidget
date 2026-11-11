@@ -2,6 +2,22 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.80 — 修复旧代理 label 残留导致「修复」无效
+
+**现象**：老机器点「配置」后自检一直报 `com.agent-vision-toolkit.proxy` 仍在 launchd 里；点「修复本地代理」也没用，Codex 持续显示 `Reconnecting… waiting for network`，看护最后报 `ensure-relay.sh 超时（120 秒）`。
+
+**根因**：旧代理任务已经加载，但进程没有监听 19100。`ensure-relay.sh` 原逻辑只在“端口有响应但监听者不是 agent-relay”时调用 `stop_legacy_job`；端口静默时直接跳过清理，于是旧 label 永久残留。同时手动「修复」没有传 `--force-restart`，如果 agent-relay 已占着端口，脚本会直接判定“已在运行”并退出，旧 label 仍然清不掉。
+
+**修法**：
+
+- 旧 label 已加载或旧 plist 存在时，只要 19100 没响应、或已确认由当前 agent-relay 监听，就先精确退场旧任务；端口被未知进程占用时仍保留“备用端口自检后再接管”的安全顺序。
+- 手动「修复本地代理」改为 `--force-restart`，确保重新写 plist、挂载并验证监听者，而不是提前返回。
+- `scripts/test-ensure-relay.sh` 新增真实 launchd 用例：加载一个静默旧 label，断言修复后旧任务消失且新代理正常监听。
+
+**验证**：代理生命周期新增用例通过；全量 `./build.sh --test` 通过后构建 `1.1.11.80`。
+
+版本 **1.1.11.80 (120)**。
+
 ### v1.1.11.79 — 适配 OpenCode 组织级控制台（org_）
 
 **现象**：登录新控制台账号后，小组件显示登录成功但额度、费用和 Key 都不更新；重新登录、清除 Cookie、切换网络都无效。

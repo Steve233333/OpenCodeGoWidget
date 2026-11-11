@@ -74,10 +74,10 @@ final class ProxyWatchdog: ObservableObject {
 
     /// 手动按钮走这条：不管端口活不活，都让 ensure-proxy 跑一次（它就是幂等的）。
     func repairNow() async {
-        await repair(reason: "手动")
+        await repair(reason: "手动", forceRestart: true)
     }
 
-    private func repair(reason: String) async {
+    private func repair(reason: String, forceRestart: Bool = false) async {
         guard !busy else { return }
         busy = true
         defer { busy = false }
@@ -91,7 +91,9 @@ final class ProxyWatchdog: ObservableObject {
         }
 
         appendLog("\(reason)：代理没响应 → 调 ensure-relay.sh")
-        let (rc, output) = await runProcess("/bin/bash", [script.path, "--trigger", "watchdog", "--quiet"], timeout: 120)
+        var args = [script.path, "--trigger", "watchdog", "--quiet"]
+        if forceRestart { args.append("--force-restart") }
+        let (rc, output) = await runProcess("/bin/bash", args, timeout: 120)
         let alive = await HealthCheck.proxyHealthy()
         refreshFromRuntime()
 

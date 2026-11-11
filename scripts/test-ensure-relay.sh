@@ -13,11 +13,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VISION_SRC="$ROOT/Resources/codex/relay"
 TMP="$(mktemp -d)"
 TEST_LABEL="com.steve233.opencodego.proxytest.$$"
+LEGACY_TEST_LABEL="com.steve233.opencodego.legacytest.$$"
 TEST_PORT=19531
 fail=0
 
 cleanup() {
   /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$TEST_LABEL" >/dev/null 2>&1 || true
+  /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$LEGACY_TEST_LABEL" >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -197,6 +199,48 @@ else
 fi
 kill "$SQUATTER" 2>/dev/null || true
 wait "$SQUATTER" 2>/dev/null || true
+
+# ⑥c 旧 label 已加载但完全没有进程/端口响应时，手动修复也必须把它摘掉。
+# 这是 2026-11-12 另一台机器的现场：迁移失败后旧 plist 留在 launchd，
+# agent-relay 即使后来起来了，健康检查仍一直报旧服务未退场，点“修复”也无解。
+echo "==> ⑥c 静默残留的旧 launchd 任务必须被清掉"
+LEGACY_PORT=19578
+LEGACY_PLIST="$TMP/legacy-loaded.plist"
+cat > "$LEGACY_PLIST" <<EOF3
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LEGACY_TEST_LABEL</string>
+  <key>ProgramArguments</key><array><string>/usr/bin/true</string></array>
+  <key>RunAtLoad</key><false/>
+  <key>KeepAlive</key><false/>
+</dict>
+</plist>
+EOF3
+/bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "$LEGACY_PLIST" >/dev/null 2>&1 || true
+/bin/launchctl bootout "gui/$(/usr/bin/id -u)/$TEST_LABEL" >/dev/null 2>&1 || true
+/bin/sleep 1
+mkdir -p "$TMP/v7"
+cp -R "$VISION_SRC/proxy" "$TMP/v7/proxy"
+cp "$VISION_SRC/relay.py" "$TMP/v7/relay.py"
+: > "$TMP/env7"
+out="$(ENSURE_PROXY_CANDIDATES="/usr/bin/python3" \
+  PROXY_LABEL="$TEST_LABEL" PROXY_PLIST="$TMP/proxytest-clean.plist" \
+  LEGACY_PROXY_LABEL="$LEGACY_TEST_LABEL" LEGACY_PROXY_PLIST="$LEGACY_PLIST" \
+  RELAY_SKIP_FUNCTIONAL_CHECK=1 \
+  bash "$ensure" --port "$LEGACY_PORT" --vision-dir "$TMP/v7" --env-file "$TMP/env7" \
+       --trigger watchdog --quiet --force-restart 2>&1)"
+rc=$?
+legacy_loaded=0
+/bin/launchctl print "gui/$(/usr/bin/id -u)/$LEGACY_TEST_LABEL" >/dev/null 2>&1 && legacy_loaded=1
+code="$(/usr/bin/curl -s -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:$LEGACY_PORT/v1/models" 2>/dev/null)"
+if [ "$rc" = 0 ] && [ "$legacy_loaded" = 0 ] && [ ! -f "$LEGACY_PLIST" ] \
+   && [ -n "$code" ] && [ "$code" != "000" ]; then
+  ok "⑥c 静默残留的旧 label 被摘除，新 agent-relay 正常监听"
+else
+  bad "⑥c 旧 label 清理失败（rc=${rc}, loaded=${legacy_loaded}, plist=$([ -f "$LEGACY_PLIST" ] && echo yes || echo no), HTTP=${code:-无}）：$out"
+fi
 
 if [ "$fail" = 0 ]; then
   echo "全部通过 ✅"

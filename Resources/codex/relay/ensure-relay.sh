@@ -142,6 +142,11 @@ stop_legacy_job() {
   done
 }
 
+legacy_job_present() {
+  /bin/launchctl print "gui/$UID_NUM/$LEGACY_LABEL" >/dev/null 2>&1 && return 0
+  [ -f "$LEGACY_PLIST" ]
+}
+
 # macOS 没有 timeout 命令，自己看着闹钟杀（/usr/bin/python3 在没装 CLT 时会弹窗卡住）。
 # 注意：不要用"另开一个后台子进程 sleep 再杀"的写法 —— 那个 sleep 会活下来占着 stdout，
 # 把调用方的管道挂住十几秒（实测）。
@@ -313,6 +318,17 @@ if [ "$CHECK_ONLY" = 1 ]; then
 fi
 
 PREV_REPAIR="$(state_get last_repair_at)"
+
+# 旧任务只要还挂在 launchd 或 plist 还在，就应在任何修复路径退场。
+# 2026-11-12：老机器上旧 label 已加载但进程没监听时，probe=false，
+# 下面的“端口被占”分支不会执行，旧任务于是永久残留，App 每次自检都报失败，
+# 点“修复”也无法消除。这里先处理两种安全状态：
+#   * 19100 没响应；或
+#   * 19100 已确认由当前 agent-relay 监听。
+# 如果端口被未知进程占着，仍保留后面的“备用端口自检 → 停旧任务”安全顺序。
+if legacy_job_present && { ! probe || port_owned_by_relay; }; then
+  stop_legacy_job
+fi
 
 # ---- 已经在跑：只更新状态，什么都不动（--force-restart 除外：配置刚同步完新代码，必须换新的）----
 # 2026-10-19：先确认端口后面真的是我们的进程；被旧任务/别的程序占着时要抢回来，
