@@ -178,6 +178,12 @@ if [ -n "$handover_line" ] && [ -n "$stop_line" ] && [ "$handover_line" -lt "$st
 else
   bad "⑥a 停旧服务早于备用端口预检（handover=${handover_line:-无}, stop=${stop_line:-无}）"
 fi
+if grep -qF 'pick_handover_port' "$ensure" \
+   && grep -qF -- '-iTCP:"$p" -sTCP:LISTEN' "$ensure"; then
+  ok "⑥a2 交接端口会动态寻找空闲端口（避免 19100+17 被别的软件占用）"
+else
+  bad "⑥a2 交接端口仍可能写死或被占用"
+fi
 
 # ⑥b 真跑一次：端口被未知进程占着时，ensure 必须失败，绝不能打印“已修好”。
 mkdir -p "$TMP/v6"

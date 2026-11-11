@@ -102,6 +102,19 @@ listener_commands() {
   done
 }
 
+pick_handover_port() {
+  local p=$((PORT + 17))
+  local last=$((PORT + 116))
+  while [ "$p" -le "$last" ]; do
+    if [ -z "$(/usr/sbin/lsof -nP -iTCP:"$p" -sTCP:LISTEN -t 2>/dev/null)" ]; then
+      printf '%s' "$p"
+      return 0
+    fi
+    p=$((p + 1))
+  done
+  return 1
+}
+
 # 只退场已知的改名前服务。未知进程绝不自动杀，避免 “修复代理” 误伤别的软件。
 stop_legacy_job() {
   if [ "$DRY_RUN" = 1 ]; then
@@ -338,7 +351,11 @@ if probe && ! port_owned_by_relay; then
   # 先起新代码的临时实例（不依赖端口），再停旧任务；新实例失败时旧服务仍在。
   if [ "$DRY_RUN" != 1 ]; then
     relay_py="$RELAY_DIR/relay.py"
-    relay_port=$((PORT + 17))
+    if ! relay_port="$(pick_handover_port)"; then
+      logline "❌ 找不到可用于交接的空闲端口（范围 $((PORT + 17))-$((PORT + 116))）；旧服务保持原样"
+      exit 1
+    fi
+    logline "交接预检使用空闲端口 ${relay_port}"
     "$relay_py" --port "$relay_port" --upstream https://api.deepseek.com/ --env-file "$ENV_FILE" >>"$RELAY_DIR/relay.err.log" 2>&1 &
     handover_pid=$!
     handover_ok=0

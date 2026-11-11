@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.80.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.81.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.80.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.81.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -102,8 +102,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.80.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.80.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.81.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.81.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -118,6 +118,13 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
 
+### v1.1.11.81 — 代理交接不再依赖固定备用端口
+
+旧代理占用 19100 时，新代理先要在固定的 19217 自检；该端口若被其他软件占用，
+就会保留旧服务并退出。现在会在 `19117–19216` 自动找空闲端口，再安全停旧、切新。
+
+版本 **1.1.11.81 (121)**。
+
 ### v1.1.11.80 — 修复旧代理 label 残留导致「修复」无效
 
 旧 `com.agent-vision-toolkit.proxy` 已加载但不监听时，原逻辑不会清理它；手动“修复”
@@ -126,13 +133,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 版本 **1.1.11.80 (120)**。
 
-### v1.1.11.79 — 适配 OpenCode 组织级控制台（org_）
-
-OpenCode 新控制台返回 `org_...` 而旧代码只认 `wrk_...`，导致登录成功但
-workspace 为空、额度和费用停止刷新。现在 API、登录 URL、手填和 HAR 导入统一接受
-两种 ID，并在首次记录或组织切换时清掉旧用量缓存。
-
-版本 **1.1.11.79 (119)**。
 
 ### v1.1.11.78 — LongCat 2.5 Free 接入与五档推理
 
