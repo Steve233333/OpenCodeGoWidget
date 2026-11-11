@@ -117,9 +117,9 @@ struct GoSettingsContent: View {
                 .font(.system(size: 9)).foregroundStyle(.secondary)
 
             Divider()
-            Text("2. 柱状图费用（可选）：粘贴你的 workspace 链接或 HAR，以启用按日按模型堆叠真数据（浏览器登录后自动填）")
+            Text("2. 柱状图费用（可选）：粘贴工作区/组织链接或 HAR，以启用按日按模型堆叠真数据（浏览器登录后自动填）")
                 .font(.caption2).foregroundStyle(.secondary)
-            TextField("https://opencode.ai/workspace/wrk_.../usage", text: $workspaceID)
+            TextField("https://opencode.ai/console/org_.../settings（或旧 workspace/wrk_...）", text: $workspaceID)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption2)
             HStack {
@@ -156,10 +156,9 @@ struct GoSettingsContent: View {
                     }
                     var ws = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
                     var ac = authCookie.trimmingCharacters(in: .whitespacesAndNewlines)
-                    // Normalize ws if full URL https://opencode.ai/workspace/wrk_.../usage
-                    if ws.contains("/workspace/"), let r = ws.range(of: "/workspace/") {
-                        let rest = String(ws[r.upperBound...])
-                        ws = rest.split(separator: "/").first.map(String.init) ?? ws
+                    // 统一接受新版 /console/org_... 与旧版 /workspace/wrk_...。
+                    if let parsed = OpenCodeKeyFetcher.workspaceID(fromURL: ws) {
+                        ws = parsed
                     }
                     // If ac is a HAR file path or workspace full link pasted into auth field, extract real auth in host process
                     var harWS: String?
@@ -174,13 +173,11 @@ struct GoSettingsContent: View {
                                         if let v = c["value"] as? String, !v.isEmpty { ac = v; break }
                                     }
                                 }
-                                if harWS == nil, let req = e["request"] as? [String: Any], let u = req["url"] as? String, u.contains("/workspace/") {
-                                    if let r = u.range(of: "/workspace/") {
-                                        let rest = String(u[r.upperBound...])
-                                        if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
-                                            harWS = id
-                                        }
-                                    }
+                                if harWS == nil,
+                                   let req = e["request"] as? [String: Any],
+                                   let u = req["url"] as? String,
+                                   let id = OpenCodeKeyFetcher.workspaceID(fromURL: u) {
+                                    harWS = id
                                 }
                             }
                         }
@@ -188,13 +185,10 @@ struct GoSettingsContent: View {
                     // If ws still empty but HAR contained workspace, fill it
                     if ws.isEmpty, let hw = harWS { ws = hw }
                     // Also handle case where auth field contains full workspace URL pasted by mistake
-                    if ac.contains("/workspace/"), let r = ac.range(of: "/workspace/") {
-                        let rest = String(ac[r.upperBound...])
-                        if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
-                            if ws.isEmpty { ws = id }
-                            // auth was actually a URL, clear it to avoid storing URL as cookie
-                            if ac.hasPrefix("https://") { ac = "" }
-                        }
+                    if let id = OpenCodeKeyFetcher.workspaceID(fromURL: ac) {
+                        if ws.isEmpty { ws = id }
+                        // auth was actually a URL, clear it to avoid storing URL as cookie
+                        if ac.hasPrefix("https://") { ac = "" }
                     }
                     let d = UserDefaults(suiteName: "2DC432GLL2.com.steve233.opencodego")
                     let oldFingerprint = KeyDirectoryStore.currentFingerprint(defaults: d)
@@ -229,7 +223,7 @@ struct GoSettingsContent: View {
                 Button("取消", role: .cancel) { dismiss() }
                 Spacer()
             }
-            Text("提示：新版控制台只需要 workspace ID (wrk_...) 与控制台会话（st_...）；粘贴 HAR、完整 Cookie 头或会话值都可以，保存时会按类型归类。点上方「浏览器登录自动获取」可一步完成。")
+            Text("提示：新版控制台接受组织/工作区 ID（org_... 或 wrk_...）与控制台会话（st_...）；粘贴 HAR、完整 Cookie 头或会话值都可以，保存时会按类型归类。点上方「浏览器登录自动获取」可一步完成。")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
 
             Divider()
@@ -275,9 +269,8 @@ struct GoSettingsContent: View {
             var storedWS = d?.string(forKey: "workspaceID") ?? ""
             var storedAuth = d?.string(forKey: "consoleSession") ?? d?.string(forKey: "authCookie") ?? ""
             // Legacy migration: if stored values are still HAR path or full URL, parse in host process now
-            if storedWS.contains("/workspace/"), let r = storedWS.range(of: "/workspace/") {
-                let rest = String(storedWS[r.upperBound...])
-                storedWS = rest.split(separator: "/").first.map(String.init) ?? storedWS
+            if let parsed = OpenCodeKeyFetcher.workspaceID(fromURL: storedWS) {
+                storedWS = parsed
                 d?.set(storedWS, forKey: "workspaceID")
             }
             if storedAuth.hasSuffix(".har") || storedAuth.contains(".har") {
@@ -418,11 +411,8 @@ struct GoSettingsContent: View {
             }
             if let request = entry["request"] as? [String: Any],
                let url = request["url"] as? String,
-               let range = url.range(of: "/workspace/") {
-                let rest = String(url[range.upperBound...])
-                if let id = rest.split(separator: "/").first.map(String.init), id.hasPrefix("wrk_") {
-                    foundWorkspace = id
-                }
+               let id = OpenCodeKeyFetcher.workspaceID(fromURL: url) {
+                foundWorkspace = id
             }
         }
 
@@ -450,7 +440,7 @@ struct GoSettingsContent: View {
             WidgetCenter.shared.reloadTimelines(ofKind: WidgetConstants.kind)
             NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
         } else {
-            harStatus = "未在 HAR 中找到 OpenCode workspace 或 auth Cookie"
+            harStatus = "未在 HAR 中找到 OpenCode 组织/工作区或 auth Cookie"
         }
     }
 

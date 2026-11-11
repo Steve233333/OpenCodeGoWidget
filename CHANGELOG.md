@@ -2,6 +2,22 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.79 — 适配 OpenCode 组织级控制台（org_）
+
+**现象**：登录新控制台账号后，小组件显示登录成功但额度、费用和 Key 都不更新；重新登录、清除 Cookie、切换网络都无效。
+
+**根因**：OpenCode 已把控制台从 workspace ID（`wrk_...`）迁到组织 ID（`org_...`）。`GET /console/api/orgs` 现在只返回 `org_...`，而小组件仍硬编码只接受 `wrk_...`，于是 `workspaceID` 最终为空。刷新逻辑在 `NetworkManager.swift:80` 看到空 ID 后直接跳过请求；Key 目录也会判定为缺少工作区。
+
+**修法**：
+
+- API 返回、登录 URL、设置页手填和 HAR 导入统一接受 `org_...` 与旧 `wrk_...`。
+- 所有控制台请求继续用同一个值作为 `x-org-id`；额度、Service Accounts、`cost-by-day` 和 `request-logs` 均已实测 200。
+- 新增 `cachedScopeID`，首次记录或组织变化时清掉旧用量缓存，避免同一账号切换组织后历史数据串在一起。
+
+**验证**：离线回归覆盖 `/console/org_.../settings`、裸 `org_...`、`/console/api/orgs` 的 `org_/wrk_` 混合返回、旧 workspace URL、HAR/手填入口；随后跑全量门槛、安装并回放真实账号请求。
+
+版本 **1.1.11.79 (119)**。
+
 ### v1.1.11.78 — LongCat 2.5 Free 接入与五档推理
 
 **变更**：接入当前的 `longcat-2.5-free`，Codex 副本按原生 Responses 路由使用；旧的 `longcat-2.5-preview-free` 不再出现在模型列表，只保留内部兼容别名，已有请求仍可平滑映射到新 ID。

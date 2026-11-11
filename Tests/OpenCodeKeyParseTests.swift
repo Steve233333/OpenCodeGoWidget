@@ -34,11 +34,13 @@ func testKeyParse() {
 }
 
 func testWorkspaceID() {
-    print("— workspace ID 提取 —")
+    print("— 组织/工作区 ID 提取 —")
     keyCheck(OpenCodeKeyFetcher.workspaceID(fromURL: "https://opencode.ai/workspace/wrk_01KT9VX0KZCD5SYNXH8D3EYJD8/keys") == "wrk_01KT9VX0KZCD5SYNXH8D3EYJD8", "/workspace/wrk_.../keys 提取")
     keyCheck(OpenCodeKeyFetcher.workspaceID(fromURL: "https://opencode.ai/workspace/wrk_01KT9VX0KZCD5SYNXH8D3EYJD8/usage?tab=1") == "wrk_01KT9VX0KZCD5SYNXH8D3EYJD8", "带查询参数提取")
+    keyCheck(OpenCodeKeyFetcher.workspaceID(fromURL: "https://opencode.ai/console/org_01M75K1MSBP8D4G9A5P3AS33B5/settings") == "org_01M75K1MSBP8D4G9A5P3AS33B5", "/console/org_.../settings 提取")
+    keyCheck(OpenCodeKeyFetcher.workspaceID(fromURL: "org_01M75K1MSBP8D4G9A5P3AS33B5") == "org_01M75K1MSBP8D4G9A5P3AS33B5", "裸 org_ 输入提取")
     keyCheck(OpenCodeKeyFetcher.workspaceID(fromURL: "https://opencode.ai/auth") == nil, "登录页返回 nil")
-    keyCheck(OpenCodeKeyFetcher.workspaceID(fromURL: "https://opencode.ai/workspace/not_a_wrk/keys") == nil, "非 wrk_ 前缀返回 nil")
+    keyCheck(OpenCodeKeyFetcher.workspaceID(fromURL: "https://opencode.ai/workspace/not_a_scope/keys") == nil, "非 wrk_/org_ 前缀返回 nil")
 }
 
 func testInactiveServiceAccount() {
@@ -71,14 +73,17 @@ func testCredentialClassification() {
     let ws = OpenCodeKeyFetcher.classifyPastedCredential(
         "https://opencode.ai/console/wrk_01KT9VX0KZCD5SYNXH8D3EYJD8/usage")
     keyCheck(ws.workspaceID == "wrk_01KT9VX0KZCD5SYNXH8D3EYJD8", "workspace 链接可提取 wrk_")
+    let org = OpenCodeKeyFetcher.classifyPastedCredential(
+        "https://opencode.ai/console/org_01M75K1MSBP8D4G9A5P3AS33B5/settings")
+    keyCheck(org.workspaceID == "org_01M75K1MSBP8D4G9A5P3AS33B5", "组织链接可提取 org_")
     keyCheck(OpenCodeKeyFetcher.consoleCookieHeader(auth: "", session: "st_123")
              == "oc_locale=zh; __Host-console_session=st_123", "缺 auth 时不产生 auth= 空值")
 }
 
 func testWorkspaceListParse() {
-    let data = #"[{"id":"wrk_01KT9VX0KZCD5SYNXH8D3EYJD8","name":"Steve233"},{"id":"bad"}]"#.data(using: .utf8)!
-    keyCheck(OpenCodeKeyFetcher.parseWorkspaceIDs(data) == ["wrk_01KT9VX0KZCD5SYNXH8D3EYJD8"],
-             "console/api/orgs 只取 wrk_ 工作区")
+    let data = #"[{"id":"org_01M75K1MSBP8D4G9A5P3AS33B5","name":"Org"},{"id":"wrk_01KT9VX0KZCD5SYNXH8D3EYJD8","name":"Legacy"},{"id":"org_01M75K1MSBP8D4G9A5P3AS33B5"},{"id":"bad"}]"#.data(using: .utf8)!
+    keyCheck(OpenCodeKeyFetcher.parseWorkspaceIDs(data) == ["org_01M75K1MSBP8D4G9A5P3AS33B5", "wrk_01KT9VX0KZCD5SYNXH8D3EYJD8"],
+             "console/api/orgs 同时接受 org_/wrk_ 并去重")
 }
 
 // swiftc 多文件编译时只有 main.swift 允许顶层语句，所以这里用 @main 包一层

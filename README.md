@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.78.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.79.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.78.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.79.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -102,8 +102,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.78.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.78.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.79.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.79.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -117,6 +117,14 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 ## 更新日志
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+
+### v1.1.11.79 — 适配 OpenCode 组织级控制台（org_）
+
+OpenCode 新控制台返回 `org_...` 而旧代码只认 `wrk_...`，导致登录成功但
+workspace 为空、额度和费用停止刷新。现在 API、登录 URL、手填和 HAR 导入统一接受
+两种 ID，并在首次记录或组织切换时清掉旧用量缓存。
+
+版本 **1.1.11.79 (119)**。
 
 ### v1.1.11.78 — LongCat 2.5 Free 接入与五档推理
 
@@ -132,13 +140,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 避免补丁 0 命中后留下“能打开但没有自定义模型”的副本。
 
 版本 **1.1.11.77 (117)**。
-
-### v1.1.11.76 — 本地代理探活与上游路由修复
-
-`GET /v1/models` 改为本地健康响应，不再因为上游抖动误杀代理；请求按系统代理优先、直连回退，
-解决 SakuraCat 非 TUN 模式下周期性 `waiting for network` 和 502。
-
-版本 **1.1.11.76 (116)**。
 
 ## 本地构建
 

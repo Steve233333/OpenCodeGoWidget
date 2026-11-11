@@ -91,7 +91,9 @@ enum OpenCodeKeyFetcher {
         guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         var seen = Set<String>()
         return arr.compactMap { item in
-            guard let id = item["id"] as? String, id.hasPrefix("wrk_"), seen.insert(id).inserted else { return nil }
+            guard let id = item["id"] as? String,
+                  isConsoleScopeID(id),
+                  seen.insert(id).inserted else { return nil }
             return id
         }
     }
@@ -193,13 +195,20 @@ enum OpenCodeKeyFetcher {
         return result
     }
 
-    /// 从 URL（如 https://opencode.ai/workspace/wrk_xxx/keys）里取 workspace ID
+    /// 控制台 ID：新组织版是 `org_...`，旧控制台是 `wrk_...`，两者都作为 `x-org-id` 使用。
+    static func isConsoleScopeID(_ value: String) -> Bool {
+        guard value.count > 8 else { return false }
+        return value.hasPrefix("wrk_") || value.hasPrefix("org_")
+    }
+
+    /// 从 URL 或输入文本里取控制台工作区/组织 ID。
     static func workspaceID(fromURL url: String) -> String? {
         // 2026-10-07：上游新控制台地址是 /console/<wrk_…>/…（旧的是 /workspace/<wrk_…>/…）。
         // 只认 "/workspace/" 的老写法在新控制台下一律返回 nil → 登录后 workspace 与凭据都填不上。
-        // 现在按 token 扫：URL 里任何一段以 wrk_ 开头的合法 ID 都认，上游再改前缀也不会失效。
+        // 2026-11-12：组织版控制台改成 /console/<org_…>/… 且 /console/api/orgs 只返回 org_；
+        // 继续只认 wrk_ 会让登录态有效但 workspaceID 永远为空。两种前缀都按 token 识别。
         let tokens = url.split { !($0.isLetter || $0.isNumber || $0 == "_") }
-        return tokens.first { $0.hasPrefix("wrk_") && $0.count > 8 }.map(String.init)
+        return tokens.first { isConsoleScopeID(String($0)) }.map(String.init)
     }
 
     private static func firstGroup(_ pattern: String, in text: String) -> String? {

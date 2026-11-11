@@ -103,11 +103,17 @@ final class NetworkManager: @unchecked Sendable {
         // 变成两个账号的数据串在一起（用户明确担心过这一点）。
         if let sub = obj["subscriberUserId"] as? String, !sub.isEmpty {
             let suite = UserDefaults(suiteName: PlatformConfig.appGroupID)
-            if let old = suite?.string(forKey: "cachedAccountID"), !old.isEmpty, old != sub {
+            let old = suite?.string(forKey: "cachedAccountID") ?? ""
+            let oldScope = suite?.string(forKey: "cachedScopeID") ?? ""
+            let accountChanged = !old.isEmpty && old != sub
+            let scopeChanged = !oldScope.isEmpty && oldScope != ws
+            let scopeIdentityUninitialized = oldScope.isEmpty
+            if accountChanged || scopeChanged || scopeIdentityUninitialized {
                 WidgetDataStore.wipeUsageCache()
-                logger.notice("账号已切换（\(old.prefix(12)) → \(sub.prefix(12))），本机用量缓存已清空，将按新账号重建")
+                logger.notice("控制台账号/组织身份已初始化或切换（\(old.prefix(12)) → \(sub.prefix(12))），本机用量缓存已清空，将按当前组织重建")
             }
             suite?.set(sub, forKey: "cachedAccountID")
+            suite?.set(ws, forKey: "cachedScopeID")
         }
 
         func num(_ v: Any?) -> Double {

@@ -108,7 +108,7 @@ final class AccountSession: ObservableObject {
         }
     }
 
-    /// 新控制台可直接用 st_ 会话列出工作区；不再要求用户手填 wrk_。
+    /// 新控制台可直接用 st_ 会话列出组织/工作区；不再要求用户手填 wrk_。
     func resolveWorkspaceIfNeeded() async {
         guard workspaceID.isEmpty else { return }
         let auth = defaults?.string(forKey: "authCookie") ?? ""
@@ -144,7 +144,7 @@ final class AccountSession: ObservableObject {
                 phase = .loggedIn
                 // 2026-10-07：新控制台不再提供完整密钥，这里只能列出名字/提示手动粘贴（绝不覆盖已存 Key）
                 let names = keys.prefix(3).map { $0.name.isEmpty ? $0.display : $0.name }.joined(separator: "、")
-                statusText = "发现 \(keys.count) 个密钥（\(names)）· 完整密钥官方只在创建时展示 → 请到控制台新建后粘贴（workspace 与凭据已自动填好）"
+                statusText = "发现 \(keys.count) 个密钥（\(names)）· 完整密钥官方只在创建时展示 → 请到控制台新建后粘贴（组织/工作区与凭据已自动填好）"
                 _ = autoApply
             }
         } catch {
@@ -289,7 +289,7 @@ struct LoginWebView: NSViewRepresentable {
                         NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
                     }
                 }
-                // 新控制台页面不一定带 /workspace/<wrk>/ 路径；直接从 Cookie 库/orgs 自动补。
+                // 新控制台页面可能是 /console/<org_…>；直接从 Cookie 库 /orgs 自动补。
                 NotificationCenter.default.post(name: .openCodeGoCredentialsChanged, object: nil)
                 let auth = cookies.first(where: {
                     $0.name == "auth" && $0.domain.contains("opencode.ai") && !$0.value.isEmpty
@@ -417,7 +417,7 @@ struct LoginSheetView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            Text("登录后自动填写：workspace 与 workspace 凭据（Cookie）。Go Key 与 DeepSeek Key 官方都只在创建时展示完整值 → 请到各自控制台新建后粘贴到这里。推荐用 GitHub 登录；Google 可能拒绝内嵌浏览器。")
+            Text("登录后自动填写：组织/工作区与控制台凭据（Cookie）。Go Key 与 DeepSeek Key 官方都只在创建时展示完整值 → 请到各自控制台新建后粘贴到这里。推荐用 GitHub 登录；Google 可能拒绝内嵌浏览器。")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
             Spacer()
             Button("打开 DeepSeek 控制台") {
