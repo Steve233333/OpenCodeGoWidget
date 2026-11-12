@@ -21,6 +21,53 @@ final class IOSCoreTests: XCTestCase {
             ),
             "wrk_01KT9VX0KZCD5SYNXH8D3EYJD8"
         )
+        XCTAssertEqual(
+            OpenCodeKeyFetcher.workspaceID(
+                fromURL: "https://opencode.ai/console/org_01M75K1MSBP8D4G9A5P3AS33B5/settings"
+            ),
+            "org_01M75K1MSBP8D4G9A5P3AS33B5"
+        )
+    }
+
+    func testPreferredConsoleScopeUsesLoginHint() {
+        let ids = [
+            "org_first",
+            "org_01M75K1MSBP8D4G9A5P3AS33B5",
+        ]
+        XCTAssertEqual(
+            OpenCodeKeyFetcher.preferredConsoleScopeID(
+                ids,
+                hinted: "org_01M75K1MSBP8D4G9A5P3AS33B5"
+            ),
+            "org_01M75K1MSBP8D4G9A5P3AS33B5"
+        )
+        XCTAssertEqual(
+            OpenCodeKeyFetcher.preferredConsoleScopeID(ids, hinted: nil),
+            "org_first"
+        )
+    }
+
+    func testAccountScopeChangeResetsUsage() {
+        XCTAssertTrue(IOSSessionStore.shouldResetUsage(
+            oldWorkspace: "wrk_old",
+            newWorkspace: "org_new"
+        ))
+        XCTAssertTrue(IOSSessionStore.shouldResetUsage(
+            oldWorkspace: "",
+            newWorkspace: "org_new"
+        ))
+        XCTAssertTrue(IOSSessionStore.shouldResetUsage(
+            oldWorkspace: "org_old",
+            newWorkspace: "org_new"
+        ))
+        XCTAssertFalse(IOSSessionStore.shouldResetUsage(
+            oldWorkspace: "org_same",
+            newWorkspace: "org_same"
+        ))
+        XCTAssertFalse(IOSSessionStore.shouldResetUsage(
+            oldWorkspace: "",
+            newWorkspace: ""
+        ))
     }
 
     func testSnapshotPerKeyFiltering() {

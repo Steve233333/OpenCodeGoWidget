@@ -38,10 +38,13 @@ final class ConsoleAccountModel: ObservableObject {
     func receiveLogin(sessionValue: String, authCookie: String?, workspaceHint: String?) async {
         guard !sessionValue.isEmpty else { return }
         phase = .loggingIn
+        // 新登录绝不能继承上一个账号的 workspace。登录页可能先停在 /console，
+        // 此时 hint 为空；先写成空值，后续 /console/api/orgs 再解析出真实 org。
+        let hintedScope = workspaceHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let stored = IOSStoredSession(
             consoleSession: sessionValue,
             authCookie: authCookie?.isEmpty == true ? nil : authCookie,
-            workspaceID: workspaceHint ?? workspaceID,
+            workspaceID: hintedScope,
             savedAt: Date()
         )
         session = stored
@@ -124,7 +127,10 @@ final class ConsoleAccountModel: ObservableObject {
                 authCookie: stored.authCookie ?? "",
                 consoleSession: stored.consoleSession
             )
-            guard let workspace = ids.first else {
+            guard let workspace = OpenCodeKeyFetcher.preferredConsoleScopeID(
+                ids,
+                hinted: stored.workspaceID
+            ) else {
                 throw OpenCodeKeyFetcher.FetchError.badResponse(401)
             }
             let updated = IOSStoredSession(

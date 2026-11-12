@@ -13,6 +13,10 @@ enum IOSSessionStore {
     private static let account = "console-session"
     private static let defaults = UserDefaults(suiteName: PlatformConfig.appGroupID)
 
+    static func shouldResetUsage(oldWorkspace: String, newWorkspace: String) -> Bool {
+        oldWorkspace != newWorkspace && !(oldWorkspace.isEmpty && newWorkspace.isEmpty)
+    }
+
     static func load() -> IOSStoredSession? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -56,6 +60,12 @@ enum IOSSessionStore {
 
     static func applyToAppGroup(_ session: IOSStoredSession) {
         let oldWorkspace = defaults?.string(forKey: "workspaceID") ?? ""
+        if shouldResetUsage(oldWorkspace: oldWorkspace, newWorkspace: session.workspaceID) {
+            // 账号/组织切换时，增量合并会保留旧历史天；必须先抹掉整份账号数据。
+            _ = WidgetDataStore.wipeUsageCache()
+            defaults?.removeObject(forKey: "cachedAccountID")
+            defaults?.removeObject(forKey: "cachedScopeID")
+        }
         defaults?.set(session.workspaceID, forKey: "workspaceID")
         // App 自己仍只读 Keychain。小组件扩展没法读 App 的 Keychain，
         // 所以这里镜像一份到 App Group，仅用于小组件自己刷新额度。
@@ -96,9 +106,12 @@ enum IOSSessionStore {
             "consoleSession", "authCookie", "widgetConsoleSession", "widgetAuthCookie",
             "workspaceID", "availableKeys",
             KeyDirectoryStore.rejectedSessionFingerprintKey, "selectedCostKeyId",
+            "cachedAccountID", "cachedScopeID",
         ] {
             defaults?.removeObject(forKey: key)
         }
+        // 退出登录后不能继续把上一个账号的历史留在主界面或磁贴里。
+        _ = WidgetDataStore.wipeUsageCache()
         KeyDirectoryStore.save(
             KeyDirectoryState(
                 status: .loginRequired,
@@ -122,7 +135,7 @@ enum IOSSessionStore {
         _ = WidgetDataStore.wipeUsageCache()
         for key in [
             "go_model_ids", "go_model_ids_date", "zen_model_ids", "zen_model_ids_date",
-            "go_quotas_json_v3", "go_quotas_date_v3", "cachedAccountID",
+            "go_quotas_json_v3", "go_quotas_date_v3", "cachedAccountID", "cachedScopeID",
         ] {
             defaults?.removeObject(forKey: key)
         }

@@ -98,6 +98,13 @@ enum OpenCodeKeyFetcher {
         }
     }
 
+    /// 返回组织列表中最可信的一项：优先登录 URL 里已经看到的作用域，否则取第一个。
+    static func preferredConsoleScopeID(_ returned: [String], hinted: String?) -> String? {
+        let hint = hinted?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !hint.isEmpty, returned.contains(hint) { return hint }
+        return returned.first
+    }
+
     /// 控制台 Cookie 的唯一拼装：只发存在的字段，绝不产生 `auth=` 空值。
     static func consoleCookieHeader(auth: String, session: String) -> String {
         var parts = ["oc_locale=zh"]
