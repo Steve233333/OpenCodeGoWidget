@@ -116,6 +116,44 @@ ensure_cli_symlink() {
   fi
 }
 
+ensure_cua_wrapper() {
+  local wrapper_dir="$CODEX_HOME_DIR/cua-wrapper"
+  local wrapper="$wrapper_dir/node-repl-wrapper.mjs"
+  local patcher="$BASE/scripts/patch-cua-mcp.py"
+  local node_bin="$PATCHED/Contents/Resources/cua_node/bin/node"
+  local node_repl="$PATCHED/Contents/Resources/cua_node/bin/node_repl"
+  local manifest
+  local patched=0
+
+  [ -f "$BASE/scripts/cua-node-wrapper.mjs" ] || {
+    log "WARN: CUA wrapper source missing"
+    return 0
+  }
+  [ -f "$patcher" ] || {
+    log "WARN: CUA manifest patcher missing"
+    return 0
+  }
+  [ -x "$node_bin" ] && [ -x "$node_repl" ] || {
+    log "WARN: patched CUA runtime missing, cannot install wrapper"
+    return 0
+  }
+
+  mkdir -p "$wrapper_dir"
+  /usr/bin/install -m 600 "$BASE/scripts/cua-node-wrapper.mjs" "$wrapper.tmp"
+  mv -f "$wrapper.tmp" "$wrapper"
+
+  while IFS= read -r -d '' manifest; do
+    if python3 "$patcher" "$manifest" "$node_bin" "$wrapper" "$node_repl" >>"$LOG" 2>&1; then
+      patched=$((patched + 1))
+    else
+      log "WARN: failed to patch CUA manifest $manifest"
+    fi
+  done < <(find "$CODEX_HOME_DIR/plugins/cache/openai-bundled/unified-computer-use" \
+    -path '*/.mcp.json' -type f -print0 2>/dev/null)
+
+  log "CUA node_repl wrapper installed (manifests checked: $patched)"
+}
+
 build_patched() {
   log "== build patched copy =="
   # Resolve actual source location (handles /Applications vs ~/Applications installs)
@@ -546,6 +584,7 @@ PYEOF
 
   # 每次重建顺手维护 CLI 软链：官方再改布局，手机端 ccpocket 桥也不会断
   ensure_cli_symlink
+  ensure_cua_wrapper
 }
 
 install() {
@@ -573,6 +612,11 @@ install() {
     fi
     build_patched || exit 1
   fi
+  ensure_cua_wrapper
+  if patched_running; then
+    log "patched copy already running, skip launch"
+    return 0
+  fi
   log "launching patched copy..."
   open "$PATCHED"
   log "launched $PATCHED"
@@ -589,6 +633,7 @@ auto_update() {
     exit 0
   fi
   if [ "$current" = "$marker_ver" ] && is_patched; then
+    ensure_cua_wrapper
     log "auto-update: up to date ($current), no action"
     exit 0
   fi

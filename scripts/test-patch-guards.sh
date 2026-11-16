@@ -39,6 +39,17 @@ grep -qF 'AGbevlPCksUGKNL8TSn7wGmJEuJsXb2A' "$PATCH_SH" \
 grep -qF '[ "$(readlink "$link")" = "$target" ]' "$PATCH_SH" \
   && ok "CLI 软链维护在（官方改布局不断 ccpocket）" || bad "缺 codex CLI 软链维护"
 
+# 26.1103 浏览器 IPC：node_repl 必须是官方签名 node -> wrapper -> node_repl。
+PATCH_SCRIPTS="$ROOT/Resources/codex/patch/scripts"
+for _cua_file in cua-node-wrapper.mjs patch-cua-mcp.py test-cua-peer-chain.js; do
+  [ -s "$PATCH_SCRIPTS/$_cua_file" ] \
+    && ok "CUA 修复资源存在：$_cua_file" || bad "缺 CUA 修复资源：$_cua_file"
+done
+[ "$(grep -cF 'ensure_cua_wrapper' "$PATCH_SH" || true)" -ge 3 ] \
+  && ok "patch/install 都会安装 CUA wrapper" || bad "CUA wrapper 没接入重建安装流程"
+grep -qF '"$RES_DIR"/patch/scripts/*' "$ROOT/Resources/codex/setup/steps/100-patched-app.sh" \
+  && ok "安装器会把 CUA wrapper 脚本同步进 picker-patch" || bad "安装器漏同步 CUA wrapper 脚本"
+
 # 2026-10-20：`--install` 必须**版本感知**。
 # 事故：官方升级后 --auto-update 因"副本正在运行"defer（exit 0），安装器回退到 --install，
 # 而旧的 install() 只查 is_patched()（asar 里有补丁特征就跳过）→ 日志写 "already patched, skip"

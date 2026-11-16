@@ -500,3 +500,53 @@ done | grep -n 'amazonBedrock'                        # 只看带 amazonBedrock 
 
 教训：**pattern 失配必须是「可诊断的失败」，不能悄悄降级成「能开但没功能」的官方原版**。看「配置失败」先看 `patch.log` 里是 `ABORTED:pattern-count` 还是签名/启动失败——前者只需更新正则，别急着重装或换 key。
 
+### 35. 26.1103 内置浏览器 `native pipe closed before response`（2026-11-16）
+
+症状：`cua.getState()` 能枚举 macOS App，但 `browsers: []`，错误为
+`Browsers: Error: native pipe closed before response`。内置浏览器页面本身正常。日志：
+
+```text
+browser-use native pipe listening pipePath=/tmp/codex-browser-use/<uuid>.sock
+browser-use native pipe rejected socket peer reason=untrusted-process-ancestry
+```
+
+根因：26.1103 新增 `browser-use-peer-authorization.node`。它检查 socket peer、parent、
+grandparent 的 codesign `teamId` 与 `signingIdentifier`。官方的 `node_repl` 与 Codex CLI
+都保留 OpenAI Developer ID（`2DC432GLL2`），但 patched app 的 Electron helper 是自签，
+所以从 `node_repl` 往上看第二条父级就变成 self-signed，浏览器 IPC 被拒绝。这不是
+CUAService bootstrap、TCC 或 application-groups 丢失；`SkyComputerUseService` 和
+`Computer Use.app` 的官方签名均正常。
+
+修复：不要关闭浏览器 IPC 鉴权。在 OpenAI 签名的 Node 与 `node_repl` 之间增加一个
+保持存活的 Node wrapper，使 peer 的 parent/grandparent 均为官方签名的
+`node`/`codex`：
+
+```text
+self-signed Electron
+  -> OpenAI-signed codex app-server
+    -> OpenAI-signed node (wrapper, stays alive)
+      -> OpenAI-signed node_repl
+```
+
+工程实现：
+
+- `scripts/cua-node-wrapper.mjs`：用 `spawn` 启动 `node_repl` 并透传 stdio/信号；**不能
+  用 `exec`**，否则 wrapper 进程消失，父链又变回原来的错误结构。
+- `scripts/patch-cua-mcp.py`：把
+  `~/.codex-deepseek/plugins/cache/openai-bundled/unified-computer-use/<version>/.mcp.json`
+  的 `cua_repl` 改为 OpenAI-signed `node → wrapper → node_repl`。
+- `patch.sh: ensure_cua_wrapper`：重建、`--install` 和 `--auto-update` 时同步 wrapper 与缓存清单。
+- `scripts/test-cua-peer-chain.js`：三层 OpenAI-signed Node 子进程链 + 原生 addon 回归测试。
+
+单独验证授权链：
+
+```bash
+CUA_PEER_ADDON="$PATCHED/Contents/Resources/native/browser-use-peer-authorization.node" \
+  "$PATCHED/Contents/Resources/cua_node/bin/node" \
+  ~/.codex/picker-patch/scripts/test-cua-peer-chain.js coordinator
+# 期望：{"authorized":true,"teamId":"2DC432GLL2","signingIdentifier":"node"}
+```
+
+当前运行中的 MCP server 不会热替换 `.mcp.json`；安装/修复后需重新打开 ChatGPT-Patched，
+或让插件运行时重新加载，再用 `cua.getState()` 验证 `browsers` 不再为空。
+

@@ -2,6 +2,26 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.82 — 修复 26.1103 升级后副本内置浏览器失效
+
+**现象**：Codex 更新到 `26.1103.60933` 后，副本仍能打开，但内置浏览器工具返回
+`Browsers: Error: native pipe closed before response`。
+
+**根因**：新版新增 `browser-use-peer-authorization.node`，会检查 native pipe peer 的父级和祖父级代码签名。OpenAI 签名的 `node_repl` 原本直接挂在自签 Electron helper 下，第二层父级变为 self-signed，因此被判定为 `untrusted-process-ancestry` 并拒绝；不是账号、代理或浏览器页面坏了。
+
+**修法**：
+
+- 保持 IPC 鉴权开启，不改官方原生安全模块。
+- 在 OpenAI 签名的 Node 与 `node_repl` 之间增加保持存活的 wrapper，形成 `official node -> wrapper -> node_repl` 签名祖先链。
+- `patch.sh` 在重建、`--install` 和 `--auto-update` 时自动安装 wrapper 并更新 CUA `.mcp.json`。
+- 安装器会把 `cua-node-wrapper.mjs`、`patch-cua-mcp.py` 和 peer-chain 测试一起打包到 `picker-patch/scripts/`。
+- 门禁新增资源完整性、安装接线和真实签名祖先链测试。
+
+**验证**：原生 addon 实测返回
+`{"authorized":true,"teamId":"2DC432GLL2","signingIdentifier":"node"}`；重开副本后应能重新枚举 `browsers`。
+
+版本 **1.1.11.82 (122)**。
+
 ### iOS 1.0.17 — 修复重新登录后混用旧账号数据
 
 **现象**：iOS 重新登录新账号后，旧账号的历史花费、Key 或额度仍然显示；新账号登录后无法正常刷新。

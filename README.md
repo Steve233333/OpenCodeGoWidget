@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.81.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.82.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.81.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.82.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -102,8 +102,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.81.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.81.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.82.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.82.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -118,6 +118,13 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 > 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
 
+### v1.1.11.82 — 修复 26.1103 升级后副本内置浏览器失效
+
+新版浏览器 IPC 会校验进程签名祖先。通过 OpenAI 签名的 Node wrapper 隔开自签 Electron
+与 `node_repl`，保持原生鉴权开启；安装器和重建流程会自动同步这套 wrapper。
+
+版本 **1.1.11.82 (122)**。
+
 ### v1.1.11.81 — 代理交接不再依赖固定备用端口
 
 旧代理占用 19100 时，新代理先要在固定的 19217 自检；该端口若被其他软件占用，
@@ -125,22 +132,6 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 版本 **1.1.11.81 (121)**。
 
-### v1.1.11.80 — 修复旧代理 label 残留导致「修复」无效
-
-旧 `com.agent-vision-toolkit.proxy` 已加载但不监听时，原逻辑不会清理它；手动“修复”
-也没有强制重启，可能直接判定“已在运行”后退出。现在会精确摘掉旧任务，并用
-`--force-restart` 重新挂载、验证 agent-relay。
-
-版本 **1.1.11.80 (120)**。
-
-
-### v1.1.11.78 — LongCat 2.5 Free 接入与五档推理
-
-接入当前 `longcat-2.5-free`，隐藏旧 Preview；Codex 安装包开放
-`low / medium / high / xhigh / max` 五档，本机 ZCode 也同步使用相同档位。模型默认使用 `low`，
-旧 ID 只保留内部兼容别名。
-
-版本 **1.1.11.78 (118)**。
 
 
 ## 本地构建

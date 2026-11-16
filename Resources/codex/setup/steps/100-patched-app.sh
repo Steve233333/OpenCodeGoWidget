@@ -28,10 +28,18 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
   mkdir -p "$PATCH_BASE/certs" "$PATCH_BASE/scripts"
   sync_newer_file "$RES_DIR/patch/patch.sh" "$PATCH_BASE/patch.sh"
   sync_newer_file "$RES_DIR/patch/ent2.plist" "$PATCH_BASE/certs/ent2.plist"
+  # 26.1103 浏览器 IPC 新增签名祖先校验：patch.sh 依赖这里的 wrapper/patcher。
+  if [[ -d "$RES_DIR/patch/scripts" ]]; then
+    for _patch_script in "$RES_DIR"/patch/scripts/*; do
+      [[ -f "$_patch_script" ]] || continue
+      sync_newer_file "$_patch_script" "$PATCH_BASE/scripts/${_patch_script:t}"
+    done
+  fi
   # 预编译启动器：没装命令行工具（clang）的机器也能打出带 --user-data-dir 的副本
   sync_newer_file "$RES_DIR/patch/launcher-universal" "$PATCH_BASE/launcher-universal"
   chmod +x "$PATCH_BASE/launcher-universal" 2>/dev/null || true
   chmod 755 "$PATCH_BASE/patch.sh"
+  chmod 755 "$PATCH_BASE/scripts/"*.py "$PATCH_BASE/scripts/"*.js "$PATCH_BASE/scripts/"*.mjs 2>/dev/null || true
   if [[ -n "$PASS" ]]; then
     printf '%s' "$PASS" > "$PASS_FILE"
     chmod 600 "$PASS_FILE"

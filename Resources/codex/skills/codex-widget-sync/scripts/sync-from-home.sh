@@ -66,6 +66,11 @@ fi
 sync_one "$HOME_DIR/.codex-deepseek/scripts/archive-large-rollouts.sh" "$WIDGET_DIR/Resources/codex/scripts/archive-large-rollouts.sh"
 sync_one "$HOME/.codex/picker-patch/patch.sh" "$WIDGET_DIR/Resources/codex/patch/patch.sh"
 sync_one "$HOME/.codex/picker-patch/certs/ent2.plist" "$WIDGET_DIR/Resources/codex/patch/ent2.plist"
+for _picker_script in "$HOME/.codex/picker-patch/scripts/cua-node-wrapper.mjs" \
+                      "$HOME/.codex/picker-patch/scripts/patch-cua-mcp.py" \
+                      "$HOME/.codex/picker-patch/scripts/test-cua-peer-chain.js"; do
+  sync_one "$_picker_script" "$WIDGET_DIR/Resources/codex/patch/scripts/$(basename "$_picker_script")"
+done
 sync_one "$HOME/.config/opencode/mcp/websearch-server.py" "$WIDGET_DIR/Resources/codex/mcp/websearch-server.py"
 
 echo ""
