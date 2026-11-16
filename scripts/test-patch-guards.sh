@@ -41,12 +41,40 @@ grep -qF '[ "$(readlink "$link")" = "$target" ]' "$PATCH_SH" \
 
 # 26.1103 浏览器 IPC：node_repl 必须是官方签名 node -> wrapper -> node_repl。
 PATCH_SCRIPTS="$ROOT/Resources/codex/patch/scripts"
-for _cua_file in cua-node-wrapper.mjs patch-cua-mcp.py test-cua-peer-chain.js; do
+for _cua_file in cua-node-wrapper.cjs patch-cua-mcp.py test-cua-peer-chain.js; do
   [ -s "$PATCH_SCRIPTS/$_cua_file" ] \
     && ok "CUA 修复资源存在：$_cua_file" || bad "缺 CUA 修复资源：$_cua_file"
 done
 [ "$(grep -cF 'ensure_cua_wrapper' "$PATCH_SH" || true)" -ge 3 ] \
   && ok "patch/install 都会安装 CUA wrapper" || bad "CUA wrapper 没接入重建安装流程"
+grep -qF 'CUA_PATCHED_MARKER='"'"'args:[t+"/w.cjs",h],command:f'"'"'' "$PATCH_SH" \
+  && ok "CUA wrapper 写进 app.asar，而不是只改会被重建的缓存" || bad "CUA 修复仍只改运行时缓存"
+grep -qF 'CUA_OLD = b'"'"'' "$PATCH_SH" \
+  && grep -qF 'CUA_NEW = b'"'"'' "$PATCH_SH" \
+  && ok "app.asar 源配置的等长替换在" || bad "缺 app.asar CUA 源配置替换"
+if _cua_len="$(python3 - "$PATCH_SH" <<'PY'
+import ast, re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+old = re.search(r"^CUA_OLD = b('(?:[^'\\\\]|\\\\.)*')$", text, re.M)
+new = re.search(r"^CUA_NEW = b('(?:[^'\\\\]|\\\\.)*')$", text, re.M)
+if not old or not new:
+    raise SystemExit(2)
+a = ast.literal_eval(old.group(1)).encode()
+b = ast.literal_eval(new.group(1)).encode()
+print(f"{len(a)}:{len(b)}")
+raise SystemExit(0 if len(a) == len(b) else 1)
+PY
+)"; then
+  ok "app.asar CUA 替换等长（${_cua_len}）"
+else
+  bad "app.asar CUA 替换长度不一致或定义缺失（${_cua_len:-parse-error}）"
+fi
+if printf 'wrapper-ok\n' | node "$PATCH_SCRIPTS/cua-node-wrapper.cjs" /bin/cat >"$WORK/cua-wrapper.out" 2>"$WORK/cua-wrapper.err" \
+   && grep -qx 'wrapper-ok' "$WORK/cua-wrapper.out"; then
+  ok "CJS wrapper 能启动目标并透传 stdio"
+else
+  bad "CJS wrapper 启动/stdio 透传失败"
+fi
 grep -qF '"$RES_DIR"/patch/scripts/*' "$ROOT/Resources/codex/setup/steps/100-patched-app.sh" \
   && ok "安装器会把 CUA wrapper 脚本同步进 picker-patch" || bad "安装器漏同步 CUA wrapper 脚本"
 

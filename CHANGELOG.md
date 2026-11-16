@@ -2,6 +2,30 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.83 — 把 CUA wrapper 固化进 app.asar
+
+**现象**：安装 `1.1.11.82` 并重开副本后，`cua.getState()` 仍返回
+`Browsers: Error: native pipe closed before response`，`browsers` 保持为空。
+
+**根因**：82 修改的是
+`~/.codex-deepseek/plugins/cache/openai-bundled/unified-computer-use/<版本>/.mcp.json`，
+但新版 Codex 每次启动都会根据 `app.asar` 里的运行时代码重新生成这份清单。重启后
+`cua_repl` 又变回 `node_repl` 直启，wrapper 被覆盖。
+
+**修法**：
+
+- 在 `app.asar` 内的通用 `node_repl` 启动配置源头做等长替换：
+  `node 包装器 → node_repl`，每次启动生成的新清单也会自动带上 wrapper。
+- wrapper 改放到固定的 `~/.codex-deepseek/w.cjs`；`patch.sh` 重建时先安装它。
+- `is_patched()` 现在同时认模型可见性补丁和 CUA 源头补丁；只装了 82 的副本会被判定
+  不健康，点击配置会重建，而不是假报“已是最新”。
+- 门禁增加 asar 替换等长检查、源头 marker 检查和 CJS wrapper 的 stdio 行为测试。
+
+**验证**：`scripts/test-patch-guards.sh` 全绿；app.asar 中的替换前后均为 116 字节，
+修改后的 `early-bootstrap.js` 通过 `node --check`；CJS wrapper 能启动目标并透传 stdin/stdout。
+
+版本 **1.1.11.83 (123)**。
+
 ### v1.1.11.82 — 修复 26.1103 升级后副本内置浏览器失效
 
 **现象**：Codex 更新到 `26.1103.60933` 后，副本仍能打开，但内置浏览器工具返回
@@ -21,6 +45,9 @@
 `{"authorized":true,"teamId":"2DC432GLL2","signingIdentifier":"node"}`；重开副本后应能重新枚举 `browsers`。
 
 版本 **1.1.11.82 (122)**。
+
+> 修正：82 只修了运行时缓存，重启后会被新版 Codex 重新生成，因此单独使用 82
+> 无法持久恢复内置浏览器；请升级到 83。
 
 ### iOS 1.0.17 — 修复重新登录后混用旧账号数据
 

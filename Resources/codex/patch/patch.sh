@@ -28,6 +28,9 @@ SIGN_KEYCHAIN_PASS="$(cat "$HOME/.codex/picker-patch/.keychain-pass" 2>/dev/null
 PATTERNS=('a.useHiddenModels&&i!==`amazonBedrock`' 'i.useHiddenModels&&r!==`amazonBedrock`')
 PATTERN_REGEX='useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*!==|!==[[:space:]]*["`]amazonBedrock["`])'
 PATCHED_REGEX='useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*===|===[[:space:]]*["`]amazonBedrock["`])'
+# 26.1103 浏览器 IPC 修复必须写在 app.asar 的源头。只改
+# plugins/cache/.../.mcp.json 不够：新版每次启动都会重新生成它并把 wrapper 冲掉。
+CUA_PATCHED_MARKER='args:[t+"/w.cjs",h],command:f'
 PATTERN="$PATTERN_REGEX"
 PATCH_FROM='!=='
 PATCH_TO='==='
@@ -76,7 +79,8 @@ get_marker_version() {
 is_patched() {
   local asar="$PATCHED/Contents/Resources/app.asar"
   [ -f "$asar" ] || return 1
-  grep -aqE "$PATCHED_REGEX" "$asar" 2>/dev/null
+  grep -aqE "$PATCHED_REGEX" "$asar" 2>/dev/null &&
+    grep -aqF "$CUA_PATCHED_MARKER" "$asar" 2>/dev/null
 }
 
 # 2026-10-22：副本**体检**。光看 asar 里有没有补丁特征不够 ——
@@ -117,15 +121,14 @@ ensure_cli_symlink() {
 }
 
 ensure_cua_wrapper() {
-  local wrapper_dir="$CODEX_HOME_DIR/cua-wrapper"
-  local wrapper="$wrapper_dir/node-repl-wrapper.mjs"
+  local wrapper="$CODEX_HOME_DIR/w.cjs"
   local patcher="$BASE/scripts/patch-cua-mcp.py"
   local node_bin="$PATCHED/Contents/Resources/cua_node/bin/node"
   local node_repl="$PATCHED/Contents/Resources/cua_node/bin/node_repl"
   local manifest
   local patched=0
 
-  [ -f "$BASE/scripts/cua-node-wrapper.mjs" ] || {
+  [ -f "$BASE/scripts/cua-node-wrapper.cjs" ] || {
     log "WARN: CUA wrapper source missing"
     return 0
   }
@@ -138,8 +141,7 @@ ensure_cua_wrapper() {
     return 0
   }
 
-  mkdir -p "$wrapper_dir"
-  /usr/bin/install -m 600 "$BASE/scripts/cua-node-wrapper.mjs" "$wrapper.tmp"
+  /usr/bin/install -m 600 "$BASE/scripts/cua-node-wrapper.cjs" "$wrapper.tmp"
   mv -f "$wrapper.tmp" "$wrapper"
 
   while IFS= read -r -d '' manifest; do
@@ -151,7 +153,7 @@ ensure_cua_wrapper() {
   done < <(find "$CODEX_HOME_DIR/plugins/cache/openai-bundled/unified-computer-use" \
     -path '*/.mcp.json' -type f -print0 2>/dev/null)
 
-  log "CUA node_repl wrapper installed (manifests checked: $patched)"
+  log "CUA node_repl wrapper installed at $wrapper (manifests checked: $patched)"
 }
 
 build_patched() {
@@ -330,7 +332,15 @@ P3_OLD = b'J(`min-w-0 text-xs leading-dense text-tertiary`,F?`whitespace-normal`
 P3_NEW = b'J(`min-w-0 text-xs leading-dense text-tertiary`,F?`truncate`:`truncate`)'
 swap(P3_OLD, P3_NEW + b' ' * (len(P3_OLD) - len(P3_NEW)), expect=(0, 1), name='picker lz-2')
 
-# 2. recompute per-file integrity for every archived file.
+# 2. CUA: the generic node_repl launch config is also the source of cua_repl.
+#    Launch the OpenAI-signed node binary through $CODEX_HOME/w.cjs, then pass
+#    node_repl as its argument. This is a same-length source patch; compressing
+#    Array.from(_) inside the existing spread keeps every asar offset stable.
+CUA_OLD = b'{[`mcp_servers.${s}`]:{args:[],command:h,env:w,...0===_.length?{}:{env_vars:Array.from(_)},startup_timeout_sec:120}}'
+CUA_NEW = b'{[`mcp_servers.${s}`]:{args:[t+"/w.cjs",h],command:f,env:w,...0===_.length?{}:{env_vars:_},startup_timeout_sec:120}}'
+swap(CUA_OLD, CUA_NEW, name='cua signed-node wrapper')
+
+# 3. recompute per-file integrity for every archived file.
 #    Electron's C++ layer FATALs when a file node lacks integrity, so entries
 #    cannot be removed -- but same-size content edits keep block layout stable,
 #    letting us refresh every hash in place (header length unchanged).
@@ -375,7 +385,7 @@ print('per-file integrity recomputed: %d files' % nfiles)
 json.loads(hdr.decode('utf-8'))  # still valid JSON
 buf[hstart:hend] = hdr
 
-# 3. refresh archive-level header hash in Info.plist
+# 4. refresh archive-level header hash in Info.plist
 new_hash = hashlib.sha256(bytes(buf[hstart:hend])).hexdigest()
 with open(plist, 'rb') as f:
     pl = plistlib.load(f)
@@ -384,7 +394,7 @@ with open(plist, 'wb') as f:
     plistlib.dump(pl, f)
 print('header sha256 -> plist: %s...' % new_hash[:16])
 
-# 4. cross-check digest embedded in the framework binary (app 26.930+,
+# 5. cross-check digest embedded in the framework binary (app 26.930+,
 #    Electron >=154): __DATA_CONST,__asar_integrity = 32B sentinel + used +
 #    version + sha256 over sorted key+algorithm+hash triples of the plist
 #    dict. If the plist hash changed but this digest did not,

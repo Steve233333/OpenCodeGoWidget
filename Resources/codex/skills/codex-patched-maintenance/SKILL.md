@@ -530,11 +530,22 @@ self-signed Electron
 
 工程实现：
 
-- `scripts/cua-node-wrapper.mjs`：用 `spawn` 启动 `node_repl` 并透传 stdio/信号；**不能
+- `scripts/cua-node-wrapper.cjs`：用 `spawn` 启动 `node_repl` 并透传 stdio/信号；**不能
   用 `exec`**，否则 wrapper 进程消失，父链又变回原来的错误结构。
 - `scripts/patch-cua-mcp.py`：把
   `~/.codex-deepseek/plugins/cache/openai-bundled/unified-computer-use/<version>/.mcp.json`
   的 `cua_repl` 改为 OpenAI-signed `node → wrapper → node_repl`。
+- **关键持久化**：只改上面的缓存文件不够。26.1103 每次启动都会根据 `app.asar` 里的
+  `early-bootstrap.js` 重新生成 `.mcp.json`，把 wrapper 冲掉。`patch.sh` 必须在 asar 内把
+  116 字节的源片段
+  ```
+  {[`mcp_servers.${s}`]:{args:[],command:h,env:w,...0===_.length?{}:{env_vars:Array.from(_)},startup_timeout_sec:120}}
+  ```
+  等长改成
+  ```
+  {[`mcp_servers.${s}`]:{args:[t+"/w.cjs",h],command:f,env:w,...0===_.length?{}:{env_vars:_},startup_timeout_sec:120}}
+  ```
+  其中 `t=CODEX_HOME`、`f=官方签名 node`、`h=node_repl`。
 - `patch.sh: ensure_cua_wrapper`：重建、`--install` 和 `--auto-update` 时同步 wrapper 与缓存清单。
 - `scripts/test-cua-peer-chain.js`：三层 OpenAI-signed Node 子进程链 + 原生 addon 回归测试。
 
@@ -548,5 +559,7 @@ CUA_PEER_ADDON="$PATCHED/Contents/Resources/native/browser-use-peer-authorizatio
 ```
 
 当前运行中的 MCP server 不会热替换 `.mcp.json`；安装/修复后需重新打开 ChatGPT-Patched，
-或让插件运行时重新加载，再用 `cua.getState()` 验证 `browsers` 不再为空。
+或让插件运行时重新加载，再用 `cua.getState()` 验证 `browsers` 不再为空。若只发布
+`.mcp.json` 修复，重启后问题会复发——必须用 `grep -aqF 'args:[t+"/w.cjs",h],command:f'`
+确认副本的 `app.asar` 本身已带源头补丁。
 

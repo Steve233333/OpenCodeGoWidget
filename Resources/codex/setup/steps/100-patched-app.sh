@@ -39,7 +39,7 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
   sync_newer_file "$RES_DIR/patch/launcher-universal" "$PATCH_BASE/launcher-universal"
   chmod +x "$PATCH_BASE/launcher-universal" 2>/dev/null || true
   chmod 755 "$PATCH_BASE/patch.sh"
-  chmod 755 "$PATCH_BASE/scripts/"*.py "$PATCH_BASE/scripts/"*.js "$PATCH_BASE/scripts/"*.mjs 2>/dev/null || true
+  chmod 755 "$PATCH_BASE/scripts/"*.py "$PATCH_BASE/scripts/"*.js "$PATCH_BASE/scripts/"*.mjs "$PATCH_BASE/scripts/"*.cjs 2>/dev/null || true
   if [[ -n "$PASS" ]]; then
     printf '%s' "$PASS" > "$PASS_FILE"
     chmod 600 "$PASS_FILE"
