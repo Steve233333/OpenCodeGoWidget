@@ -46,6 +46,7 @@ enum ModelRegistry {
         "mimo-v2.5-pro",
         "mimo-v2.5",
         "hy4-preview",
+        "hy4-flash-free",
         "hy3",
         "union-alpha",
         "hy3-preview",

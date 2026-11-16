@@ -163,6 +163,10 @@
   "qwen3.8-flash": [
     "high"
   ],
+  "hy4-flash-free": [
+    "none",
+    "high"
+  ],
   "hy4-preview": [
     "high"
   ],

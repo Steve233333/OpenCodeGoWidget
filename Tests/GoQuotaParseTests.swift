@@ -19,6 +19,7 @@ let fixtureHTML = """
 <tr><td>DeepSeek V4.1 Flash<br><small>4x · 9 月 20 日结束</small></td><td><del>6,500</del><br><strong>26,000</strong></td><td><del>16,250</del><br><strong>65,000</strong></td><td><del>32,500</del><br><strong>130,000</strong></td></tr>
 <tr><td>DeepSeek V4 Flash</td><td>13,000</td><td>32,500</td><td>65,000</td></tr>
 <tr><td>DeepSeek V4 Flash Vision Exp</td><td>6,500</td><td>16,250</td><td>32,500</td></tr>
+<tr><td>Hy4 flash Free</td><td>无限制</td><td>无限制</td><td>无限制</td></tr>
 <tr><td>Hy4 preview</td><td>1,350</td><td>3,380</td><td>6,770</td></tr>
 <tr><td>Hy3</td><td>4,300</td><td>10,750</td><td>21,500</td></tr>
 <tr><td>LongCat-2.0</td><td>11,400</td><td>28,600</td><td>57,200</td></tr>
@@ -60,7 +61,7 @@ func testFixture() {
         check(false, "fixture 应解析成功")
         return
     }
-    check(rows.count == 15, "行数 = 15（实际 \(rows.count)）")
+    check(rows.count == 16, "行数 = 16（实际 \(rows.count)）")
 
     guard let v41 = rows.first(where: { $0.slug == "deepseek-v4.1-flash" }) else {
         check(false, "V4.1 Flash 必须在结果里")
@@ -79,6 +80,7 @@ func testFixture() {
     check(rows.first(where: { $0.slug == "free-model" })?.h5 == nil, "免费行保留且配额为空")
     check(rows.contains(where: { $0.slug == "union-alpha" }), "「无限制」行必须保留（Union Alpha Free）")
     check(rows.first(where: { $0.slug == "union-alpha" })?.monthly == nil, "无限制行配额为空 -> 界面画金条")
+    check(rows.contains(where: { $0.slug == "hy4-flash-free" }), "Hy4 flash Free 必须保留")
     check(rows.first?.h5 == 110, "按 h5 升序排列")
 }
 
@@ -124,6 +126,8 @@ func testLive() {
           "真实页面含 deepseek-v4.1-flash 且有配额值")
     check(rows.contains(where: { $0.slug == "union-alpha" }),
           "真实页面含 union-alpha（限时免费行，slug 不能猜成 union-alpha-free）")
+    check(rows.contains(where: { $0.slug == "hy4-flash-free" }),
+          "真实页面含 hy4-flash-free")
 }
 
 // swiftc 多文件编译时只有 main.swift 允许顶层语句，所以这里用 @main 包一层

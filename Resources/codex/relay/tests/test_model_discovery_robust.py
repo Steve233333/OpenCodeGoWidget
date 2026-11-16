@@ -291,6 +291,46 @@ def t_find_template_fallback():
         tmpl = md.find_template(models, rid)
         assert tmpl is not None
 
+
+def t_hy4_flash_free_metadata():
+    """Hy4 Flash Free 是 text+image、1,048,576、none/high，不能被 generic MiMo 模板带成 audio。"""
+    j = md.load_models_json()
+    models = j.get("models", [])
+    tmpl = md.find_template(models, "hy4-flash-free")
+    assert tmpl and tmpl.get("slug") == "hy4-preview-go", tmpl and tmpl.get("slug")
+    assert md.INPUT_MODALITY_OVERRIDES["hy4-flash-free"] == ["text", "image"]
+    assert md.CONTEXT_OVERRIDES["hy4-flash-free"] == 1048576
+    with tempfile.TemporaryDirectory() as td:
+        old_path = md.REASONING_OVERRIDES
+        override_path = pathlib.Path(td) / "reasoning_overrides.json"
+        override_path.write_text(json.dumps({"hy4-flash-free": ["none", "high"]}))
+        md.REASONING_OVERRIDES = override_path
+        try:
+            entry = md.build_entry(
+                tmpl,
+                "hy4-flash-free",
+                999,
+                modelsdev_map={
+                    "hy4-flash-free": (
+                        1000000,
+                        ["high"],
+                        {"input": ["text", "image", "audio"]},
+                        "Hy4 flash Free",
+                        "opencode-go",
+                    )
+                },
+                is_zen=False,
+            )
+        finally:
+            md.REASONING_OVERRIDES = old_path
+    assert entry["slug"] == "hy4-flash-free-go", entry["slug"]
+    assert entry["display_name"] == "Hy4 Flash Free (Go)", entry["display_name"]
+    assert entry["context_window"] == 1048576, entry["context_window"]
+    assert entry["input_modalities"] == ["text", "image"], entry["input_modalities"]
+    assert [x["effort"] for x in entry["supported_reasoning_levels"]] == ["none", "high"], entry
+    assert entry["default_reasoning_level"] == "none", entry["default_reasoning_level"]
+
+
 # ---------- sync with temp HOME ----------
 
 def _setup_catalog_env(td, models, quota_ids, live=True, pending=None):

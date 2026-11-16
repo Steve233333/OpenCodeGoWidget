@@ -65,6 +65,14 @@ enum GoQuotaRegistry {
             monthly: nil,
             note: "限时免费 · 不限量"
         ),
+        GoQuota(
+            slug: "hy4-flash-free",
+            displayName: "Hy4 Flash Free",
+            h5: nil,
+            weekly: nil,
+            monthly: nil,
+            note: "限时免费 · 不限量"
+        ),
         GoQuota(slug: "kimi-k3", displayName: "Kimi K3", h5: 110, weekly: 250, monthly: 490),
         GoQuota(slug: "qwen3.8-max", displayName: "Qwen3.8 Max", h5: 160, weekly: 400, monthly: 810),
         GoQuota(slug: "grok-4.7", displayName: "Grok 4.7", h5: 169, weekly: 423, monthly: 845),

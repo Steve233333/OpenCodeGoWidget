@@ -2,6 +2,21 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.84 — 适配 Hy4 Flash Free
+
+**新增模型**：OpenCode Go `hy4-flash-free`，本地 slug 为 `hy4-flash-free-go`。
+
+- 元数据：输入 `text + image`、1,048,576 上下文、输出上限 65,536；支持工具调用。
+- 推理档位：`none / high`，默认 `none`；代理与桌面白名单同步。
+- 模板不再让 generic MiMo 模板带错 `audio` 模态；`hy4` 家族优先复用 Hy4 Preview 模板。
+- 增加 `INPUT_MODALITY_OVERRIDES`，models.dev 暂时缺数据时也不会退回错误模态。
+- Widget 配额兜底和模型回退列表加入 `Hy4 Flash Free`。
+
+**验证**：本机 agent-relay 的 Responses 请求返回 `200` 和正文 `OK`；
+function tool 测试返回合法 `function_call`；模型发现鲁棒测试 25/25 通过。
+
+版本 **1.1.11.84 (124)**。
+
 ### v1.1.11.83 — 把 CUA wrapper 固化进 app.asar
 
 **现象**：安装 `1.1.11.82` 并重开副本后，`cua.getState()` 仍返回

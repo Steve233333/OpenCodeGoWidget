@@ -90,6 +90,7 @@ DISPLAY_NAME_OVERRIDES = {
     "muse-spark-1.2-contributor": "Muse Spark 1.2 Contributor",
     "muse-spark-1.3-contributor-free": "Muse Spark 1.3 Contributor Free",
     "hy4-preview": "Hy4-Preview",
+    "hy4-flash-free": "Hy4 Flash Free",
     # 2026-09-22：Codex 桌面端的模型选择器会把**开头的 "GPT-" 吃掉**（models.json 里明明是
     # "GPT-5.6-Luna (Go)"，列表里显示成 "5.6 Luna (Go)"，用户来问"前面的 GPT 去哪了"）。
     # 换成空格写法（和官方文档 "GPT 5.6 Luna" 一致）绕开它的前缀规则。
@@ -118,10 +119,17 @@ MODELSDEV_TTL = 24 * 3600
 # 手工实测过的 context 覆盖（优先于 models.dev；如 hy3 实测 262144，models.dev 写 256000）
 CONTEXT_OVERRIDES = {
     "hy3": 262144,
+    "hy4-flash-free": 1048576,
     # 2026-09-17 union-alpha：网关报错原文 "the maximum context length is 262144 tokens including
     # the completion"（超长输入实测，300k 词被拒）；models.dev 同为 262144 / output 131072，
     # max_tokens 上限实测 131072（"max_tokens exceeds maximum of 131072"）。钉住防止上游元数据漂移。
     "union-alpha": 262144,
+}
+
+# models.dev 的元数据偶尔会晚于网关；新模型先用实测值钉住。Codex 只认
+# text/image/audio，Hy4 Flash Free 官方声明是 text+image（没有 audio）。
+INPUT_MODALITY_OVERRIDES = {
+    "hy4-flash-free": ["text", "image"],
 }
 
 # Codex models.json schema 的 input_modalities 只认这三个（2026-09-05 副本卡 logo 实锤：
@@ -146,6 +154,7 @@ FALLBACK_IDS = [
     "mimo-v2-pro","mimo-v2-omni","mimo-v2.5-pro","mimo-v2.5","hy3","hy3-preview",
     "gpt-5.6-luna","grok-4.5","grok-4.6","muse-spark-1.2-contributor",
     "union-alpha",
+    "hy4-flash-free",
 ]
 
 GO_ALIASES = {
@@ -777,6 +786,8 @@ def find_template(models, remote_id):
     if remote_id.startswith("hy3"):
         # hy3 native responses
         return get("glm-5-go") or models[0]
+    if remote_id.startswith("hy4"):
+        return get("hy4-preview-go") or get("mimo-v2.5-go") or models[0]
     # generic chat-adapted fallback: use mimo template (supports tool call, image, no search)
     return get("mimo-v2.5-go") or get("glm-5-go") or models[0]
 
@@ -901,7 +912,9 @@ def build_entry(template, remote_id, priority, upstream_map=None, modelsdev_map=
         e["max_context_window"] = ctx_final
         e["effective_context_window_percent"] = e.get("effective_context_window_percent", 95)
     # modalities：models.dev 为准，但必须过 Codex 白名单（video/pdf 会炸整个 models.json）
-    san = _sanitize_modalities(md[2]) if md else None
+    san = INPUT_MODALITY_OVERRIDES.get(remote_id) or INPUT_MODALITY_OVERRIDES.get(lookup)
+    if san is None:
+        san = _sanitize_modalities(md[2]) if md else None
     if san:
         e["input_modalities"] = san
     reg = load_reasoning_overrides()
@@ -1077,7 +1090,9 @@ def sync(force=False, dry_run=False):
                 m["max_context_window"] = ctx
                 updated += 1
             # modalities：models.dev 为准，过 Codex 白名单（video/pdf 会炸整个 models.json）
-            san = _sanitize_modalities(md[2]) if md else None
+            san = INPUT_MODALITY_OVERRIDES.get(bare) or INPUT_MODALITY_OVERRIDES.get(lookup)
+            if san is None:
+                san = _sanitize_modalities(md[2]) if md else None
             if san and m.get("input_modalities") != san:
                 m["input_modalities"] = san
                 updated += 1

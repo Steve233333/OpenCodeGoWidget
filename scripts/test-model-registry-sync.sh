@@ -29,6 +29,7 @@ required = {
     'longcat-2.5-free': ['low', 'medium', 'high', 'xhigh', 'max'],
     'beam-free': ['low', 'medium', 'high', 'xhigh', 'max'],
     'minimax-m3.1-flash-free': ['low', 'medium', 'high', 'xhigh', 'max'],
+    'hy4-flash-free': ['none', 'high'],
 }
 bad_required = [(name, levels, registry.get(name)) for name, levels in required.items()
                 if registry.get(name) != levels]

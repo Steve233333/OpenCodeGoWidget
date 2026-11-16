@@ -232,6 +232,10 @@
   "high",
   "max"
  ],
+ "hy4-flash-free": [
+  "none",
+  "high"
+ ],
  "hy4-preview": [
   "high"
  ],
