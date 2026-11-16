@@ -2,6 +2,31 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.85 — 修复副本断网启动回退英文
+
+**现象**：Codex `26.1103.60933` 联网启动时是中文，完全退出后断网再打开就回退英文；
+`localeOverride = "zh-CN"` 与 `Local State` 的 `app_locale=zh-CN` 都没有丢失。
+
+**根因**：语言包加载器读取 Statsig layer `72216192` 的 `enable_i18n` 时默认 `false`，
+而设置页对同一值默认 `true`。离线取不到在线配置时，设置页仍显示中文选项，但加载器不会加载
+本机语言包。对应公开 issue：
+<https://github.com/openai/codex/issues/52471>、
+<https://github.com/openai/codex/issues/24741>。
+
+**修法**：
+
+- 在 `app.asar` 里将语言包加载器的 `get("enable_i18n",!1)` 等长改成
+  `get("enable_i18n",!0)`。
+- 同时兼容旧版本/GitHub 脚本里的反引号写法；两种写法合计必须恰好出现一次。
+- asar 修改继续走现有完整性重算、框架内嵌摘要刷新和稳定证书重签，不绕过 Electron 校验。
+- `is_patched()` 不能只搜 true：设置页本来就有另一处 true，必须同时确认加载器 false 已归零。
+- 门禁新增双引号/反引号等长检查、体检误判检查和目标 JS 语法检查。
+
+**验证**：本机 `app.asar` 目标片段为双引号且恰好 1 处；替换后目标 JS 通过
+`node --check`，`false` 计数 `1→0`。重建后需在不连外网的冷启动中确认主界面显示中文。
+
+版本 **1.1.11.85 (125)**。
+
 ### v1.1.11.84 — 适配 Hy4 Flash Free
 
 **新增模型**：OpenCode Go `hy4-flash-free`，本地 slug 为 `hy4-flash-free-go`。

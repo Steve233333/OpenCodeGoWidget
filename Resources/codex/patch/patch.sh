@@ -31,6 +31,8 @@ PATCHED_REGEX='useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*===|===[
 # 26.1103 浏览器 IPC 修复必须写在 app.asar 的源头。只改
 # plugins/cache/.../.mcp.json 不够：新版每次启动都会重新生成它并把 wrapper 冲掉。
 CUA_PATCHED_MARKER='args:[t+"/w.cjs",h],command:f'
+I18N_TRUE_REGEX='get\(["`]enable_i18n["`],!0\)'
+I18N_FALSE_REGEX='get\(["`]enable_i18n["`],!1\)'
 PATTERN="$PATTERN_REGEX"
 PATCH_FROM='!=='
 PATCH_TO='==='
@@ -80,7 +82,9 @@ is_patched() {
   local asar="$PATCHED/Contents/Resources/app.asar"
   [ -f "$asar" ] || return 1
   grep -aqE "$PATCHED_REGEX" "$asar" 2>/dev/null &&
-    grep -aqF "$CUA_PATCHED_MARKER" "$asar" 2>/dev/null
+    grep -aqF "$CUA_PATCHED_MARKER" "$asar" 2>/dev/null &&
+    grep -aqE "$I18N_TRUE_REGEX" "$asar" 2>/dev/null &&
+    ! grep -aqE "$I18N_FALSE_REGEX" "$asar" 2>/dev/null
 }
 
 # 2026-10-22：副本**体检**。光看 asar 里有没有补丁特征不够 ——
@@ -340,7 +344,25 @@ CUA_OLD = b'{[`mcp_servers.${s}`]:{args:[],command:h,env:w,...0===_.length?{}:{e
 CUA_NEW = b'{[`mcp_servers.${s}`]:{args:[t+"/w.cjs",h],command:f,env:w,...0===_.length?{}:{env_vars:_},startup_timeout_sec:120}}'
 swap(CUA_OLD, CUA_NEW, name='cua signed-node wrapper')
 
-# 3. recompute per-file integrity for every archived file.
+# 3. Offline language: the renderer loader reads enable_i18n with a false
+#    fallback, while the settings picker reads the same flag with true. When
+#    Statsig is unreachable, the saved zh-CN override is ignored and the UI
+#    falls back to English. Flip the loader default only; one byte, same size.
+I18N_QUOTED_OLD = b'get("enable_i18n",!1)'
+I18N_QUOTED_NEW = b'get("enable_i18n",!0)'
+I18N_BACKTICK_OLD = b'get(`enable_i18n`,!1)'
+I18N_BACKTICK_NEW = b'get(`enable_i18n`,!0)'
+quoted_count = buf.count(I18N_QUOTED_OLD)
+backtick_count = buf.count(I18N_BACKTICK_OLD)
+assert quoted_count + backtick_count == 1, (
+    'offline i18n defaults: quoted=%d backtick=%d, expected 1 total'
+    % (quoted_count, backtick_count))
+if quoted_count:
+    swap(I18N_QUOTED_OLD, I18N_QUOTED_NEW, name='offline i18n default (quoted)')
+else:
+    swap(I18N_BACKTICK_OLD, I18N_BACKTICK_NEW, name='offline i18n default (backtick)')
+
+# 4. recompute per-file integrity for every archived file.
 #    Electron's C++ layer FATALs when a file node lacks integrity, so entries
 #    cannot be removed -- but same-size content edits keep block layout stable,
 #    letting us refresh every hash in place (header length unchanged).
@@ -385,7 +407,7 @@ print('per-file integrity recomputed: %d files' % nfiles)
 json.loads(hdr.decode('utf-8'))  # still valid JSON
 buf[hstart:hend] = hdr
 
-# 4. refresh archive-level header hash in Info.plist
+# 5. refresh archive-level header hash in Info.plist
 new_hash = hashlib.sha256(bytes(buf[hstart:hend])).hexdigest()
 with open(plist, 'rb') as f:
     pl = plistlib.load(f)
@@ -394,7 +416,7 @@ with open(plist, 'wb') as f:
     plistlib.dump(pl, f)
 print('header sha256 -> plist: %s...' % new_hash[:16])
 
-# 5. cross-check digest embedded in the framework binary (app 26.930+,
+# 6. cross-check digest embedded in the framework binary (app 26.930+,
 #    Electron >=154): __DATA_CONST,__asar_integrity = 32B sentinel + used +
 #    version + sha256 over sorted key+algorithm+hash triples of the plist
 #    dict. If the plist hash changed but this digest did not,
@@ -433,7 +455,7 @@ PYEOF
     log "ERROR: asar integrity refresh failed, removing broken copy"
     discard_staging "integrity"
   fi
-  log "asar integrity refreshed (picker single-line + per-file recompute + header hash)"
+  log "asar integrity refreshed (picker + CUA + offline i18n + per-file/header hashes)"
 
   # Inject CODEX_HOME so the patched copy uses the isolated data directory.
   if ! /usr/libexec/PlistBuddy -c "Print :LSEnvironment" "$plist" >/dev/null 2>&1; then

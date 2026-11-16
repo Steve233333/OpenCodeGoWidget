@@ -75,6 +75,43 @@ if printf 'wrapper-ok\n' | node "$PATCH_SCRIPTS/cua-node-wrapper.cjs" /bin/cat >
 else
   bad "CJS wrapper 启动/stdio 透传失败"
 fi
+
+# 离线中文：语言包加载器必须把 enable_i18n 的缺省值翻成 true。
+grep -qF 'I18N_TRUE_REGEX=' "$PATCH_SH" \
+  && grep -qF 'I18N_FALSE_REGEX=' "$PATCH_SH" \
+  && grep -qF '! grep -aqE "$I18N_FALSE_REGEX" "$asar"' "$PATCH_SH" \
+  && ok "离线中文体检区分加载器 false 与设置页 true" || bad "离线中文体检会被设置页 true 误判"
+grep -qF 'I18N_QUOTED_OLD = b'"'"'get("enable_i18n",!1)'"'"'' "$PATCH_SH" \
+  && grep -qF 'I18N_QUOTED_NEW = b'"'"'get("enable_i18n",!0)'"'"'' "$PATCH_SH" \
+  && grep -qF 'I18N_BACKTICK_OLD = b'"'"'get(`enable_i18n`,!1)'"'"'' "$PATCH_SH" \
+  && grep -qF 'I18N_BACKTICK_NEW = b'"'"'get(`enable_i18n`,!0)'"'"'' "$PATCH_SH" \
+  && ok "即时语言包加载器兼容双引号/反引号 false→true" || bad "缺离线中文 asar 替换"
+if _i18n_len="$(python3 - "$PATCH_SH" <<'PY'
+import ast, re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+pairs = []
+for old_name, new_name in [
+    ("I18N_QUOTED_OLD", "I18N_QUOTED_NEW"),
+    ("I18N_BACKTICK_OLD", "I18N_BACKTICK_NEW"),
+]:
+    old = re.search(r"^%s = b('(?:[^'\\\\]|\\\\.)*')$" % old_name, text, re.M)
+    new = re.search(r"^%s = b('(?:[^'\\\\]|\\\\.)*')$" % new_name, text, re.M)
+    if not old or not new:
+        raise SystemExit(2)
+    a = ast.literal_eval(old.group(1)).encode()
+    b = ast.literal_eval(new.group(1)).encode()
+    if len(a) != len(b):
+        raise SystemExit(1)
+    pairs.append(f"{len(a)}:{len(b)}")
+print(",".join(pairs))
+raise SystemExit(0)
+PY
+)"; then
+  ok "离线中文两种形态均等长（${_i18n_len}）"
+else
+  bad "离线中文替换长度不一致或定义缺失（${_i18n_len:-parse-error}）"
+fi
+
 grep -qF '"$RES_DIR"/patch/scripts/*' "$ROOT/Resources/codex/setup/steps/100-patched-app.sh" \
   && ok "安装器会把 CUA wrapper 脚本同步进 picker-patch" || bad "安装器漏同步 CUA wrapper 脚本"
 

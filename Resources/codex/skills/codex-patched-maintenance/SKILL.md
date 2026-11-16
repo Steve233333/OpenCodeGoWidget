@@ -563,3 +563,37 @@ CUA_PEER_ADDON="$PATCHED/Contents/Resources/native/browser-use-peer-authorizatio
 `.mcp.json` 修复，重启后问题会复发——必须用 `grep -aqF 'args:[t+"/w.cjs",h],command:f'`
 确认副本的 `app.asar` 本身已带源头补丁。
 
+### 36. 离线启动回退英文：`enable_i18n` 默认值（2026-11-16）
+
+症状：联网启动时中文正常，完全退出后不连外网再打开变成英文；`config.toml` 里
+`localeOverride = "zh-CN"` 和 `Local State` 的 `intl.app_locale=zh-CN` 都还在。
+
+根因：桌面端语言包加载器和执行选择器对同一个 Statsig layer `72216192` 使用了不同默认值：
+
+```js
+// 实际加载语言包
+get("enable_i18n", false)
+// 设置页选择器
+get("enable_i18n", true)
+```
+
+离线时 Statsig 配置不可达，加载器取 `false`，中文语言包根本不会注入。相关公开 issue：
+<https://github.com/openai/codex/issues/52471>、
+<https://github.com/openai/codex/issues/24741>。
+
+修法：在 `app.asar` 中只把语言包加载器的 `false` 改 `true`，等长 1 字节；随后照常重算
+per-file integrity、asar 头哈希、框架内嵌摘要并重签。26.1103 本机实际形态是双引号：
+
+```text
+get("enable_i18n",!1)  ->  get("enable_i18n",!0)
+```
+
+旧版本/GitHub 脚本可能是反引号，所以 `patch.sh` 同时兼容两种；但两者合计必须恰好 1 处。
+
+**体检陷阱**：设置页本身已经有一处 `enable_i18n=!0`，不能只 grep true 判断已修复；
+必须同时满足“ false 为 0、true 至少为 1”。否则旧副本会被误报为完整打补丁。
+
+离线验收：彻底退出副本、断网后重开，检查主界面是否出现中文（例如“新聊天”“设置”），
+并确认 `document.documentElement.lang` 为 `zh-CN`。若仍旧英文，先确认 asar 里目标
+`false` 已消失，再查签名/崩溃报告，不要反复重选语言。
+
