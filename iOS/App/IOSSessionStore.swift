@@ -135,7 +135,7 @@ enum IOSSessionStore {
         _ = WidgetDataStore.wipeUsageCache()
         for key in [
             "go_model_ids", "go_model_ids_date", "zen_model_ids", "zen_model_ids_date",
-            "go_quotas_json_v3", "go_quotas_date_v3", "cachedAccountID", "cachedScopeID",
+            "go_quotas_json_v4", "go_quotas_date_v4", "cachedAccountID", "cachedScopeID",
         ] {
             defaults?.removeObject(forKey: key)
         }

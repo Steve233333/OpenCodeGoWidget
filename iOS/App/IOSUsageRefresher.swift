@@ -214,7 +214,12 @@ final class IOSUsageController: ObservableObject {
             detail: nil
         )
         quotas = GoQuotaRegistry.fallbackQuotas + [
-            GoQuota(slug: "union-alpha", displayName: "Union Alpha Free", h5: nil, weekly: nil, monthly: nil),
+            GoQuota(
+                slug: "union-alpha",
+                displayName: "Union Alpha Free",
+                requests5hByPlan: [:],
+                monthlyUSDByPlan: [:]
+            ),
         ]
         quotaUpdatedAt = Date()
         loading = false

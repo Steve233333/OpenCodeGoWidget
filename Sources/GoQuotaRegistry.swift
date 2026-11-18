@@ -1,13 +1,35 @@
 import Foundation
 import os
 
+enum GoPlan: String, CaseIterable, Identifiable, Codable {
+    case go = "go"
+    case goPlus = "go-plus"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .go: return "Go"
+        case .goPlus: return "Go Plus"
+        }
+    }
+
+    var shortName: String {
+        switch self {
+        case .go: return "Go"
+        case .goPlus: return "Plus"
+        }
+    }
+}
+
 struct GoQuota: Codable, Equatable, Identifiable {
     var id: String { slug }
     let slug: String // e.g. kimi-k3
     let displayName: String // e.g. Kimi K3
-    let h5: Int?
-    let weekly: Int?
-    let monthly: Int?
+    /// 官方 Console 的估算 5 小时请求数，按套餐分开。
+    let requests5hByPlan: [String: Int]
+    /// 官方模型的月度 usage 上限（美元），按套餐分开。
+    let monthlyUSDByPlan: [String: Double]
     /// 官方促销备注（如 "4x · 9 月 20 日结束"）；旧缓存没有这个字段时解码为 nil
     var note: String? = nil
 
@@ -18,12 +40,42 @@ struct GoQuota: Codable, Equatable, Identifiable {
         if head.range(of: #"^[0-9]+(\.[0-9]+)?[xX]$"#, options: .regularExpression) != nil {
             return head.lowercased()
         }
+        let lower = note.lowercased()
+        if lower.contains("limited regions"), lower.contains("limited time") { return "限区限时" }
+        if lower.contains("limited regions") { return "限区" }
+        if lower.contains("limited time") { return "限免" }
         return String(note.prefix(6))
     }
 
-    var h5Display: String { h5.map { Self.fmt($0) } ?? "-" }
-    var weeklyDisplay: String { weekly.map { Self.fmt($0) } ?? "-" }
-    var monthlyDisplay: String { monthly.map { Self.fmt($0) } ?? "-" }
+    var isUnlimited: Bool {
+        requests5hByPlan.isEmpty && monthlyUSDByPlan.isEmpty
+    }
+
+    func requests5h(for plan: GoPlan) -> Int? {
+        requests5hByPlan[plan.rawValue]
+    }
+
+    func monthlyUSD(for plan: GoPlan) -> Double? {
+        monthlyUSDByPlan[plan.rawValue]
+    }
+
+    func requests5hDisplay(for plan: GoPlan) -> String {
+        requests5h(for: plan).map(Self.fmt) ?? "∞"
+    }
+
+    func monthlyDisplay(for plan: GoPlan) -> String {
+        guard let value = monthlyUSD(for: plan) else { return "∞" }
+        return "$" + Self.fmtUSD(value)
+    }
+
+    static func fmtUSD(_ value: Double) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.groupingSeparator = ","
+        f.minimumFractionDigits = value.rounded() == value ? 0 : 2
+        f.maximumFractionDigits = 2
+        return f.string(from: NSNumber(value: value)) ?? String(format: "%.2f", value)
+    }
 
     static func fmt(_ v: Int) -> String {
         let f = NumberFormatter()
@@ -33,81 +85,21 @@ struct GoQuota: Codable, Equatable, Identifiable {
     }
 }
 
-/// 实时同步文档配额表：https://opencode.ai/docs/zh-cn/go/ 表 Model | 每5小时 | 每周 | 每月
+/// 实时同步官方 Console：https://opencode.ai/console/go
+/// 表内同时包含 Go / Go Plus 的 5 小时估算请求和月度美元额度和。
 enum GoQuotaRegistry {
     static let suiteName = PlatformConfig.appGroupID
-    // v2（2026-09-14）：解析器从「纯文本单元格」改成「剥标签 + 取 <strong> 当前值」，
-    // 缓存键一并升级，否则升级后 12h TTL 内还会继续显示缺 V4.1 Flash 的旧列表。
-    // v3（2026-09-17）：免费行判定加上「无限制」（Union Alpha Free 三格都写这个），
-    // 不升 key 的话 12h 内还会继续显示缺 Union 的 v2 缓存。
-    static let cacheKey = "go_quotas_json_v3"
-    static let cacheDateKey = "go_quotas_date_v3"
-    static let ttl: TimeInterval = 12 * 3600 // 文档日更，12h 足够及时
+    // v4（2026-11-18）：官方从 Docs 静态请求表迁到 Console，Go/Go Plus 分额度。
+    // 升 key 会一次性撤掉历史缓存，避免 GLM-5.3 继续显示旧 1,080 次。
+    static let cacheKey = "go_quotas_json_v4"
+    static let cacheDateKey = "go_quotas_date_v4"
+    static let ttl: TimeInterval = 6 * 3600
 
-    /// 兜底名单（离线 / 首装用）：2026-09-17 从实时配额表整表刷新，28 行含
-    /// `deepseek-v4.1-flash`（4x 促销当前值 26,000/65,000/130,000 + 备注）。
-    /// 限时免费那行 9 月已由 `union-alpha` 接手：`ox-alpha-free` 2026-08-28 从 Go 下架（直连 401），
-    /// 它的亮绿配色留给 Union，旧配色只在历史费用里还认得出（见 ModelPalette）。
-    static let fallbackQuotas: [GoQuota] = [
-        GoQuota(
-            slug: "crouton-alpha-free",
-            displayName: "Crouton Alpha Free",
-            h5: nil,
-            weekly: nil,
-            monthly: nil,
-            note: "限时免费 · 不限量"
-        ),
-        GoQuota(
-            slug: "longcat-2.5-free",
-            displayName: "LongCat 2.5 Free",
-            h5: nil,
-            weekly: nil,
-            monthly: nil,
-            note: "限时免费 · 不限量"
-        ),
-        GoQuota(
-            slug: "hy4-flash-free",
-            displayName: "Hy4 Flash Free",
-            h5: nil,
-            weekly: nil,
-            monthly: nil,
-            note: "限时免费 · 不限量"
-        ),
-        GoQuota(slug: "kimi-k3", displayName: "Kimi K3", h5: 110, weekly: 250, monthly: 490),
-        GoQuota(slug: "qwen3.8-max", displayName: "Qwen3.8 Max", h5: 160, weekly: 400, monthly: 810),
-        GoQuota(slug: "grok-4.7", displayName: "Grok 4.7", h5: 169, weekly: 423, monthly: 845),
-        GoQuota(slug: "grok-4.6", displayName: "Grok 4.6", h5: 169, weekly: 423, monthly: 845),
-        GoQuota(slug: "qwen3.7-max", displayName: "Qwen3.7 Max", h5: 170, weekly: 420, monthly: 840),
-        GoQuota(slug: "glm-5.3", displayName: "GLM-5.3", h5: 220, weekly: 540, monthly: 1080),
-        GoQuota(slug: "glm-5.2", displayName: "GLM-5.2", h5: 880, weekly: 2150, monthly: 4300),
-        GoQuota(slug: "glm-5.1", displayName: "GLM-5.1", h5: 880, weekly: 2150, monthly: 4300),
-        GoQuota(slug: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", h5: 1050, weekly: 2600, monthly: 5200),
-        GoQuota(slug: "kimi-k2.6", displayName: "Kimi K2.6", h5: 1150, weekly: 2880, monthly: 5750),
-        GoQuota(slug: "kimi-k2.7-code", displayName: "Kimi K2.7 Code", h5: 1350, weekly: 3380, monthly: 6750),
-        GoQuota(slug: "hy4-preview", displayName: "Hy4 preview", h5: 1350, weekly: 3380, monthly: 6770),
-        GoQuota(slug: "gpt-5.6-luna", displayName: "GPT 5.6 Luna", h5: 2050, weekly: 5100, monthly: 10250),
-        GoQuota(slug: "minimax-m3", displayName: "MiniMax M3", h5: 3200, weekly: 8000, monthly: 16000),
-        GoQuota(slug: "mimo-v2.6-pro", displayName: "MiMo-V2.6-Pro", h5: 3250, weekly: 8150, monthly: 16300),
-        GoQuota(slug: "mimo-v2.5-pro", displayName: "MiMo-V2.5-Pro", h5: 3250, weekly: 8150, monthly: 16300),
-        GoQuota(slug: "qwen3.6-plus", displayName: "Qwen3.6 Plus", h5: 3300, weekly: 8200, monthly: 16300),
-        GoQuota(slug: "minimax-m2.7", displayName: "MiniMax M2.7", h5: 3400, weekly: 8500, monthly: 17000),
-        GoQuota(slug: "qwen3.7-plus", displayName: "Qwen3.7 Plus", h5: 4300, weekly: 10800, monthly: 21600),
-        GoQuota(slug: "hy3", displayName: "Hy3", h5: 4300, weekly: 10750, monthly: 21500),
-        GoQuota(slug: "qwen3.8-flash", displayName: "Qwen3.8 Flash", h5: 5400, weekly: 13500, monthly: 27000),
-        GoQuota(slug: "glm-5.3-flash", displayName: "GLM-5.3-Flash", h5: 6320, weekly: 15790, monthly: 31580),
-        GoQuota(slug: "deepseek-v4-flash-vision-exp", displayName: "DeepSeek V4 Flash Vision Exp", h5: 6500, weekly: 16250, monthly: 32500),
-        GoQuota(slug: "longcat-2.0", displayName: "LongCat-2.0", h5: 11400, weekly: 28600, monthly: 57200),
-        GoQuota(slug: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", h5: 13000, weekly: 32500, monthly: 65000),
-        GoQuota(slug: "deepseek-v4.1-flash", displayName: "DeepSeek V4.1 Flash", h5: 26000, weekly: 65000, monthly: 130000, note: "4x · 9 月 20 日结束"),
-        GoQuota(slug: "mimo-v2.6-flash", displayName: "MiMo-V2.6-Flash", h5: 30100, weekly: 75200, monthly: 150400),
-        GoQuota(slug: "mimo-v2.5", displayName: "MiMo-V2.5", h5: 30100, weekly: 75200, monthly: 150400),
-        GoQuota(slug: "muse-spark-1.3-contributor", displayName: "Muse Spark 1.3 Contributor", h5: 45300, weekly: 113300, monthly: 226600),
-        GoQuota(slug: "muse-spark-1.2-contributor", displayName: "Muse Spark 1.2 Contributor", h5: 45300, weekly: 113300, monthly: 226600),
-    ]
+    /// 离线 / 首装快照。联网后由 Console 整表替换。
+    static let fallbackQuotas: [GoQuota] = GoQuotaFallback.all
 
     private static let logger = Logger(subsystem: "com.steve233.opencodego", category: "GoQuota")
-    private static let cnURL = URL(string: "https://opencode.ai/docs/zh-cn/go/")!
-    private static let enURL = URL(string: "https://opencode.ai/docs/go/")!
+    private static let consoleURL = URL(string: "https://opencode.ai/console/go")!
 
     // MARK: Cache
 
@@ -138,13 +130,10 @@ enum GoQuotaRegistry {
     // MARK: Remote
 
     static func fetchRemote() async -> [GoQuota]? {
-        let urls = [cnURL, enURL]
-        for url in urls {
-            if let q = await fetchFrom(url: url), !q.isEmpty {
-                return q
-            }
+        if let q = await fetchFrom(url: consoleURL), !q.isEmpty {
+            return q
         }
-        logger.warning("GoQuota fetchRemote both cn/en failed")
+        logger.warning("GoQuota fetchRemote console failed")
         return nil
     }
 
@@ -169,6 +158,18 @@ enum GoQuotaRegistry {
         return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { m in
             guard m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: text) else { return nil }
             return String(text[r])
+        }
+    }
+
+    static func rawMatches(in text: String, pattern: String) -> [[String]] {
+        guard let regex = try? NSRegularExpression(pattern: pattern,
+                                                   options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return [] }
+        let ns = text as NSString
+        return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap { m in
+            (1..<m.numberOfRanges).compactMap { idx in
+                guard let r = Range(m.range(at: idx), in: text) else { return nil }
+                return String(text[r])
+            }
         }
     }
 
@@ -216,14 +217,113 @@ enum GoQuotaRegistry {
         return plainText(cell)
     }
 
-    /// 解析文档配额表：Model | 每5小时 | 每周 | 每月
+    /// 解析官方 Console（当前真源）或旧 Docs 表（兼容历史 fixture）。
+    ///
+    /// Console 页面无需登录即可拿到隐藏的全部模型行：
+    /// `Model | Relative request allowances | Est. requests / 5 hr | Monthly limit`
+    /// 其中请求和月额度都按 `data-plan="go"` / `"go-plus"` 分列。
+    static func parse(html: String) -> [GoQuota]? {
+        if html.contains("data-allowance-type=\"requests\""), html.contains("data-plan=\"go-plus\"") {
+            return parseConsole(html: html)
+        }
+        return parseLegacyDocs(html: html)
+    }
+
+    private static func parseConsole(html: String) -> [GoQuota]? {
+        let rowMatches = rawMatches(
+            in: html,
+            pattern: #"<tr\b[^>]*data-model="([^"]+)"[^>]*>(.*?)</tr>"#
+        )
+        guard !rowMatches.isEmpty else { return nil }
+
+        func parseInt(_ s: String) -> Int? {
+            let t = plainText(s)
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: "，", with: "")
+                .replacingOccurrences(of: " ", with: "")
+            return Int(t)
+        }
+
+        func parseUSD(_ s: String) -> Double? {
+            let t = plainText(s)
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: ",", with: "")
+                .replacingOccurrences(of: " ", with: "")
+            return Double(t)
+        }
+
+        func planValues(_ cell: String) -> [String: String] {
+            var out: [String: String] = [:]
+            for pair in rawMatches(
+                in: cell,
+                pattern: #"data-plan="([^"]+)".*?data-layer="current-value"[^>]*>(.*?)</span>"#
+            ) where pair.count >= 2 {
+                out[pair[0]] = plainText(pair[1])
+            }
+            return out
+        }
+
+        var result: [GoQuota] = []
+        for match in rowMatches where match.count >= 2 {
+            let slug = match[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let row = match[1]
+            let names = rawMatches(
+                in: row,
+                pattern: #"data-layer="model-name"[^>]*title="([^"]+)""#
+            )
+            let displayName = names.first?.first.map(plainText)
+                ?? slug.replacingOccurrences(of: "-", with: " ")
+            let note = rawGroups(
+                in: row,
+                pattern: #"data-layer="model-note"[^>]*>(.*?)</span>"#
+            ).first.map(plainText).flatMap { $0.isEmpty ? nil : $0 }
+
+            let requestCell = rawGroups(
+                in: row,
+                pattern: #"<td\b[^>]*data-allowance-type="requests"[^>]*>(.*?)</td>"#
+            ).first ?? ""
+            let usageCell = rawGroups(
+                in: row,
+                pattern: #"<td\b[^>]*data-allowance-type="usage"[^>]*>(.*?)</td>"#
+            ).first ?? ""
+
+            let requestValues = planValues(requestCell)
+            let usageValues = planValues(usageCell)
+            var requests: [String: Int] = [:]
+            var usd: [String: Double] = [:]
+            for plan in GoPlan.allCases {
+                if let raw = requestValues[plan.rawValue], let value = parseInt(raw) {
+                    requests[plan.rawValue] = value
+                }
+                if let raw = usageValues[plan.rawValue], let value = parseUSD(raw) {
+                    usd[plan.rawValue] = value
+                }
+            }
+            result.append(GoQuota(
+                slug: slug,
+                displayName: displayName,
+                requests5hByPlan: requests,
+                monthlyUSDByPlan: usd,
+                note: note
+            ))
+        }
+
+        guard result.count >= 10 else { return nil }
+        return result.sorted {
+            let l = $0.requests5h(for: .go) ?? Int.max
+            let r = $1.requests5h(for: .go) ?? Int.max
+            return l == r ? $0.displayName < $1.displayName : l < r
+        }
+    }
+
+    /// 旧版 Docs 表：Model | 每5小时 | 每周 | 每月。仅为兼容历史 fixture。
     ///
     /// 2026-09-14 事故：官方给 DeepSeek V4.1 Flash 那行加了促销装饰
     /// （名字 `<br><small>4x · 9 月 20 日结束</small>`、数值 `<del>6,500</del><br><strong>26,000</strong>`），
     /// 老实现要求单元格是纯文本（`<td>([^<]+)</td>`）→ 整行匹配失败 → 该行从 widget 列表里消失。
     /// 现在一律「按行取格、剥标签取文本」：名字丢掉 `<br>` 之后的备注，数值取 `<strong>` 的当前值，
     /// 并把备注写进 `note` 供界面显示促销标记。
-    static func parse(html: String) -> [GoQuota]? {
+    private static func parseLegacyDocs(html: String) -> [GoQuota]? {
         let rows = rawGroups(in: html, pattern: #"<tr[^>]*>(.*?)</tr>"#)
         guard !rows.isEmpty else { return nil }
 
@@ -256,15 +356,24 @@ enum GoQuotaRegistry {
             if h5s.contains("$") || ws.contains("$") || ms.contains("$") { continue }
             guard isQuotaCell(h5s), isQuotaCell(ws) else { continue }
 
-            let quota = GoQuota(slug: normalize(name), displayName: name,
-                                h5: parseInt(h5s), weekly: parseInt(ws), monthly: parseInt(ms), note: note)
+            var requests: [String: Int] = [:]
+            if let value = parseInt(h5s) { requests[GoPlan.go.rawValue] = value }
+            let quota = GoQuota(
+                slug: normalize(name),
+                displayName: name,
+                requests5hByPlan: requests,
+                monthlyUSDByPlan: [:],
+                note: note
+            )
             if result.contains(where: { $0.slug == quota.slug }) { continue }
             result.append(quota)
             if result.count >= 40 { break }
         }
         // 需至少 10 行才认为成功，避免误抓小表；不足就返回 nil，调用方继续用缓存
         guard result.count >= 10 else { return nil }
-        return result.sorted { ($0.h5 ?? Int.max) < ($1.h5 ?? Int.max) }
+        return result.sorted {
+            ($0.requests5h(for: .go) ?? Int.max) < ($1.requests5h(for: .go) ?? Int.max)
+        }
     }
 
     static func normalize(_ display: String) -> String {

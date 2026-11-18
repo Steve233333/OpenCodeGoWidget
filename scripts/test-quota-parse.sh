@@ -15,6 +15,7 @@ fi
 echo "==> 配额解析自检（${MODE}）"
 swiftc -O \
   "$ROOT/Sources/PlatformConfig.swift" \
+  "$ROOT/Sources/GoQuotaFallback.swift" \
   "$ROOT/Sources/GoQuotaRegistry.swift" \
   "$ROOT/Tests/GoQuotaParseTests.swift" \
   -o "$TMP/quota_parse_test"

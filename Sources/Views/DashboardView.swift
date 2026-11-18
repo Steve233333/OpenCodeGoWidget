@@ -330,7 +330,7 @@ struct DashboardView: View {
                                 .font(.caption2).foregroundStyle(.secondary)
                             if let e = snap.error { Text(e).font(.caption2).foregroundStyle(.red) }
 
-                            // Go 配额横条图（最底部，实时同步文档配额表，同一行三段分色）
+                            // Go 模型额度（最底部，实时同步官方 Console 的 Go / Go Plus 数据）
                             Divider()
                             GoQuotaChart(quotas: quotas, updatedAt: quotaUpdatedAt)
                                 .id(modelTick) // 随模型列表更新重绘

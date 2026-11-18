@@ -2,31 +2,35 @@ import SwiftUI
 
 struct IOSQuotaPage: View {
     @ObservedObject var usage: IOSUsageController
+    @AppStorage("goQuotaPlan") private var selectedPlanRaw = GoPlan.go.rawValue
 
-    private var sorted: [GoQuota] {
-        usage.quotas.sorted { lhs, rhs in
-            let l = lhs.h5 ?? Int.max
-            let r = rhs.h5 ?? Int.max
-            if l != r { return l < r }
-            return lhs.displayName < rhs.displayName
-        }
+    private var selectedPlan: GoPlan {
+        GoPlan(rawValue: selectedPlanRaw) ?? .go
+    }
+
+    private var planBinding: Binding<GoPlan> {
+        Binding(
+            get: { selectedPlan },
+            set: { selectedPlanRaw = $0.rawValue }
+        )
     }
 
     private var paid: [GoQuota] {
-        sorted.filter { $0.monthly != nil }
+        usage.quotas
+            .filter { !$0.isUnlimited && $0.requests5h(for: selectedPlan) != nil }
+            .sorted {
+                let l = $0.requests5h(for: selectedPlan) ?? Int.max
+                let r = $1.requests5h(for: selectedPlan) ?? Int.max
+                return l == r ? $0.displayName < $1.displayName : l < r
+            }
     }
 
     private var free: [GoQuota] {
-        sorted.filter { $0.monthly == nil }
+        usage.quotas.filter(\.isUnlimited)
     }
 
-    /// 与 Mac 版一致：以最低档为基线，用 log10 拉开低档模型的差异。
-    private var monthlyBaseline: Int {
-        paid.compactMap(\.monthly).filter { $0 > 0 }.min() ?? 490
-    }
-
-    private var monthlyMaximum: Int {
-        paid.compactMap(\.monthly).filter { $0 > 0 }.max() ?? monthlyBaseline
+    private var maximumRequests: Int {
+        paid.compactMap { $0.requests5h(for: selectedPlan) }.max() ?? 1
     }
 
     private var subtitle: String {
@@ -67,32 +71,34 @@ struct IOSQuotaPage: View {
                     )
                 }
 
-                IOSSectionHeader(title: "模型配额") {
-                    HStack(spacing: 9) {
-                        legend("5h", IOSTheme.brand)
-                        legend("周", IOSTheme.lime)
-                        legend("月", IOSTheme.sand)
-                        if !free.isEmpty {
-                            legend("免费", IOSTheme.free)
-                        }
+                IOSSectionHeader(title: "模型配额")
+
+                Picker("套餐", selection: planBinding) {
+                    ForEach(GoPlan.allCases) { plan in
+                        Text(plan.displayName).tag(plan)
                     }
                 }
+                .pickerStyle(.segmented)
 
-                Text("三段条 = 5h / 周 / 月请求数上限；长度为对数刻度。")
+                Text("5 小时请求来自官方 Console 的估算；月额度是当前套餐的美元 usage 上限。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
 
-                if sorted.isEmpty {
+                if paid.isEmpty && free.isEmpty {
                     IOSEmptyState(
                         icon: "list.bullet.rectangle",
                         title: "还没有配额数据",
-                        detail: "下拉刷新后会从 OpenCode 官方文档同步。"
+                        detail: "下拉刷新后会从 OpenCode 官方 Console 同步。"
                     )
                 } else {
                     IOSCard(padding: 0) {
                         VStack(spacing: 0) {
                             ForEach(Array(paid.enumerated()), id: \.offset) { pair in
-                                IOSQuotaModelRow(quota: pair.element, monthlyBaseline: monthlyBaseline, monthlyMaximum: monthlyMaximum)
+                                IOSQuotaModelRow(
+                                    quota: pair.element,
+                                    plan: selectedPlan,
+                                    maximumRequests: maximumRequests
+                                )
                                     .padding(.horizontal, 16)
                                 if pair.offset < paid.count - 1 || !free.isEmpty {
                                     divider
@@ -110,7 +116,7 @@ struct IOSQuotaPage: View {
                     }
                 }
 
-                Text("数据同步自 opencode.ai/docs/zh-cn/go/ 配额表；免费模型和促销倍率以官网为准。")
+                Text("数据同步自 opencode.ai/console/go；Go 与 Go Plus 使用各自额度。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -137,22 +143,12 @@ struct IOSQuotaPage: View {
             .padding(.leading, 16)
     }
 
-    private func legend(_ title: String, _ color: Color) -> some View {
-        HStack(spacing: 3) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            Text(title)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-        }
-    }
 }
 
 struct IOSQuotaModelRow: View {
     let quota: GoQuota
-    let monthlyBaseline: Int
-    let monthlyMaximum: Int
+    let plan: GoPlan
+    let maximumRequests: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -171,19 +167,22 @@ struct IOSQuotaModelRow: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                Text("月 \(GoQuota.fmt(quota.monthly ?? 0))")
+                Text("\(quota.monthlyDisplay(for: plan)) / 月")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
 
-            IOSQuotaBar(quota: quota, monthlyBaseline: monthlyBaseline, monthlyMaximum: monthlyMaximum)
+            IOSQuotaBar(
+                value: quota.requests5h(for: plan) ?? 0,
+                maximum: maximumRequests,
+                tint: plan == .go ? IOSTheme.brand : IOSTheme.warning
+            )
                 .frame(height: 6)
 
             HStack(spacing: 0) {
-                Text("5h \(GoQuota.fmt(quota.h5 ?? 0))")
-                Text(" · 周 \(GoQuota.fmt(quota.weekly ?? 0))")
-                Text(" · 月 \(GoQuota.fmt(quota.monthly ?? 0))")
+                Text("\(quota.requests5hDisplay(for: plan)) 次 / 5h")
+                Text(" · \(quota.monthlyDisplay(for: plan)) / 月")
             }
             .font(.caption2.monospacedDigit())
             .foregroundStyle(.secondary)
@@ -193,52 +192,38 @@ struct IOSQuotaModelRow: View {
         .padding(.vertical, 6)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            "\(quota.displayName)，5 小时 \(GoQuota.fmt(quota.h5 ?? 0))，周 \(GoQuota.fmt(quota.weekly ?? 0))，月 \(GoQuota.fmt(quota.monthly ?? 0))"
+            "\(quota.displayName)，\(plan.displayName)，5 小时估算 \(quota.requests5hDisplay(for: plan)) 次，月额度 \(quota.monthlyDisplay(for: plan))"
         )
     }
 }
 
 struct IOSQuotaBar: View {
-    let quota: GoQuota
-    let monthlyBaseline: Int
-    let monthlyMaximum: Int
+    let value: Int
+    let maximum: Int
+    let tint: Color
 
-    /// Mac 版同款：以最低月配额为基线做 log10，最低保留 12% 可见长度。
-    private var monthlyLength: CGFloat {
-        guard let monthly = quota.monthly, monthly > 0 else { return 0 }
-        guard monthlyMaximum > monthlyBaseline else { return 1 }
-        let value = log10(1 + Double(monthly) / Double(max(1, monthlyBaseline)))
-        let maximum = log10(1 + Double(monthlyMaximum) / Double(max(1, monthlyBaseline)))
-        guard maximum > 0 else { return 1 }
-        return CGFloat(max(0.12, min(1, value / maximum)))
+    private var barLength: CGFloat {
+        guard value > 0, maximum > 0 else { return 0 }
+        let valueLog = log10(1 + Double(value))
+        let maximumLog = log10(1 + Double(maximum))
+        guard maximumLog > 0 else { return 1 }
+        return CGFloat(max(0.04, min(1, valueLog / maximumLog)))
     }
 
     var body: some View {
         GeometryReader { geometry in
-            let totalWidth = geometry.size.width * monthlyLength
-            let monthly = max(1, quota.monthly ?? 1)
-            let h5Width = totalWidth * CGFloat(quota.h5 ?? 0) / CGFloat(monthly)
-            let weeklyOnlyWidth = totalWidth
-                * CGFloat(max(0, (quota.weekly ?? 0) - (quota.h5 ?? 0)))
-                / CGFloat(monthly)
-            let monthlyOnlyWidth = max(0, totalWidth - h5Width - weeklyOnlyWidth)
-
             ZStack(alignment: .leading) {
                 Capsule()
                     .fill(IOSTheme.track)
-                HStack(spacing: 0) {
-                    Rectangle()
-                        .fill(IOSTheme.brand)
-                        .frame(width: h5Width)
-                    Rectangle()
-                        .fill(IOSTheme.lime)
-                        .frame(width: weeklyOnlyWidth)
-                    Rectangle()
-                        .fill(IOSTheme.sand)
-                        .frame(width: monthlyOnlyWidth)
-                }
-                .frame(width: totalWidth, alignment: .leading)
-                .clipShape(Capsule())
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [tint.opacity(0.65), tint],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: max(4, geometry.size.width * barLength))
             }
         }
     }

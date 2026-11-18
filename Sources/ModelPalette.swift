@@ -13,7 +13,7 @@ enum ModelPalette {
     }
 
     /// 2026-09-22（用户要求）：**只有 Go 配额表里有的模型才给区分色**，表外的一律归到灰色「其他」。
-    /// 名单来自 GoQuotaRegistry（opencode.ai/docs/zh-cn/go/ 那张配额表），拿不到时用内置兜底表。
+    /// 名单来自 GoQuotaRegistry（opencode.ai/console/go），拿不到时用内置兜底表。
     static var quotaSlugs: [String] {
         let live = GoQuotaRegistry.cachedSync().map { $0.slug }
         return live.isEmpty ? GoQuotaRegistry.fallbackQuotas.map { $0.slug } : live

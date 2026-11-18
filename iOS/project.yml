@@ -13,8 +13,8 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "18.0"
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_LANGUAGE: zh-Hans
-    CURRENT_PROJECT_VERSION: "18"
-    MARKETING_VERSION: "1.0.17"
+    CURRENT_PROJECT_VERSION: "19"
+    MARKETING_VERSION: "1.0.18"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     CLANG_ENABLE_MODULES: YES
   configs:
@@ -39,6 +39,7 @@ targets:
       - path: ../Sources/ConsoleUsageAPI.swift
       - path: ../Sources/CostCrawler.swift
       - path: ../Sources/GoQuotaChart.swift
+      - path: ../Sources/GoQuotaFallback.swift
       - path: ../Sources/GoQuotaRegistry.swift
       - path: ../Sources/KeyDirectory.swift
       - path: ../Sources/ModelPalette.swift
@@ -67,8 +68,8 @@ targets:
         PRODUCT_NAME: OpenCode Go
         PRODUCT_MODULE_NAME: OpenCodeGoIOS
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.0.17"
-        CURRENT_PROJECT_VERSION: "18"
+        MARKETING_VERSION: "1.0.18"
+        CURRENT_PROJECT_VERSION: "19"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: App/Info.plist
@@ -95,6 +96,7 @@ targets:
       - path: ../Sources/ConsoleUsageAPI.swift
       - path: ../Sources/CostCrawler.swift
       - path: ../Sources/GoQuotaRegistry.swift
+      - path: ../Sources/GoQuotaFallback.swift
       - path: ../Sources/KeyDirectory.swift
       - path: ../Sources/ModelPalette.swift
       - path: ../Sources/ModelRegistry.swift
@@ -116,8 +118,8 @@ targets:
         PRODUCT_NAME: OpenCodeGoWidgetIOSExtension
         PRODUCT_MODULE_NAME: OpenCodeGoWidgetIOSExtension
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.0.17"
-        CURRENT_PROJECT_VERSION: "18"
+        MARKETING_VERSION: "1.0.18"
+        CURRENT_PROJECT_VERSION: "19"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Widget/Info.plist
         CODE_SIGN_ENTITLEMENTS: Widget/OpenCodeGoWidgetIOS.entitlements

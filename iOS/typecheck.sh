@@ -11,6 +11,7 @@ COMMON=(
   "$ROOT/Sources/ChartWindow.swift"
   "$ROOT/Sources/ConsoleUsageAPI.swift"
   "$ROOT/Sources/CostCrawler.swift"
+  "$ROOT/Sources/GoQuotaFallback.swift"
   "$ROOT/Sources/GoQuotaRegistry.swift"
   "$ROOT/Sources/KeyDirectory.swift"
   "$ROOT/Sources/ModelPalette.swift"
