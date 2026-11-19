@@ -64,7 +64,10 @@ struct GoQuotaChart: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 150)
+#if os(macOS)
+                .controlSize(.small)
+#endif
+                .frame(width: 128)
                 Spacer()
                 if let d = updatedAt {
                     Text(d.formatted(date: .omitted, time: .shortened))
