@@ -79,6 +79,7 @@ struct IOSQuotaPage: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
 
                 Text("5 小时请求来自官方 Console 的估算；月额度是当前套餐的美元 usage 上限。")
                     .font(.system(size: 11))

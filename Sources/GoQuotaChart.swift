@@ -63,6 +63,7 @@ struct GoQuotaChart: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .frame(width: 150)
                 Spacer()
                 if let d = updatedAt {
