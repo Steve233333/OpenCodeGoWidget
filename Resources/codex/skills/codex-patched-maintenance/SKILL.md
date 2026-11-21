@@ -665,5 +665,13 @@ from thread_items where thread_id='...' and item_type='agentMessage';
 普通消息不带 phase、冒号前缀不会被永久扣住）。旧会话里已经落库的原文不会自动改写，
 新消息才生效。
 
+补充（同日第二次）：Go 模型实际可能走**直通 Responses**（relay 日志 `bridge=None`），
+根本不经过 chat 桥，phase 仍为空。所以 `patch.sh` 另加 3b 段，直接去掉 App 解析器的
+`phase==="commentary"` 门禁：`JtSC` 对普通文本返回 undefined，只有整条消息是
+`::browser-complete{...}` 时才会变化；补丁写入稳定标记 `browser-phase-patch` 并纳入体检。
+因为是渲染时解析，**旧会话重新打开/重启后也会变成完成卡片**。relay 的 chat 桥补丁保留，
+覆盖 bridge 链路；两条路径都修才完整。
+
+
 
 

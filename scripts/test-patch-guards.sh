@@ -110,6 +110,63 @@ then
 else
   bad "app.asar CUA 替换回归（变量名适配/作用域/唯一性）"
 fi
+grep -qF "BROWSER_PATCHED_MARKER='browser-phase-patch'" "$PATCH_SH" \
+  && grep -qF 'grep -aqF "$BROWSER_PATCHED_MARKER"' "$PATCH_SH" \
+  && ok "浏览器收尾标记的 phase 门禁补丁已进体检" || bad "缺浏览器收尾标记补丁/体检"
+if python3 - "$PATCH_SH" <<'PY'
+import contextlib, io, re, sys
+text = open(sys.argv[1], encoding='utf-8').read()
+try:
+    block = text[text.index('# 3b. browser-complete'):text.index('# 4. recompute per-file')]
+except ValueError:
+    print('FAIL 找不到 browser-complete 补丁段标记')
+    raise SystemExit(1)
+
+SAMPLE = (b'function o(e,t,n){let i=n?.phase==="commentary"?(0,s._)(e,t):void 0;'
+          b'return null!=i?{content:"",removed:!0,browserCompletion:null!=i.headline}:0}')
+NO_CONSUMER = (b'function o(e,t,n){let i=n?.phase==="commentary"?(0,s._)(e,t):void 0;'
+               b'return 0}')
+
+def run(name, sample, expect_err=None):
+    ns = {'re': re, 'buf': bytearray(sample)}
+    err = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(block, '<browser-block>', 'exec'), ns)
+    except Exception as exc:
+        err = '%s: %s' % (type(exc).__name__, exc)
+    if expect_err:
+        if not err or expect_err not in err:
+            print('FAIL %s: 期望报错含 %r，实际 %r' % (name, expect_err, err))
+            return False
+        print('ok   %s（已拒绝）' % name)
+        return True
+    if err:
+        print('FAIL %s: %s' % (name, err))
+        return False
+    out = bytes(ns['buf'])
+    if len(out) != len(sample):
+        print('FAIL %s: 长度 %d -> %d' % (name, len(sample), len(out)))
+        return False
+    if b'browser-phase-patch' not in out or b'.phase==="commentary"' in out:
+        print('FAIL %s: 门禁没拆掉或标记没写入' % name)
+        return False
+    print('ok   %s' % name)
+    return True
+
+cases = [
+    ('26.1117 门禁形态', SAMPLE, None),
+    ('缺 browserCompletion 消费者', NO_CONSUMER, 'consumer not found'),
+    ('零命中', b'nothing here', 'found 0'),
+    ('重复命中', SAMPLE + SAMPLE, 'found 2'),
+]
+raise SystemExit(0 if all(run(*c) for c in cases) else 1)
+PY
+then
+  ok "app.asar 浏览器完成标记不再受 phase 限制（普通文本不受影响）"
+else
+  bad "app.asar 浏览器完成标记门禁补丁回归"
+fi
 if printf 'wrapper-ok\n' | node "$PATCH_SCRIPTS/cua-node-wrapper.cjs" /bin/cat >"$WORK/cua-wrapper.out" 2>"$WORK/cua-wrapper.err" \
    && grep -qx 'wrapper-ok' "$WORK/cua-wrapper.out"; then
   ok "CJS wrapper 能启动目标并透传 stdio"

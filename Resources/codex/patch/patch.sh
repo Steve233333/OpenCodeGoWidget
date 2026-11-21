@@ -31,6 +31,10 @@ PATCHED_REGEX='useHiddenModels&&[^=!]*(["`]amazonBedrock["`][[:space:]]*===|===[
 # 26.1103 浏览器 IPC 修复必须写在 app.asar 的源头。只改
 # plugins/cache/.../.mcp.json 不够：新版每次启动都会重新生成它并把 wrapper 冲掉。
 CUA_PATCHED_MARKER='args:[t+"/w.cjs",h],command:f'
+# 26.1117 浏览器收尾标记：App 只在 agentMessage.phase=="commentary" 时解析
+# ::browser-complete{...}，而 Go 直通的 Responses 上游不返回 phase，内部标记会
+# 原样显示。把解析门禁去掉（普通文本解析器返回 undefined，不受影响）。
+BROWSER_PATCHED_MARKER='browser-phase-patch'
 I18N_TRUE_REGEX='get\(["`]enable_i18n["`],!0\)'
 I18N_FALSE_REGEX='get\(["`]enable_i18n["`],!1\)'
 PATTERN="$PATTERN_REGEX"
@@ -83,6 +87,7 @@ is_patched() {
   [ -f "$asar" ] || return 1
   grep -aqE "$PATCHED_REGEX" "$asar" 2>/dev/null &&
     grep -aqF "$CUA_PATCHED_MARKER" "$asar" 2>/dev/null &&
+    grep -aqF "$BROWSER_PATCHED_MARKER" "$asar" 2>/dev/null &&
     grep -aqE "$I18N_TRUE_REGEX" "$asar" 2>/dev/null &&
     ! grep -aqE "$I18N_FALSE_REGEX" "$asar" 2>/dev/null
 }
@@ -385,6 +390,30 @@ if quoted_count:
     swap(I18N_QUOTED_OLD, I18N_QUOTED_NEW, name='offline i18n default (quoted)')
 else:
     swap(I18N_BACKTICK_OLD, I18N_BACKTICK_NEW, name='offline i18n default (backtick)')
+
+# 3b. browser-complete: the desktop only parses the CUA completion marker when
+#     the message phase is "commentary". Go/Responses passthrough upstreams omit
+#     phase entirely, so the marker leaked as plain assistant text. Drop the gate
+#     (the parser returns undefined for ordinary text) and plant a stable marker.
+BROWSER_GATE_RE = re.compile(
+    rb'let ([A-Za-z_$][A-Za-z0-9_$]*)=([A-Za-z_$][A-Za-z0-9_$]*)\??\.phase==="commentary"\?'
+    rb'\(0,([A-Za-z_$][A-Za-z0-9_$]*)\._\)\(([A-Za-z_$][A-Za-z0-9_$]*),([A-Za-z_$][A-Za-z0-9_$]*)\):void 0;'
+)
+browser_hits = list(BROWSER_GATE_RE.finditer(buf))
+assert len(browser_hits) == 1, (
+    'browser-complete phase gate: found %d, expected 1' % len(browser_hits))
+browser = browser_hits[0]
+browser_old = browser.group(0)
+assert b'browserCompletion' in buf[browser.end():browser.end() + 400], (
+    'browser-complete phase gate: browserCompletion consumer not found nearby')
+browser_new = b'let %s=(0,%s._)(%s,%s);/*browser-phase-patch*/' % (
+    browser.group(1), browser.group(3), browser.group(4), browser.group(5))
+assert len(browser_new) <= len(browser_old), (
+    'browser-complete phase gate: replacement too long (%d > %d)'
+    % (len(browser_new), len(browser_old)))
+buf[browser.start():browser.end()] = (
+    browser_new + b' ' * (len(browser_old) - len(browser_new)))
+print('browser-complete phase gate removed (parses regardless of phase)')
 
 # 4. recompute per-file integrity for every archived file.
 #    Electron's C++ layer FATALs when a file node lacks integrity, so entries
