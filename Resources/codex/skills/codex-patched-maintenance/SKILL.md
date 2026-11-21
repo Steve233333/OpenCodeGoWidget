@@ -640,4 +640,30 @@ ABORTED:integrity
 教训：asar 里的小写单字母是压缩器产物，**任何跨版本硬编码都可能一夜失效**；
 结构匹配 + 作用域哨兵 + 唯一性断言，比“这版能用”的字面量稳。
 
+### 38. 浏览器收尾标记 `::browser-complete` 原样显示（2026-11-21）
+
+症状：用内置浏览器查完资料，助手回复只剩一行
+`::browser-complete{title="..."}`，没有变成“浏览器已完成”的小卡片，用户也拿不到正文答案。
+
+根因：桌面端只在 `agentMessage.phase === "commentary"` 时解析这个标记；Go/DeepSeek 走
+chat-completions 桥，上游没有 phase 概念，桥接层原先也不补，消息以 `phase:null` 落库，
+App 就把它当普通文本渲染。会话库可直接验证：
+
+```sql
+select json_extract(item_json,'$.phase'), json_extract(item_json,'$.text')
+from thread_items where thread_id='...' and item_type='agentMessage';
+```
+
+修法：
+
+1. `Resources/codex/relay/proxy/bridges_chat.py` 对以 `::browser-complete{` 开头的消息补
+   `phase:"commentary"`（流式 `output_item.added`/`done` 与非流式 JSON 都覆盖）；
+2. 普通消息仍然不带 phase，避免误伤最终回答的分组与 artifact 扫描；
+3. `AGENTS.md` 模板新增“浏览器任务收尾”：标记只是过程评论，发完必须继续给最终回答。
+
+核验：`Resources/codex/relay/tests/test_units.py` 的 4 个用例（流式 phase、非流式 phase、
+普通消息不带 phase、冒号前缀不会被永久扣住）。旧会话里已经落库的原文不会自动改写，
+新消息才生效。
+
+
 

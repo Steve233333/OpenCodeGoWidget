@@ -772,6 +772,62 @@ def t_upstream_opener_chain_follows_system_proxy():
         cfg.urllib.request.getproxies = original
 
 
+# ---------------------------------------------------------------- browser-complete phase
+def _frames(body: bytes):
+    return [json.loads(l[6:]) for l in body.decode().split("\n") if l.startswith("data: ")]
+
+
+def test_browser_complete_marked_commentary():
+    """CUA 收尾标记必须带 phase=commentary，App 才会渲染成完成卡片而不是原文。"""
+    tr = vp.ChatBridgeTranslator("deepseek-v4.1-flash-go")
+    tr.on_created()
+    out = b""
+    for chunk in ["::brow", "ser-complete", '{title="Found both', ' editor interfaces"}']:
+        out += tr.on_content_delta(chunk)
+    out += tr.on_finish("stop", None)
+    frames = _frames(out)
+    added = [f for f in frames if f["type"] == "response.output_item.added"]
+    assert len(added) == 1, added
+    assert added[0]["item"].get("phase") == "commentary", added[0]
+    done = [f for f in frames if f["type"] == "response.output_item.done"
+            and f["item"]["type"] == "message"][0]
+    assert done["item"].get("phase") == "commentary", done
+    text = "".join(f["delta"] for f in frames if f["type"] == "response.output_text.delta")
+    assert text == '::browser-complete{title="Found both editor interfaces"}', text
+
+
+def test_normal_message_has_no_phase():
+    tr = vp.ChatBridgeTranslator("deepseek-v4.1-flash-go")
+    tr.on_created()
+    out = tr.on_content_delta("正常回答") + tr.on_finish("stop", None)
+    frames = _frames(out)
+    added = [f for f in frames if f["type"] == "response.output_item.added"][0]
+    assert "phase" not in added["item"], added
+    done = [f for f in frames if f["type"] == "response.output_item.done"
+            and f["item"]["type"] == "message"][0]
+    assert "phase" not in done["item"], done
+
+
+def test_browser_complete_nonstream_phase():
+    obj = {"choices": [{"message": {"role": "assistant",
+            "content": '::browser-complete{title="Opened both editors"}'},
+            "finish_reason": "stop"}]}
+    rj = vp._build_chat_fallback_json("deepseek-v4.1-flash-go", obj)
+    msg = rj["output"][0]
+    assert msg["type"] == "message" and msg.get("phase") == "commentary", msg
+
+
+def test_colon_prefix_streams_once_disambiguated():
+    """普通文本以冒号开头时只扣到能判断为止，不能一直憋着。"""
+    tr = vp.ChatBridgeTranslator("deepseek-v4.1-flash-go")
+    tr.on_created()
+    held = tr.on_content_delta(":")
+    assert b"output_text.delta" not in held, held
+    out = tr.on_content_delta(":not-a-marker")
+    assert b"output_text.delta" in out, out
+    assert tr.on_finish("stop", None)
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_") or name.startswith("test_"):
         check(name, fn)

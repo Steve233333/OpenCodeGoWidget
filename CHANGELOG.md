@@ -2,6 +2,20 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.92 — 浏览器完成标记不再原样显示
+
+**现象**：用内置浏览器（CUA）查完资料，回复里只剩一行
+`::browser-complete{title="..."}`，没有渲染成“浏览器已完成”卡片，也没有正文答案。
+
+**根因**：桌面端只在 `agentMessage.phase === "commentary"` 时解析这个标记；Go/DeepSeek 走
+chat-completions 桥，上游没有 phase 概念，桥接层也没补，消息以 `phase:null` 落库后就被
+当成普通文本显示。模型这次还把标记当成了最终回答。
+
+**修法**：桥接层对以 `::browser-complete{` 开头的消息补 `phase:"commentary"`（流式 + 非流式
+都覆盖）；`AGENTS.md` 增加规则，要求发完标记后继续给最终回答。
+
+版本 **1.1.11.92**。
+
 ### v1.1.11.91 — 修复档位表重算的并发写失败
 
 **现象**：配置时偶发 `WARN: 档位表重算失败`，`~/.local/share/agent-relay/discovery.err.log`

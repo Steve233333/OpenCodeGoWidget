@@ -31,6 +31,14 @@ from .search_sidecar import (
 # 流式里"疑似 markup 开头"最多扣多久（字节）：超过就认定模型是在说字面量，按正文放出去
 MIMO_MARKUP_HOLD_MAX = 8192
 
+# CUA 浏览器收尾标记（2026-11-21）：
+# Codex 桌面端只在 agentMessage.phase == "commentary" 时才把
+# `::browser-complete{title="..."}` 解析成浏览器完成卡片；chat-completions
+# 上游（DeepSeek/GLM/MiMo 等）没有 phase 概念，桥接层原先也不补，导致这条
+# 标记被当普通正文原样显示。这里对“整条消息以该标记开头”的正文补上
+# commentary，普通消息仍然不带 phase。
+BROWSER_COMPLETE_PREFIX = "::browser-complete{"
+
 
 def _content_parts_to_chat(content):
     """Responses content (str | list of parts) -> chat content (str | list)."""
@@ -289,9 +297,12 @@ def _build_chat_fallback_json(model, obj, effort=None, tool_param_types=None):
     response = _bridge_base_response(model, status="completed")
     items = []
     if text:
-        items.append({"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed",
-                      "role": "assistant",
-                      "content": [{"type": "output_text", "text": text, "annotations": []}]})
+        item = {"id": "msg_" + uuid.uuid4().hex[:24], "type": "message", "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text, "annotations": []}]}
+        if text.startswith(BROWSER_COMPLETE_PREFIX):
+            item["phase"] = "commentary"
+        items.append(item)
     for call in call_list:
         items.append({"id": "fc_" + uuid.uuid4().hex[:24], "type": "function_call", "status": "completed",
                       "call_id": call["id"] or ("call_" + uuid.uuid4().hex[:16]),
@@ -411,6 +422,8 @@ class ChatBridgeTranslator:
                             "output_index": m["index"], "content_index": 0, "part": part})]
         done_item = {"id": m["id"], "type": "message", "status": "completed", "role": "assistant",
                      "content": [part]}
+        if m.get("phase"):
+            done_item["phase"] = m["phase"]
         out.append(self._frame({"type": "response.output_item.done",
                                 "output_index": m["index"], "item": done_item}))
         self.items_done.append(done_item)
@@ -503,6 +516,8 @@ class ChatBridgeTranslator:
                     out += self._emit_text(self.textbuf)
                     self.textbuf = ""
                 break
+            if self._hold_browser_marker_prefix():
+                break
             hold = mimo_markup_hold_len(self.textbuf)
             if hold:
                 emit, self.textbuf = self.textbuf[:-hold], self.textbuf[-hold:]
@@ -516,6 +531,17 @@ class ChatBridgeTranslator:
             break
         return out
 
+    def _hold_browser_marker_prefix(self):
+        """消息还没创建时，如果正文还只是浏览器收尾标记的前缀，先扣住。
+
+        标记最多 18 个字符；一旦确定不是它（或已经凑齐），立刻照常流式发出，
+        不会影响普通回答。这样 `output_item.added` 第一次就能带上正确的 phase。
+        """
+        if self.msg:
+            return False
+        return (len(self.textbuf) < len(BROWSER_COMPLETE_PREFIX)
+                and BROWSER_COMPLETE_PREFIX.startswith(self.textbuf))
+
     def _emit_text(self, text):
         """把一段确认是"正文"的文字吐出去（消息项懒创建）。"""
         if not text:
@@ -523,10 +549,14 @@ class ChatBridgeTranslator:
         out = b""
         if not self.msg:
             mid = "msg_" + uuid.uuid4().hex[:24]
-            self.msg = {"id": mid, "text": "", "index": self.output_index}
+            phase = "commentary" if text.startswith(BROWSER_COMPLETE_PREFIX) else None
+            self.msg = {"id": mid, "text": "", "index": self.output_index, "phase": phase}
+            item = {"id": mid, "type": "message", "status": "in_progress",
+                    "role": "assistant", "content": []}
+            if phase:
+                item["phase"] = phase
             out = self._frame({"type": "response.output_item.added", "output_index": self.output_index,
-                               "item": {"id": mid, "type": "message", "status": "in_progress",
-                                        "role": "assistant", "content": []}})
+                               "item": item})
             out += self._frame({"type": "response.content_part.added", "item_id": mid,
                                 "output_index": self.msg["index"], "content_index": 0,
                                 "part": {"type": "output_text", "text": "", "annotations": []}})

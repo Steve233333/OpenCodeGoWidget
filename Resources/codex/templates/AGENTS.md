@@ -16,3 +16,8 @@ https://carnegieendowment.org/china-financial-markets
 
 ## 自动提交与推送
 每次修改代码后，自动执行 git add -A && git commit -m "<改动的简短描述>" && git push。
+
+## 浏览器任务收尾
+使用 CUA / 内置浏览器完成操作后，按工具说明发送 `::browser-complete{title="..."}` 作为**过程评论**；
+这条标记不是最终回答。发完后必须继续给出用户要的正文答案（或继续下一步工具调用），
+不要把标记当成回复的全部内容。
