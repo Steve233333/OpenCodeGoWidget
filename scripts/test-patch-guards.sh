@@ -49,25 +49,66 @@ done
   && ok "patch/install 都会安装 CUA wrapper" || bad "CUA wrapper 没接入重建安装流程"
 grep -qF 'CUA_PATCHED_MARKER='"'"'args:[t+"/w.cjs",h],command:f'"'"'' "$PATCH_SH" \
   && ok "CUA wrapper 写进 app.asar，而不是只改会被重建的缓存" || bad "CUA 修复仍只改运行时缓存"
-grep -qF 'CUA_OLD = b'"'"'' "$PATCH_SH" \
-  && grep -qF 'CUA_NEW = b'"'"'' "$PATCH_SH" \
-  && ok "app.asar 源配置的等长替换在" || bad "缺 app.asar CUA 源配置替换"
-if _cua_len="$(python3 - "$PATCH_SH" <<'PY'
-import ast, re, sys
+grep -qF 'CUA_RE = re.compile(' "$PATCH_SH" \
+  && grep -qF "b'codexHome:t' in cua_scope" "$PATCH_SH" \
+  && ok "app.asar CUA 源配置按结构匹配并校验作用域" || bad "缺 app.asar CUA 结构匹配/作用域校验"
+if python3 - "$PATCH_SH" <<'PY'
+import contextlib, io, re, sys
+
 text = open(sys.argv[1], encoding='utf-8').read()
-old = re.search(r"^CUA_OLD = b('(?:[^'\\\\]|\\\\.)*')$", text, re.M)
-new = re.search(r"^CUA_NEW = b('(?:[^'\\\\]|\\\\.)*')$", text, re.M)
-if not old or not new:
-    raise SystemExit(2)
-a = ast.literal_eval(old.group(1)).encode()
-b = ast.literal_eval(new.group(1)).encode()
-print(f"{len(a)}:{len(b)}")
-raise SystemExit(0 if len(a) == len(b) else 1)
+try:
+    block = text[text.index('# 2. CUA'):text.index('# 3. Offline language')]
+except ValueError:
+    print('FAIL 找不到 CUA 补丁段标记')
+    raise SystemExit(1)
+
+SCOPE = (b'PO:function({codexCliPath:e,codexHome:t,envVars:n=[],extraEnv:l,'
+         b'nodeModuleDirs:m="",nodePath:f,nodeReplPath:h,platform:g}){')
+BODY = (b'return {[`mcp_servers.${s}`]:{args:[],command:h,env:w,...0===%s.length?'
+        b'{}:{env_vars:Array.from(%s)},startup_timeout_sec:120}}')
+
+def run(name, sample, expect_err=None):
+    ns = {'re': re, 'buf': bytearray(sample)}
+    err = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(block, '<cua-block>', 'exec'), ns)
+    except Exception as exc:
+        err = '%s: %s' % (type(exc).__name__, exc)
+    if expect_err:
+        if not err or expect_err not in err:
+            print('FAIL %s: 期望报错含 %r，实际 %r' % (name, expect_err, err))
+            return False
+        print('ok   %s（已拒绝）' % name)
+        return True
+    if err:
+        print('FAIL %s: %s' % (name, err))
+        return False
+    out = bytes(ns['buf'])
+    if len(out) != len(sample):
+        print('FAIL %s: 长度 %d -> %d' % (name, len(sample), len(out)))
+        return False
+    if b'args:[t+"/w.cjs",h],command:f' not in out:
+        print('FAIL %s: 没写入 wrapper 参数' % name)
+        return False
+    print('ok   %s' % name)
+    return True
+
+cases = [
+    ('26.1011 形态（_）', SCOPE + BODY % (b'_', b'_'), None),
+    ('26.1117 形态（k）', SCOPE + BODY % (b'k', b'k'), None),
+    ('作用域重命名',
+     SCOPE.replace(b'codexHome:t', b'codexHome:q').replace(b'nodePath:f', b'nodePath:j')
+     + BODY % (b'k', b'k'), 'launch scope changed'),
+    ('零命中', b'nothing to see here', 'found 0'),
+    ('重复命中', SCOPE + BODY % (b'k', b'k') + SCOPE + BODY % (b'k', b'k'), 'found 2'),
+]
+raise SystemExit(0 if all(run(*c) for c in cases) else 1)
 PY
-)"; then
-  ok "app.asar CUA 替换等长（${_cua_len}）"
+then
+  ok "app.asar CUA 替换能适配压缩变量名（_ / k），并拒绝作用域漂移"
 else
-  bad "app.asar CUA 替换长度不一致或定义缺失（${_cua_len:-parse-error}）"
+  bad "app.asar CUA 替换回归（变量名适配/作用域/唯一性）"
 fi
 if printf 'wrapper-ok\n' | node "$PATCH_SCRIPTS/cua-node-wrapper.cjs" /bin/cat >"$WORK/cua-wrapper.out" 2>"$WORK/cua-wrapper.err" \
    && grep -qx 'wrapper-ok' "$WORK/cua-wrapper.out"; then

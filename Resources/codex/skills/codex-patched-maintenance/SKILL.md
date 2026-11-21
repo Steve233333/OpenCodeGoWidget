@@ -597,3 +597,47 @@ get("enable_i18n",!1)  ->  get("enable_i18n",!0)
 并确认 `document.documentElement.lang` 为 `zh-CN`。若仍旧英文，先确认 asar 里目标
 `false` 已消失，再查签名/崩溃报告，不要反复重选语言。
 
+### 37. 26.1117 CUA 压缩变量名漂移 → integrity 断言失败（2026-11-21）
+
+症状：官方升到 `26.1117.31558` 后重建，模型 pattern 命中正常，随后停在：
+
+```
+Traceback (most recent call last):
+  ...
+AssertionError: cua signed-node wrapper: found 0, expected (1,)
+ERROR: asar integrity refresh failed, removing broken copy
+ABORTED:integrity
+```
+
+兜底再次把未打补丁的官方原版放到正式路径，配置自检报「没有完成同步」。
+
+根因：CUA（浏览器 IPC）补丁原先硬编码了压缩后的环境变量数组名：
+
+```js
+// 26.1027 及以前
+...0===_.length?{}:{env_vars:Array.from(_)}...
+// 26.1117：同一段逻辑，压缩器把 _ 改成了 k
+...0===k.length?{}:{env_vars:Array.from(k)}...
+```
+
+外层作用域没变：`PO:function({...,codexHome:t,...,nodePath:f,nodeReplPath:h,...})`，
+所以 `args:[t+"/w.cjs",h]` + `command:f` 仍然成立，只有 `_`/`k` 需要自适应。
+
+修法（`Resources/codex/patch/patch.sh` 第 2 段 CUA）：
+
+1. 用结构正则匹配整段，捕获环境变量数组名，回填到 `0===X.length` 与 `Array.from(X)`；
+2. 替换前检查匹配点前 8KB 内仍有 `codexHome:t` 和 `nodePath:f`，否则拒绝猜测；
+3. 仍然要求唯一命中 + 等长替换（偏移不变，per-file integrity 才能原地重算）。
+
+门禁：`scripts/test-patch-guards.sh` 不再比对字面量长度，而是把 patch.sh 里的 CUA 段
+抽出来直接跑 5 个样本：26.1011 形态（`_`）、26.1117 形态（`k`）、作用域重命名（拒绝）、
+零命中（拒绝）、重复命中（拒绝）。
+
+验收：重建日志出现 `asar integrity refreshed`、offset 不变、`patch-state.json`
+版本等于官方版本、`codesign --verify --deep --strict` 通过、进程驻留、asar 中
+`args:[t+"/w.cjs",h],command:f` 恰好 1 处。
+
+教训：asar 里的小写单字母是压缩器产物，**任何跨版本硬编码都可能一夜失效**；
+结构匹配 + 作用域哨兵 + 唯一性断言，比“这版能用”的字面量稳。
+
+

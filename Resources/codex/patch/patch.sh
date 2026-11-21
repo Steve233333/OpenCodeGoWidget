@@ -339,10 +339,34 @@ swap(P3_OLD, P3_NEW + b' ' * (len(P3_OLD) - len(P3_NEW)), expect=(0, 1), name='p
 # 2. CUA: the generic node_repl launch config is also the source of cua_repl.
 #    Launch the OpenAI-signed node binary through $CODEX_HOME/w.cjs, then pass
 #    node_repl as its argument. This is a same-length source patch; compressing
-#    Array.from(_) inside the existing spread keeps every asar offset stable.
-CUA_OLD = b'{[`mcp_servers.${s}`]:{args:[],command:h,env:w,...0===_.length?{}:{env_vars:Array.from(_)},startup_timeout_sec:120}}'
-CUA_NEW = b'{[`mcp_servers.${s}`]:{args:[t+"/w.cjs",h],command:f,env:w,...0===_.length?{}:{env_vars:_},startup_timeout_sec:120}}'
-swap(CUA_OLD, CUA_NEW, name='cua signed-node wrapper')
+#    Array.from(<env list>) inside the existing spread keeps every asar offset
+#    stable. 26.1117 renamed the minified env-list variable (_ -> k), so match
+#    structurally and feed the captured name back instead of hardcoding it.
+#    The wrapper reuses ambient codexHome:t / nodePath:f / nodeReplPath:h, so
+#    verify those two names are still in scope or refuse to guess.
+CUA_RE = re.compile(
+    rb'\{\[`mcp_servers\.\$\{s\}`\]:\{args:\[\],command:([A-Za-z_$][A-Za-z0-9_$]*),env:'
+    rb'([A-Za-z_$][A-Za-z0-9_$]*),\.\.\.0===([A-Za-z_$][A-Za-z0-9_$]*)\.length\?'
+    rb'\{\}:\{env_vars:Array\.from\(\3\)\},startup_timeout_sec:120\}\}'
+)
+cua_hits = list(CUA_RE.finditer(buf))
+assert len(cua_hits) == 1, (
+    'cua signed-node wrapper: found %d, expected 1' % len(cua_hits))
+cua = cua_hits[0]
+cua_old = cua.group(0)
+cua_scope = buf[max(0, cua.start() - 8192):cua.start()]
+assert b'codexHome:t' in cua_scope and b'nodePath:f' in cua_scope, (
+    'cua signed-node wrapper: launch scope changed (codexHome:t / nodePath:f missing)')
+cua_list = cua.group(3)
+cua_new = (cua_old
+           .replace(b'args:[]', b'args:[t+"/w.cjs",h]', 1)
+           .replace(b'command:' + cua.group(1), b'command:f', 1)
+           .replace(b'env_vars:Array.from(' + cua_list + b')', b'env_vars:' + cua_list, 1))
+assert len(cua_old) == len(cua_new), (
+    'cua signed-node wrapper: length %d vs %d' % (len(cua_old), len(cua_new)))
+buf[cua.start():cua.end()] = cua_new
+print('cua signed-node wrapper: 1 occurrence(s) patched (env list var: %s)'
+      % cua_list.decode())
 
 # 3. Offline language: the renderer loader reads enable_i18n with a false
 #    fallback, while the settings picker reads the same flag with true. When
