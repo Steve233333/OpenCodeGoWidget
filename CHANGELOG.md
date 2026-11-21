@@ -2,6 +2,19 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.91 — 修复档位表重算的并发写失败
+
+**现象**：配置时偶发 `WARN: 档位表重算失败`，`~/.local/share/agent-relay/discovery.err.log`
+里反复出现 `FileNotFoundError: .../models.tmp -> .../models.json`。
+
+**根因**：`model_discovery.py` 固定写同一个 `models.tmp`；ensure-relay 与安装器同时触发时，
+先完成的进程把 tmp rename 走，另一个 `replace()` 必然找不到文件。
+
+**修法**：三个原子写点（`models.json` / `reasoning_registry.json` / `config.toml`）统一改用
+`tempfile.mkstemp` 唯一临时文件；新增 4 进程并发写回归测试。
+
+版本 **1.1.11.91**。
+
 ### v1.1.11.90 — 修复官方 26.1117 升级后副本重建中止
 
 **现象**：官方升到 26.1117.31558 后点「配置」，模型补丁命中正常，但 asar 完整性重算抛出

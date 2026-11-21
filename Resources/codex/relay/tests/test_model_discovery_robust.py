@@ -752,6 +752,41 @@ def t_display_name_gpt_prefix_safe():
         assert not name.startswith("GPT-"), f"{rid} 还是 GPT- 开头：{name}"
 
 
+# ---------- 原子写并发（2026-11-21）----------
+
+def t_atomic_write_concurrent_processes():
+    """ensure-relay 和安装器同时触发 model_discovery 时，旧实现固定写 models.tmp：
+    先完成的进程把 tmp rename 走，另一个 replace 直接 FileNotFoundError。
+    现在每次 mkstemp 唯一临时文件，4 个进程并发写也都必须成功且不留垃圾。"""
+    d = tempfile.mkdtemp(prefix="md-atomic-")
+    target = os.path.join(d, "models.json")
+    code = (
+        "import importlib.util, sys\n"
+        "spec = importlib.util.spec_from_file_location('md', sys.argv[1])\n"
+        "md = importlib.util.module_from_spec(spec); spec.loader.exec_module(md)\n"
+        "from pathlib import Path\n"
+        "p = Path(sys.argv[2]); tag = sys.argv[3]\n"
+        "for i in range(30):\n"
+        "    md._atomic_write_text(p, ('%s-%d\\n' % (tag, i)) * 5000)\n"
+    )
+    procs = [subprocess.Popen(
+        [sys.executable, "-c", code, os.path.join(ROOT, "model_discovery.py"), target, tag],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) for tag in ("a", "b", "c", "d")]
+    errs = []
+    for p in procs:
+        _, err = p.communicate(timeout=60)
+        if p.returncode != 0:
+            errs.append(err.decode()[-400:])
+    try:
+        assert not errs, errs
+        data = open(target, encoding="utf-8").read()
+        assert data.startswith(("a-", "b-", "c-", "d-")), data[:20]
+        leftovers = [f for f in os.listdir(d) if f != "models.json"]
+        assert not leftovers, leftovers
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 for name, fn in list(globals().items()):
     if name.startswith("t_"):
         check(name, fn)

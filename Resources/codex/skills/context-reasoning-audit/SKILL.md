@@ -47,3 +47,6 @@ python3 audit.py --fix             # 写入 registry，models.json 随下次 syn
 - `https://opencode.ai/zen/go/v1/models` 只回 `id`，不回 `ctx/档位`，不能作为核对源
 - `上下文` 官方无表，以 `registry` + `1000000/262144` 模板为准
 - `generic high` 为零探针兜底，新模型不在表也先 `high` 单档
+- `model_discovery.py` 的三个写点（models.json / reasoning_registry.json / config.toml）
+  已改用 `tempfile.mkstemp` 唯一临时文件；不要再改回固定 `<name>.tmp`，否则 ensure-relay
+  与安装器并发时会 `FileNotFoundError`（见 `discovery.err.log`）

@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 
 # 2026-09-19：python.org 的 Python 没跑过 "Install Certificates.command" 时没有 CA 根证书，
@@ -284,6 +285,28 @@ def _is_free_val(v):
 
 def _log(msg):
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """原子写，且每次用唯一临时文件。
+
+    2026-11-21：旧写法固定写 `<name>.tmp` 再 rename。ensure-relay 和安装器同时
+    触发 model_discovery 时，先完成的进程会把 tmp rename 走，另一个进程随后
+    `tmp.replace(path)` 必然 FileNotFoundError（discovery.err.log 里的那串
+    models.tmp -> models.json 堆栈）。mkstemp 每次给独立文件名，rename 仍然
+    是原子换入，并发写只会互相覆盖最终内容，不会丢文件。
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
 QUOTA_CACHE_FILE = CACHE_DIR / "go_quota_cache.json"
 # 最近一次成功抓到的配额页（剥标签、只留字母数字的归一化文本）。
@@ -1192,9 +1215,7 @@ def sync(force=False, dry_run=False):
             m["visibility"]="list"
         if bare_zen and bare_zen in zen_bare:
             m["visibility"]="list"
-    tmp = MODELS_JSON.with_suffix(".tmp")
-    tmp.write_text(json.dumps(j, ensure_ascii=False, indent=2) + "\n")
-    tmp.replace(MODELS_JSON)
+    _atomic_write_text(MODELS_JSON, json.dumps(j, ensure_ascii=False, indent=2) + "\n")
     _log(f"wrote {MODELS_JSON} ({len(j['models'])} total) pruned {len(pruned)} added {len(to_add)}")
     return len(to_add)
 
@@ -1256,9 +1277,7 @@ def write_reasoning_registry(models, dry_run=False):
         return len(fresh)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1) + "\n")
-        tmp.replace(path)
+        _atomic_write_text(path, json.dumps(merged, ensure_ascii=False, indent=1) + "\n")
         _log(f"reasoning_registry.json <- 目录生成 {len(fresh)} 条"
              f"（保留历史 {len(merged) - len(fresh)} 条）")
     except Exception as e:
@@ -1334,9 +1353,7 @@ def sync_desktop_whitelist(models, dry_run=False):
     try:
         bak = cfg.parent / f"config.toml.bak.{time.strftime('%Y%m%d%H%M%S')}"
         bak.write_text(text)
-        tmp = cfg.with_suffix(".tmp")
-        tmp.write_text(out)
-        tmp.replace(cfg)
+        _atomic_write_text(cfg, out)
     except Exception as e:
         _log(f"config.toml 写入失败: {e!r}")
         return False
