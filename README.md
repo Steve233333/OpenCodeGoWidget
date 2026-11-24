@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.93.dmg">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.94.dmg">
     <img src="https://img.shields.io/badge/下载-DMG%20安装包-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="DMG">
   </a>
   &nbsp;
-  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.93.zip">
+  <a href="https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.94.zip">
     <img src="https://img.shields.io/badge/下载-ZIP%20免安装-34C759?style=for-the-badge&logo=apple&logoColor=white" alt="ZIP">
   </a>
 </p>
@@ -102,8 +102,8 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 下载直链
 
-- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.93.dmg>
-- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.93.zip>
+- DMG：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.94.dmg>
+- ZIP：<https://github.com/Steve233333/OpenCodeGoWidget/releases/latest/download/OpenCodeGoWidget-1.1.11.94.zip>
 - 历史版本：<https://github.com/Steve233333/OpenCodeGoWidget/releases>
 
 首次打开如果提示「未验证开发者」，右键应用选「打开」即可。
@@ -116,25 +116,32 @@ API Key 存在 macOS Keychain，workspace 凭据存在 App Group 本地存储，
 
 ## 更新日志
 
-> 完整历史（20+ 个版本）见 [CHANGELOG.md](CHANGELOG.md)。这里只列最近三个版本。
+> 完整历史见 [CHANGELOG.md](CHANGELOG.md)。下面列出较新的版本。
+
+### v1.1.11.94 — 修复旧版 Codex 副本重建
+
+`26.1013` 等旧版没有新版 CUA、browser-complete、离线语言源码时，不再把“无需补丁”
+误判成完整性失败；新增补丁代际，同官方版本也会自动重建一次到新脚本。
+
+版本 **1.1.11.94 (194)**。
+
+### v1.1.11.93 — 浏览器完成标记：补齐 Go 直通链路
+
+Go Responses 直通没有 `phase` 时，浏览器完成标记也能正常渲染成卡片。
+
+版本 **1.1.11.93 (193)**。
+
+### v1.1.11.92 — 浏览器完成标记不再原样显示
+
+chat 桥补 `phase:"commentary"`；旧会话重开也会重新渲染完成卡片。
+
+版本 **1.1.11.92 (192)**。
 
 ### v1.1.11.89 — 恢复 macOS 配额倍率可读性
 
 配额条改为“最低模型 = 1×”的相对对数刻度，并直接显示 `×N`、5 小时请求和月额度。
 
 版本 **1.1.11.89 (129)**。
-
-### v1.1.11.88 — 缩小 macOS 套餐切换按钮
-
-Go / Go Plus 改为 compact 控件，宽度从 150 收窄到 128，高度与标题、数据卡对齐。
-
-版本 **1.1.11.88 (128)**。
-
-### v1.1.11.87 — 清理套餐 Picker 的省略号
-
-隐藏 Segment Picker 被挤窄后留下的“套餐”省略号，消除“Go 模型额度”和按钮之间的视觉残线。
-
-版本 **1.1.11.87 (127)**，iOS **1.0.19 (20)**。
 
 ### v1.1.11.86 — Go / Go Plus 配额与真实月额度
 

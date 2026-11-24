@@ -9,6 +9,9 @@ LOG="$BASE/patch.log"
 AGENT_LABEL="com.steve233.codex-picker-patch"
 AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
 CODEX_HOME_DIR="$HOME/.codex-deepseek"
+# 兼容补丁代际号。官方版本号相同不代表现有副本已经包含本轮修法，安装器/--install
+# 用它强制重建一次。以后修改 asar 补丁语义时必须同步递增。
+PATCH_REVISION="20261124.1"
 
 # Self-signed code signing identity (Plan B): stable TCC authorization across
 # rebuilds. Keychain lives at ~/Library/Keychains/codex-signing.keychain-db.
@@ -82,14 +85,19 @@ get_marker_version() {
   fi
 }
 
+get_marker_revision() {
+  if [ -f "$MARKER" ]; then
+    sed -nE 's/.*"patchRevision": *"([^"]*)".*/\1/p' "$MARKER" 2>/dev/null | head -1 || true
+  fi
+}
+
 is_patched() {
   local asar="$PATCHED/Contents/Resources/app.asar"
   [ -f "$asar" ] || return 1
-  grep -aqE "$PATCHED_REGEX" "$asar" 2>/dev/null &&
-    grep -aqF "$CUA_PATCHED_MARKER" "$asar" 2>/dev/null &&
-    grep -aqF "$BROWSER_PATCHED_MARKER" "$asar" 2>/dev/null &&
-    grep -aqE "$I18N_TRUE_REGEX" "$asar" 2>/dev/null &&
-    ! grep -aqE "$I18N_FALSE_REGEX" "$asar" 2>/dev/null
+  # 只有模型可见性是所有支持版本都必须有的核心补丁。CUA / 离线语言 /
+  # browser-complete 是后续版本才出现的兼容补丁；旧版没有对应源码时应明确跳过，
+  # 不能因此把一份健康副本永久判成 unpatched。
+  grep -aqE "$PATCHED_REGEX" "$asar" 2>/dev/null
 }
 
 # 2026-10-22：副本**体检**。光看 asar 里有没有补丁特征不够 ——
@@ -355,23 +363,26 @@ CUA_RE = re.compile(
     rb'\{\}:\{env_vars:Array\.from\(\3\)\},startup_timeout_sec:120\}\}'
 )
 cua_hits = list(CUA_RE.finditer(buf))
-assert len(cua_hits) == 1, (
-    'cua signed-node wrapper: found %d, expected 1' % len(cua_hits))
-cua = cua_hits[0]
-cua_old = cua.group(0)
-cua_scope = buf[max(0, cua.start() - 8192):cua.start()]
-assert b'codexHome:t' in cua_scope and b'nodePath:f' in cua_scope, (
-    'cua signed-node wrapper: launch scope changed (codexHome:t / nodePath:f missing)')
-cua_list = cua.group(3)
-cua_new = (cua_old
-           .replace(b'args:[]', b'args:[t+"/w.cjs",h]', 1)
-           .replace(b'command:' + cua.group(1), b'command:f', 1)
-           .replace(b'env_vars:Array.from(' + cua_list + b')', b'env_vars:' + cua_list, 1))
-assert len(cua_old) == len(cua_new), (
-    'cua signed-node wrapper: length %d vs %d' % (len(cua_old), len(cua_new)))
-buf[cua.start():cua.end()] = cua_new
-print('cua signed-node wrapper: 1 occurrence(s) patched (env list var: %s)'
-      % cua_list.decode())
+assert len(cua_hits) <= 1, (
+    'cua signed-node wrapper: found %d, expected at most 1' % len(cua_hits))
+if not cua_hits:
+    print('cua signed-node wrapper: source pattern not present (older build) - skipped')
+else:
+    cua = cua_hits[0]
+    cua_old = cua.group(0)
+    cua_scope = buf[max(0, cua.start() - 8192):cua.start()]
+    assert b'codexHome:t' in cua_scope and b'nodePath:f' in cua_scope, (
+        'cua signed-node wrapper: launch scope changed (codexHome:t / nodePath:f missing)')
+    cua_list = cua.group(3)
+    cua_new = (cua_old
+               .replace(b'args:[]', b'args:[t+"/w.cjs",h]', 1)
+               .replace(b'command:' + cua.group(1), b'command:f', 1)
+               .replace(b'env_vars:Array.from(' + cua_list + b')', b'env_vars:' + cua_list, 1))
+    assert len(cua_old) == len(cua_new), (
+        'cua signed-node wrapper: length %d vs %d' % (len(cua_old), len(cua_new)))
+    buf[cua.start():cua.end()] = cua_new
+    print('cua signed-node wrapper: 1 occurrence(s) patched (env list var: %s)'
+          % cua_list.decode())
 
 # 3. Offline language: the renderer loader reads enable_i18n with a false
 #    fallback, while the settings picker reads the same flag with true. When
@@ -383,10 +394,12 @@ I18N_BACKTICK_OLD = b'get(`enable_i18n`,!1)'
 I18N_BACKTICK_NEW = b'get(`enable_i18n`,!0)'
 quoted_count = buf.count(I18N_QUOTED_OLD)
 backtick_count = buf.count(I18N_BACKTICK_OLD)
-assert quoted_count + backtick_count == 1, (
-    'offline i18n defaults: quoted=%d backtick=%d, expected 1 total'
+assert quoted_count + backtick_count <= 1, (
+    'offline i18n defaults: quoted=%d backtick=%d, expected at most 1 total'
     % (quoted_count, backtick_count))
-if quoted_count:
+if quoted_count + backtick_count == 0:
+    print('offline i18n default: source pattern not present (older build) - skipped')
+elif quoted_count:
     swap(I18N_QUOTED_OLD, I18N_QUOTED_NEW, name='offline i18n default (quoted)')
 else:
     swap(I18N_BACKTICK_OLD, I18N_BACKTICK_NEW, name='offline i18n default (backtick)')
@@ -400,20 +413,23 @@ BROWSER_GATE_RE = re.compile(
     rb'\(0,([A-Za-z_$][A-Za-z0-9_$]*)\._\)\(([A-Za-z_$][A-Za-z0-9_$]*),([A-Za-z_$][A-Za-z0-9_$]*)\):void 0;'
 )
 browser_hits = list(BROWSER_GATE_RE.finditer(buf))
-assert len(browser_hits) == 1, (
-    'browser-complete phase gate: found %d, expected 1' % len(browser_hits))
-browser = browser_hits[0]
-browser_old = browser.group(0)
-assert b'browserCompletion' in buf[browser.end():browser.end() + 400], (
-    'browser-complete phase gate: browserCompletion consumer not found nearby')
-browser_new = b'let %s=(0,%s._)(%s,%s);/*browser-phase-patch*/' % (
-    browser.group(1), browser.group(3), browser.group(4), browser.group(5))
-assert len(browser_new) <= len(browser_old), (
-    'browser-complete phase gate: replacement too long (%d > %d)'
-    % (len(browser_new), len(browser_old)))
-buf[browser.start():browser.end()] = (
-    browser_new + b' ' * (len(browser_old) - len(browser_new)))
-print('browser-complete phase gate removed (parses regardless of phase)')
+assert len(browser_hits) <= 1, (
+    'browser-complete phase gate: found %d, expected at most 1' % len(browser_hits))
+if not browser_hits:
+    print('browser-complete phase gate: source pattern not present (older build) - skipped')
+else:
+    browser = browser_hits[0]
+    browser_old = browser.group(0)
+    assert b'browserCompletion' in buf[browser.end():browser.end() + 400], (
+        'browser-complete phase gate: browserCompletion consumer not found nearby')
+    browser_new = b'let %s=(0,%s._)(%s,%s);/*browser-phase-patch*/' % (
+        browser.group(1), browser.group(3), browser.group(4), browser.group(5))
+    assert len(browser_new) <= len(browser_old), (
+        'browser-complete phase gate: replacement too long (%d > %d)'
+        % (len(browser_new), len(browser_old)))
+    buf[browser.start():browser.end()] = (
+        browser_new + b' ' * (len(browser_old) - len(browser_new)))
+    print('browser-complete phase gate removed (parses regardless of phase)')
 
 # 4. recompute per-file integrity for every archived file.
 #    Electron's C++ layer FATALs when a file node lacks integrity, so entries
@@ -652,7 +668,8 @@ EOF
   log "swapped staged build into place -> $PATCHED"
   cleanup_backup
 
-  printf '{"sourceVersion":"%s","builtAt":"%s"}\n' "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MARKER"
+  printf '{"sourceVersion":"%s","patchRevision":"%s","builtAt":"%s"}\n' \
+    "$version" "$PATCH_REVISION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MARKER"
   log "marker written: $version"
   # 2026-10-07：离线启动别退回英文 —— 种一份 Chromium locale（账号语言只在联网时可取）
   python3 - "$HOME" << 'PYEOF' || true
@@ -678,13 +695,18 @@ install() {
   # 安装器回退到 --install 就会走进这个分支：日志写 "already patched, skip"、
   # 然后 open 旧副本 —— **假成功**，副本还停在旧版本，用户以为配好了。
   # 现在只要 marker 版本 ≠ 官方版本，就必须重建（运行中则明确报错，绝不静默跳过）。
-  local current marker_ver
+  local current marker_ver marker_rev
   current=$(app_version)
   marker_ver=$(get_marker_version)
-  if [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ] && copy_healthy; then
-    log "already patched at $current, healthy, skip"
+  marker_rev=$(get_marker_revision)
+  if [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ] \
+       && [ "$marker_rev" = "$PATCH_REVISION" ] && copy_healthy; then
+    log "already patched at $current (revision $PATCH_REVISION), healthy, skip"
   else
-    if [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ] && ! copy_healthy; then
+    if [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ] \
+         && [ "$marker_rev" != "$PATCH_REVISION" ]; then
+      log "patch revision mismatch (patched=${marker_rev:-legacy}, required=$PATCH_REVISION) → rebuilding"
+    elif [ -n "$current" ] && [ "$current" != "unknown" ] && [ "$current" = "$marker_ver" ] && ! copy_healthy; then
       log "副本存在但体检不通过（损坏/签名失效/启动器缺失）→ 自动重建修复"
     elif is_patched; then
       log "version mismatch (patched=$marker_ver, source=$current) → rebuilding"
@@ -709,24 +731,25 @@ install() {
 
 auto_update() {
   SILENT=1
-  local current marker_ver
+  local current marker_ver marker_rev
   current=$(app_version)
   marker_ver=$(get_marker_version)
+  marker_rev=$(get_marker_revision)
 
   if [ -z "$current" ] || [ "$current" = "unknown" ]; then
     log "auto-update: cannot read source version, skip"
     exit 0
   fi
-  if [ "$current" = "$marker_ver" ] && is_patched; then
+  if [ "$current" = "$marker_ver" ] && [ "$marker_rev" = "$PATCH_REVISION" ] && copy_healthy; then
     ensure_cua_wrapper
-    log "auto-update: up to date ($current), no action"
+    log "auto-update: up to date ($current, revision $PATCH_REVISION), no action"
     exit 0
   fi
   if patched_running; then
-    log "auto-update: update available ($current vs $marker_ver) but patched copy running, defer"
+    log "auto-update: update available ($current/$PATCH_REVISION vs $marker_ver/${marker_rev:-legacy}) but patched copy running, defer"
     exit 0
   fi
-  log "auto-update: version changed ($marker_ver -> $current), rebuilding"
+  log "auto-update: rebuild needed ($marker_ver/${marker_rev:-legacy} -> $current/$PATCH_REVISION)"
   if build_patched; then
     log "auto-update: rebuilt successfully at $current"
   else
@@ -772,6 +795,7 @@ status() {
     echo "patched copy:  not built"
   fi
   echo "marker:        $(get_marker_version)"
+  echo "patch revision: $(get_marker_revision) (required: $PATCH_REVISION)"
   echo "agent:         $([ -f "$AGENT_PLIST" ] && echo "plist installed" || echo "not installed")"
 }
 

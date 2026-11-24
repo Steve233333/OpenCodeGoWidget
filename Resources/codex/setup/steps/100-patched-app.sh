@@ -48,8 +48,14 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
   # 版本感知重建：避免 --install 的 is_patched 短路
   SRC_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/ChatGPT.app/Contents/Info.plist 2>/dev/null | grep -v "Will Create" || true)"; if [[ -z "$SRC_VER" || "$SRC_VER" == "unknown" ]]; then SRC_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$HOME/Applications/ChatGPT.app/Contents/Info.plist" 2>/dev/null | grep -v "Will Create" || true)"; fi; [[ -z "$SRC_VER" ]] && SRC_VER="unknown"
   MARKER_VER="$(sed -nE 's/.*"sourceVersion": *"([^"]*)".*/\1/p' "$PATCH_BASE/patch-state.json" 2>/dev/null | head -1)"
+  PATCH_REV="$(sed -nE 's/^PATCH_REVISION="([^"]*)".*/\1/p' "$PATCH_BASE/patch.sh" 2>/dev/null | head -1)"
+  MARKER_REV="$(sed -nE 's/.*"patchRevision": *"([^"]*)".*/\1/p' "$PATCH_BASE/patch-state.json" 2>/dev/null | head -1)"
+  [[ -z "$PATCH_REV" ]] && PATCH_REV="unknown"
   NEED_REBUILD=0
   if [[ -z "$MARKER_VER" || "$SRC_VER" != "$MARKER_VER" ]]; then
+    NEED_REBUILD=1
+  fi
+  if [[ -z "$MARKER_REV" || "$MARKER_REV" != "$PATCH_REV" ]]; then
     NEED_REBUILD=1
   fi
   # 注意：必须带括号匹配 "(patched)"，裸 "patched" 会连 "patched copy:" 未 patch 行也命中
@@ -74,26 +80,33 @@ if [[ "$SKIP_PATCH" -eq 0 ]]; then
       # auto-update 在"副本正在运行"时会 defer 并 exit 0，以前这里照样报"已同步"，
       # 用户看着配置成功、副本还是旧版本。
       BUILT_VER="$(sed -nE 's/.*"sourceVersion": *"([^"]*)".*$/\1/p' "$PATCH_BASE/patch-state.json" 2>/dev/null | head -1)"
-      if [[ "$BUILT_VER" = "$SRC_VER" ]]; then
+      BUILT_REV="$(sed -nE 's/.*"patchRevision": *"([^"]*)".*$/\1/p' "$PATCH_BASE/patch-state.json" 2>/dev/null | head -1)"
+      if [[ "$BUILT_VER" = "$SRC_VER" && "$BUILT_REV" = "$PATCH_REV" ]]; then
         PATCH_OK=1
         PATCH_VER_MSG="（${SRC_VER}）"
-        log "ChatGPT-Patched.app 已同步至 $SRC_VER"
+        log "ChatGPT-Patched.app 已同步至 ${SRC_VER}（补丁代际 ${PATCH_REV}）"
       else
-        log "WARN: 重建没有落地（期望 ${SRC_VER}，实际 ${BUILT_VER:-无}）—— 通常是副本还开着阻止了重建"
+        log "WARN: 重建没有落地（期望 ${SRC_VER}/${PATCH_REV}，实际 ${BUILT_VER:-无}/${BUILT_REV:-无}）—— 通常是副本还开着阻止了重建"
         log "      下一步：完全退出 ChatGPT-Patched（⌘Q）后再点一次「配置」"
       fi
     else
       # 回退：auto-update 可能因运行中 defer，尝试 --install（现在它也是版本感知的）
       if bash "$PATCH_BASE/patch.sh" --install; then
-        PATCH_OK=1
-        PATCH_VER_MSG="（${SRC_VER}）"
-        log "ChatGPT-Patched.app 已生成（fallback --install）"
+        BUILT_VER="$(sed -nE 's/.*"sourceVersion": *"([^"]*)".*$/\1/p' "$PATCH_BASE/patch-state.json" 2>/dev/null | head -1)"
+        BUILT_REV="$(sed -nE 's/.*"patchRevision": *"([^"]*)".*$/\1/p' "$PATCH_BASE/patch-state.json" 2>/dev/null | head -1)"
+        if [[ "$BUILT_VER" = "$SRC_VER" && "$BUILT_REV" = "$PATCH_REV" ]]; then
+          PATCH_OK=1
+          PATCH_VER_MSG="（${SRC_VER}）"
+          log "ChatGPT-Patched.app 已生成（fallback --install，补丁代际 ${PATCH_REV}）"
+        else
+          log "WARN: fallback --install 没有写入匹配 marker（实际 ${BUILT_VER:-无}/${BUILT_REV:-无}）"
+        fi
       else
         log "WARN: patch.sh 执行失败，详见 $PATCH_BASE/patch.log"
       fi
     fi
   else
-    log "副本已是最新（${SRC_VER}），跳过重建"
+    log "副本已是最新（${SRC_VER}，补丁代际 ${PATCH_REV}），跳过重建"
     PATCH_OK=1
     PATCH_VER_MSG="（$SRC_VER 已是最新）"
   fi

@@ -51,7 +51,8 @@ grep -qF 'CUA_PATCHED_MARKER='"'"'args:[t+"/w.cjs",h],command:f'"'"'' "$PATCH_SH
   && ok "CUA wrapper 写进 app.asar，而不是只改会被重建的缓存" || bad "CUA 修复仍只改运行时缓存"
 grep -qF 'CUA_RE = re.compile(' "$PATCH_SH" \
   && grep -qF "b'codexHome:t' in cua_scope" "$PATCH_SH" \
-  && ok "app.asar CUA 源配置按结构匹配并校验作用域" || bad "缺 app.asar CUA 结构匹配/作用域校验"
+  && grep -qF "source pattern not present (older build) - skipped" "$PATCH_SH" \
+  && ok "app.asar CUA 源配置按结构匹配；新版补，旧版明确跳过" || bad "缺 app.asar CUA 结构匹配/旧版跳过"
 if python3 - "$PATCH_SH" <<'PY'
 import contextlib, io, re, sys
 
@@ -67,7 +68,7 @@ SCOPE = (b'PO:function({codexCliPath:e,codexHome:t,envVars:n=[],extraEnv:l,'
 BODY = (b'return {[`mcp_servers.${s}`]:{args:[],command:h,env:w,...0===%s.length?'
         b'{}:{env_vars:Array.from(%s)},startup_timeout_sec:120}}')
 
-def run(name, sample, expect_err=None):
+def run(name, sample, expect_err=None, expect_patch=True):
     ns = {'re': re, 'buf': bytearray(sample)}
     err = None
     try:
@@ -88,31 +89,34 @@ def run(name, sample, expect_err=None):
     if len(out) != len(sample):
         print('FAIL %s: 长度 %d -> %d' % (name, len(sample), len(out)))
         return False
-    if b'args:[t+"/w.cjs",h],command:f' not in out:
+    marker = b'args:[t+"/w.cjs",h],command:f'
+    if expect_patch and marker not in out:
         print('FAIL %s: 没写入 wrapper 参数' % name)
         return False
-    print('ok   %s' % name)
+    if not expect_patch and marker in out:
+        print('FAIL %s: 旧版不应凭空写 wrapper 参数' % name)
+        return False
+    print('ok   %s%s' % (name, '' if expect_patch else '（已跳过）'))
     return True
 
 cases = [
     ('26.1011 形态（_）', SCOPE + BODY % (b'_', b'_'), None),
     ('26.1117 形态（k）', SCOPE + BODY % (b'k', b'k'), None),
+    ('旧版源码没有 CUA 配置', b'nothing to see here', None, False),
     ('作用域重命名',
      SCOPE.replace(b'codexHome:t', b'codexHome:q').replace(b'nodePath:f', b'nodePath:j')
      + BODY % (b'k', b'k'), 'launch scope changed'),
-    ('零命中', b'nothing to see here', 'found 0'),
     ('重复命中', SCOPE + BODY % (b'k', b'k') + SCOPE + BODY % (b'k', b'k'), 'found 2'),
 ]
 raise SystemExit(0 if all(run(*c) for c in cases) else 1)
 PY
 then
-  ok "app.asar CUA 替换能适配压缩变量名（_ / k），并拒绝作用域漂移"
+  ok "app.asar CUA：新版适配变量名，旧版跳过，作用域漂移/重复命中仍拒绝"
 else
-  bad "app.asar CUA 替换回归（变量名适配/作用域/唯一性）"
+  bad "app.asar CUA 替换回归（变量名适配/旧版跳过/作用域/唯一性）"
 fi
 grep -qF "BROWSER_PATCHED_MARKER='browser-phase-patch'" "$PATCH_SH" \
-  && grep -qF 'grep -aqF "$BROWSER_PATCHED_MARKER"' "$PATCH_SH" \
-  && ok "浏览器收尾标记的 phase 门禁补丁已进体检" || bad "缺浏览器收尾标记补丁/体检"
+  && ok "浏览器收尾标记的稳定补丁标记仍保留" || bad "缺浏览器收尾标记补丁"
 if python3 - "$PATCH_SH" <<'PY'
 import contextlib, io, re, sys
 text = open(sys.argv[1], encoding='utf-8').read()
@@ -127,7 +131,7 @@ SAMPLE = (b'function o(e,t,n){let i=n?.phase==="commentary"?(0,s._)(e,t):void 0;
 NO_CONSUMER = (b'function o(e,t,n){let i=n?.phase==="commentary"?(0,s._)(e,t):void 0;'
                b'return 0}')
 
-def run(name, sample, expect_err=None):
+def run(name, sample, expect_err=None, expect_patch=True):
     ns = {'re': re, 'buf': bytearray(sample)}
     err = None
     try:
@@ -148,16 +152,20 @@ def run(name, sample, expect_err=None):
     if len(out) != len(sample):
         print('FAIL %s: 长度 %d -> %d' % (name, len(sample), len(out)))
         return False
-    if b'browser-phase-patch' not in out or b'.phase==="commentary"' in out:
+    marker = b'browser-phase-patch'
+    if expect_patch and (marker not in out or b'.phase==="commentary"' in out):
         print('FAIL %s: 门禁没拆掉或标记没写入' % name)
         return False
-    print('ok   %s' % name)
+    if not expect_patch and marker in out:
+        print('FAIL %s: 旧版不应凭空写 phase 补丁' % name)
+        return False
+    print('ok   %s%s' % (name, '' if expect_patch else '（已跳过）'))
     return True
 
 cases = [
     ('26.1117 门禁形态', SAMPLE, None),
+    ('旧版源码没有 phase 门禁', b'nothing here', None, False),
     ('缺 browserCompletion 消费者', NO_CONSUMER, 'consumer not found'),
-    ('零命中', b'nothing here', 'found 0'),
     ('重复命中', SAMPLE + SAMPLE, 'found 2'),
 ]
 raise SystemExit(0 if all(run(*c) for c in cases) else 1)
@@ -177,8 +185,8 @@ fi
 # 离线中文：语言包加载器必须把 enable_i18n 的缺省值翻成 true。
 grep -qF 'I18N_TRUE_REGEX=' "$PATCH_SH" \
   && grep -qF 'I18N_FALSE_REGEX=' "$PATCH_SH" \
-  && grep -qF '! grep -aqE "$I18N_FALSE_REGEX" "$asar"' "$PATCH_SH" \
-  && ok "离线中文体检区分加载器 false 与设置页 true" || bad "离线中文体检会被设置页 true 误判"
+  && grep -qF 'offline i18n default: source pattern not present (older build) - skipped' "$PATCH_SH" \
+  && ok "离线中文：新版补 false→true，旧版没有源码时明确跳过" || bad "离线中文旧版兼容分支缺失"
 grep -qF 'I18N_QUOTED_OLD = b'"'"'get("enable_i18n",!1)'"'"'' "$PATCH_SH" \
   && grep -qF 'I18N_QUOTED_NEW = b'"'"'get("enable_i18n",!0)'"'"'' "$PATCH_SH" \
   && grep -qF 'I18N_BACKTICK_OLD = b'"'"'get(`enable_i18n`,!1)'"'"'' "$PATCH_SH" \
@@ -209,9 +217,160 @@ PY
 else
   bad "离线中文替换长度不一致或定义缺失（${_i18n_len:-parse-error}）"
 fi
+if python3 - "$PATCH_SH" <<'PY'
+import contextlib, io, sys
+
+text = open(sys.argv[1], encoding='utf-8').read()
+try:
+    block = text[text.index('# 3. Offline language'):text.index('# 3b. browser-complete')]
+except ValueError:
+    print('FAIL 找不到离线中文补丁段标记')
+    raise SystemExit(1)
+
+PRELUDE = '''
+def swap(old, new, expect=(1,), name='?'):
+    global buf
+    n = buf.count(old)
+    assert n in expect, '%s: found %d, expected %s' % (name, n, expect)
+    if n:
+        assert len(old) == len(new)
+        buf = buf.replace(old, new)
+    print('%s: %d occurrence(s) patched' % (name, n))
+'''
+
+def run(name, sample, expect_err=None, expect_patch=True):
+    ns = {'buf': bytearray(sample)}
+    err = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(PRELUDE + block, '<i18n-block>', 'exec'), ns)
+    except Exception as exc:
+        err = '%s: %s' % (type(exc).__name__, exc)
+    if expect_err:
+        if not err or expect_err not in err:
+            print('FAIL %s: 期望报错含 %r，实际 %r' % (name, expect_err, err))
+            return False
+        print('ok   %s（已拒绝）' % name)
+        return True
+    if err:
+        print('FAIL %s: %s' % (name, err))
+        return False
+    out = bytes(ns['buf'])
+    changed = b'get("enable_i18n",!0)' in out or b'get(`enable_i18n`,!0)' in out
+    if expect_patch != changed:
+        print('FAIL %s: expect_patch=%s changed=%s' % (name, expect_patch, changed))
+        return False
+    print('ok   %s%s' % (name, '' if expect_patch else '（已跳过）'))
+    return True
+
+cases = [
+    ('旧版无离线语言源码', b'nothing here', None, False),
+    ('双引号 false→true', b'get("enable_i18n",!1)', None, True),
+    ('反引号 false→true', b'get(`enable_i18n`,!1)', None, True),
+    ('重复命中', b'get("enable_i18n",!1)get(`enable_i18n`,!1)', 'expected at most 1'),
+]
+raise SystemExit(0 if all(run(*c) for c in cases) else 1)
+PY
+then
+  ok "离线中文替换行为：旧版跳过、两种新版形态命中、重复命中拒绝"
+else
+  bad "离线中文替换行为回归"
+fi
+
+# 端到端复现“旧版 26.1013”：核心模型/Sparkle 补丁已经命中，但 CUA、phase
+# gate、enable_i18n 这三处新版源码全都不存在。旧脚本会在第一个 assert 直接
+# ABORTED:integrity；新脚本必须逐项打印 skip 并继续完成完整性刷新。
+if python3 - "$PATCH_SH" "$WORK/old-build" <<'PY'
+import contextlib
+import io
+import os
+from pathlib import Path
+import plistlib
+import struct
+import sys
+
+patch_sh = Path(sys.argv[1])
+work = Path(sys.argv[2])
+text = patch_sh.read_text(encoding='utf-8')
+start_marker = "  if ! python3 -u - \"$asar\" \"$plist\" >>\"$LOG\" 2>&1 <<'PYEOF'\n"
+end_marker = "\nPYEOF\n"
+try:
+    start = text.index(start_marker) + len(start_marker)
+    end = text.index(end_marker, start)
+except ValueError:
+    print('FAIL 找不到 asar integrity Python heredoc')
+    raise SystemExit(1)
+code = text[start:end]
+
+app = work / 'ChatGPT-Patched.new'
+contents = app / 'Contents'
+resources = contents / 'Resources'
+resources.mkdir(parents=True)
+asar = resources / 'app.asar'
+plist = contents / 'Info.plist'
+
+# 最小合法 asar：空 files 树，无 per-file integrity；只验证旧版三处可选补丁缺失时
+# integrity 脚本能走完，不再重跑模型/Sparkle 的外层 shell 补丁。
+header = b'{"files":{}}'
+raw = struct.pack('<III', 32, len(header), len(header)) + b'\0' * 4 + header + b'\0' * 32
+asar.write_bytes(raw)
+with plist.open('wb') as fh:
+    plistlib.dump({
+        'CFBundleShortVersionString': '26.1013.40934',
+        'ElectronAsarIntegrity': {
+            'Resources/app.asar': {
+                'algorithm': 'SHA256',
+                'hash': '0' * 64,
+            }
+        },
+    }, fh)
+
+old_argv = sys.argv[:]
+sys.argv = ['-', str(asar), str(plist)]
+out = io.StringIO()
+try:
+    with contextlib.redirect_stdout(out):
+        exec(compile(code, '<asar-integrity>', 'exec'), {})
+finally:
+    sys.argv = old_argv
+
+logged = out.getvalue()
+required_skips = [
+    'cua signed-node wrapper: source pattern not present (older build) - skipped',
+    'offline i18n default: source pattern not present (older build) - skipped',
+    'browser-complete phase gate: source pattern not present (older build) - skipped',
+]
+missing = [line for line in required_skips if line not in logged]
+if missing:
+    print('FAIL 旧版没有明确跳过：%s' % missing)
+    raise SystemExit(1)
+if asar.stat().st_size != len(raw):
+    print('FAIL 旧版 asar 大小被改写')
+    raise SystemExit(1)
+with plist.open('rb') as fh:
+    pl = plistlib.load(fh)
+if pl['ElectronAsarIntegrity']['Resources/app.asar']['hash'] == '0' * 64:
+    print('FAIL plist 的 asar 头哈希没有刷新')
+    raise SystemExit(1)
+print('ok   旧版 26.1013：三处新版补丁缺失时全部 skip，integrity 正常完成')
+PY
+then
+  ok "26.1013 旧版端到端：可选补丁缺失不再误伤完整性刷新"
+else
+  bad "26.1013 旧版端到端回归（可选补丁缺失仍会 ABORTED:integrity）"
+fi
 
 grep -qF '"$RES_DIR"/patch/scripts/*' "$ROOT/Resources/codex/setup/steps/100-patched-app.sh" \
   && ok "安装器会把 CUA wrapper 脚本同步进 picker-patch" || bad "安装器漏同步 CUA wrapper 脚本"
+grep -qF 'PATCH_REV=' "$ROOT/Resources/codex/setup/steps/100-patched-app.sh" \
+  && grep -qF 'MARKER_REV=' "$ROOT/Resources/codex/setup/steps/100-patched-app.sh" \
+  && grep -qF '"$MARKER_REV" != "$PATCH_REV"' "$ROOT/Resources/codex/setup/steps/100-patched-app.sh" \
+  && ok "安装器同版本也会核对补丁代际，旧 marker 不会假跳过" \
+  || bad "安装器没有核对补丁代际"
+grep -qF '文件存在，但补丁未完成' "$ROOT/Resources/codex/setup/steps/130-selfcheck.sh" \
+  && grep -qF "grep -q '(patched)'" "$ROOT/Resources/codex/setup/steps/130-selfcheck.sh" \
+  && ok "配置后自检不再把「文件存在」误报成副本已同步" \
+  || bad "配置后自检仍可能先报 ✅ 再报失败"
 
 # 2026-10-20：`--install` 必须**版本感知**。
 # 事故：官方升级后 --auto-update 因"副本正在运行"defer（exit 0），安装器回退到 --install，
@@ -219,9 +378,12 @@ grep -qF '"$RES_DIR"/patch/scripts/*' "$ROOT/Resources/codex/setup/steps/100-pat
 # 然后 open 旧副本 → **假成功**，副本还停在旧版本。
 grep -qF 'version mismatch (patched=$marker_ver, source=$current) → rebuilding' "$PATCH_SH" \
   && ok "install() 版本感知（marker≠源码版本必须重建）" || bad "install() 又变回「只看 is_patched」的假成功"
-grep -qF 'local current marker_ver' "$PATCH_SH" \
-  && grep -qF '[ "$current" = "$marker_ver" ] && copy_healthy' "$PATCH_SH" \
-  && ok "install() 用的是版本比较 + 体检，而不是单一 is_patched" || bad "install() 缺版本比较/体检"
+grep -qF 'PATCH_REVISION="20261124.1"' "$PATCH_SH" \
+  && grep -qF 'patch revision mismatch' "$PATCH_SH" \
+  && grep -qF '[ "$marker_rev" = "$PATCH_REVISION" ] && copy_healthy' "$PATCH_SH" \
+  && grep -qF '"patchRevision":"%s"' "$PATCH_SH" \
+  && ok "install() 用「官方版本 + 补丁代际 + 体检」判定，旧 marker 会强制重建" \
+  || bad "install() 缺补丁代际判定（同版本可能假跳过）"
 
 # ---------------------------------------------------------------------------
 # ②b 原子重建护栏（2026-10-22）

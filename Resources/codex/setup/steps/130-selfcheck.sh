@@ -72,7 +72,24 @@ fi
 if [[ "$SKIP_PATCH" -eq 1 ]]; then
   log "自检③ 双开副本：已按 --skip-patch 跳过（属预期）"
 elif [[ -d "$HOME/Applications/ChatGPT-Patched.app" ]]; then
-  log "自检③ 双开副本：✅ ~/Applications/ChatGPT-Patched.app 存在"
+  _sc_patch_status="$(bash "$HOME/.codex/picker-patch/patch.sh" --status 2>&1 || true)"
+  _sc_src_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/ChatGPT.app/Contents/Info.plist 2>/dev/null | grep -v 'Will Create' || true)"
+  if [[ -z "$_sc_src_ver" ]]; then
+    _sc_src_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$HOME/Applications/ChatGPT.app/Contents/Info.plist" 2>/dev/null | grep -v 'Will Create' || true)"
+  fi
+  _sc_marker_ver="$(sed -nE 's/.*"sourceVersion": *"([^"]*)".*/\1/p' "$HOME/.codex/picker-patch/patch-state.json" 2>/dev/null | head -1)"
+  _sc_required_rev="$(sed -nE 's/^PATCH_REVISION="([^"]*)".*/\1/p' "$HOME/.codex/picker-patch/patch.sh" 2>/dev/null | head -1)"
+  _sc_marker_rev="$(sed -nE 's/.*"patchRevision": *"([^"]*)".*/\1/p' "$HOME/.codex/picker-patch/patch-state.json" 2>/dev/null | head -1)"
+  if printf '%s\n' "$_sc_patch_status" | grep -q '(patched)' \
+       && [[ -n "$_sc_src_ver" && "$_sc_src_ver" = "$_sc_marker_ver" ]] \
+       && [[ -n "$_sc_required_rev" && "$_sc_required_rev" = "$_sc_marker_rev" ]]; then
+    log "自检③ 双开副本：✅ ${_sc_src_ver}（补丁代际 ${_sc_marker_rev}）"
+  else
+    _sc_fail=$((_sc_fail + 1))
+    log "自检③ 双开副本：❌ 文件存在，但补丁未完成"
+    log "        期望：${_sc_src_ver:-unknown}/${_sc_required_rev:-unknown}；实际：${_sc_marker_ver:-无}/${_sc_marker_rev:-旧版无代际}"
+    log "        下一步：完全退出 ChatGPT-Patched 后重试「配置」；仍失败看 ~/.codex/picker-patch/patch.log 最后 40 行"
+  fi
 else
   _sc_fail=$((_sc_fail + 1))
   log "自检③ 双开副本：❌ 没有 ~/Applications/ChatGPT-Patched.app"

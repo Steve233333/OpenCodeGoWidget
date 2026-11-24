@@ -668,9 +668,60 @@ from thread_items where thread_id='...' and item_type='agentMessage';
 补充（同日第二次）：Go 模型实际可能走**直通 Responses**（relay 日志 `bridge=None`），
 根本不经过 chat 桥，phase 仍为空。所以 `patch.sh` 另加 3b 段，直接去掉 App 解析器的
 `phase==="commentary"` 门禁：`JtSC` 对普通文本返回 undefined，只有整条消息是
-`::browser-complete{...}` 时才会变化；补丁写入稳定标记 `browser-phase-patch` 并纳入体检。
+`::browser-complete{...}` 时才会变化；补丁写入稳定标记 `browser-phase-patch`。
 因为是渲染时解析，**旧会话重新打开/重启后也会变成完成卡片**。relay 的 chat 桥补丁保留，
 覆盖 bridge 链路；两条路径都修才完整。
+
+### 39. 旧版 26.1013 被新版“可选补丁零命中”误杀（2026-11-24，1.1.11.94）
+
+症状：另一台机器官方 Codex 是 `26.1013.40934`。配置日志里模型可见性 pattern 和
+Sparkle feed 都已成功命中，随后却报：
+
+```text
+ERROR: asar integrity refresh failed, removing broken copy
+ABORTED:integrity
+```
+
+外层统一文案很容易误导成 per-file integrity；真正原因在内联 Python 中。当前脚本依次做
+三类版本专属补丁：
+
+1. CUA signed-node wrapper（26.1103+ 才有源码）；
+2. `::browser-complete` phase 门禁（26.1117+ 才有源码）；
+3. 离线语言 `enable_i18n` 默认值。
+
+旧版 asar 这三段都不存在，但脚本全都 `assert count == 1`。第一个
+`cua signed-node wrapper: found 0` 就直接中止，asar 甚至还没写回。证书生成失败并回退
+ad-hoc 是次要问题，不是本次 `ABORTED:integrity` 的原因。
+
+修法：
+
+- 版本专属补丁改为 **0 处明确 skip / 1 处 patch / ≥2 处拒绝**；旧版不能再因“无需修复”
+  而失败；
+- 核心模型可见性 pattern 仍是所有版本都必须恰好 1 处，绝不降级；
+- `patch-state.json` 增加 `patchRevision`。安装器判定条件升级为
+  `官方版本 + 补丁代际 + copy_healthy`，所以官方版本没变、但安装器带来了新 patch.sh 时，
+  旧副本也会强制重建一次；
+- `is_patched` 只要求核心模型补丁，避免旧版永远因为缺少 CUA/browser/i18n marker 被判
+  unpatched；完整新旧兼容由补丁代际和构建成功共同保证；
+- 配置后自检不再以“目录存在”作为 ✅，而会同时核对版本号、补丁代际和 `(patched)`。
+
+定位命令：
+
+```bash
+tail -100 ~/.codex/picker-patch/patch.log
+# 看到 asar integrity 外层错误时，继续往上看第一个 AssertionError；不要先查签名
+```
+
+门禁：
+
+- `scripts/test-patch-guards.sh` 新增最小 `26.1013` asar 端到端样本：CUA、phase、
+  i18n 三处全部缺失时，必须打印三种 skip 并完成 plist 头哈希刷新；
+- CUA / phase 各自覆盖新版命中、旧版跳过、作用域漂移或重复命中拒绝；
+- i18n 覆盖无源码 skip、双引号/反引号命中、重复命中拒绝；
+- 静态断言安装器会核对 `patchRevision`，自检不再把文件存在误报为同步完成。
+
+教训：兼容补丁要区分“核心必修”和“版本专属”。版本专属源码不存在是正常分支，
+不能和“源码存在但重复/作用域漂移”共用同一个 `assert == 1`。
 
 
 
