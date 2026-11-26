@@ -11,7 +11,7 @@ AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
 CODEX_HOME_DIR="$HOME/.codex-deepseek"
 # 兼容补丁代际号。官方版本号相同不代表现有副本已经包含本轮修法，安装器/--install
 # 用它强制重建一次。以后修改 asar 补丁语义时必须同步递增。
-PATCH_REVISION="20261126.1"
+PATCH_REVISION="20261126.2"
 
 # Self-signed code signing identity (Plan B): stable TCC authorization across
 # rebuilds. Keychain lives at ~/Library/Keychains/codex-signing.keychain-db.
@@ -446,6 +446,34 @@ swap(
     FORK_CONFIG_NEW + b' ' * (len(FORK_CONFIG_OLD) - len(FORK_CONFIG_NEW)),
     expect=(0, 1),
     name='fork execution-config fallback',
+)
+
+# The fork path reads the sidebar placement before it sends thread/fork. In an
+# API-key session Desktop may not have evaluated these two sidebar settings yet,
+# so readPlacement() returns not-ready and fork stops before any RPC. Treat an
+# unavailable custom-section preference as "no custom placement", which is the
+# correct common/default behavior. These minified copies use both operand orders.
+FORK_PLACEMENT_RN_OLD = (
+    b'if(void 0===r||void 0===n)return'
+    b'{status:"not-ready",reason:"execution-config-loading"};'
+)
+FORK_PLACEMENT_RN_NEW = b'if(void 0===r||void 0===n)return{status:"ready",placement:null};'
+swap(
+    FORK_PLACEMENT_RN_OLD,
+    FORK_PLACEMENT_RN_NEW + b' ' * (len(FORK_PLACEMENT_RN_OLD) - len(FORK_PLACEMENT_RN_NEW)),
+    expect=(0, 1, 2),
+    name='fork sidebar placement fallback (r/n)',
+)
+FORK_PLACEMENT_NR_OLD = (
+    b'if(void 0===n||void 0===r)return'
+    b'{status:"not-ready",reason:"execution-config-loading"};'
+)
+FORK_PLACEMENT_NR_NEW = b'if(void 0===n||void 0===r)return{status:"ready",placement:null};'
+swap(
+    FORK_PLACEMENT_NR_OLD,
+    FORK_PLACEMENT_NR_NEW + b' ' * (len(FORK_PLACEMENT_NR_OLD) - len(FORK_PLACEMENT_NR_NEW)),
+    expect=(0, 1),
+    name='fork sidebar placement fallback (n/r)',
 )
 
 # 4. recompute per-file integrity for every archived file.

@@ -243,6 +243,66 @@ else
   bad "fork execution-config 回退补丁回归"
 fi
 
+if python3 - "$PATCH_SH" <<'PY'
+import contextlib, io, sys
+
+text = open(sys.argv[1], encoding='utf-8').read()
+block = text[text.index('# 3c. fork execution-config fallback'):text.index('# 4. recompute per-file')]
+PRELUDE = '''
+def swap(old, new, expect=(1,), name='?'):
+    global buf
+    n = buf.count(old)
+    assert n in expect, '%s: found %d, expected %s' % (name, n, expect)
+    if n:
+        assert len(old) == len(new)
+        buf = buf.replace(old, new)
+    print('%s: %d occurrence(s) patched' % (name, n))
+'''
+RN = b'if(void 0===r||void 0===n)return{status:"not-ready",reason:"execution-config-loading"};'
+NR = b'if(void 0===n||void 0===r)return{status:"not-ready",reason:"execution-config-loading"};'
+READY_RN = b'if(void 0===r||void 0===n)return{status:"ready",placement:null};'
+READY_NR = b'if(void 0===n||void 0===r)return{status:"ready",placement:null};'
+
+def run(name, sample, expect_err=None):
+    ns = {'buf': bytearray(sample)}
+    err = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(PRELUDE + block, '<fork-placement>', 'exec'), ns)
+    except Exception as exc:
+        err = '%s: %s' % (type(exc).__name__, exc)
+    if expect_err:
+        if not err or expect_err not in err:
+            print('FAIL %s: 期望报错含 %r，实际 %r' % (name, expect_err, err))
+            return False
+        print('ok   %s（已拒绝）' % name)
+        return True
+    if err:
+        print('FAIL %s: %s' % (name, err))
+        return False
+    out = bytes(ns['buf'])
+    if len(out) != len(sample):
+        print('FAIL %s: 长度 %d -> %d' % (name, len(sample), len(out)))
+        return False
+    ok = RN not in out and NR not in out and READY_RN in out and READY_NR in out
+    if not ok:
+        print('FAIL %s: placement fallback 未全部写入' % name)
+        return False
+    print('ok   %s' % name)
+    return True
+
+cases = [
+    ('两处 r/n + 一处 n/r', RN + b'x' + RN + NR, None),
+    ('重复 r/n 超过上限', RN + RN + RN, 'found 3'),
+]
+raise SystemExit(0 if all(run(*c) for c in cases) else 1)
+PY
+then
+  ok "fork sidebar placement 在 API Key 会话中回退为无自定义分区"
+else
+  bad "fork sidebar placement 回退补丁回归"
+fi
+
 if printf 'wrapper-ok\n' | node "$PATCH_SCRIPTS/cua-node-wrapper.cjs" /bin/cat >"$WORK/cua-wrapper.out" 2>"$WORK/cua-wrapper.err" \
    && grep -qx 'wrapper-ok' "$WORK/cua-wrapper.out"; then
   ok "CJS wrapper 能启动目标并透传 stdio"
@@ -408,6 +468,8 @@ required_skips = [
     'offline i18n default: source pattern not present (older build) - skipped',
     'browser-complete phase gate: source pattern not present (older build) - skipped',
     'fork execution-config fallback: 0 occurrence(s) patched',
+    'fork sidebar placement fallback (r/n): 0 occurrence(s) patched',
+    'fork sidebar placement fallback (n/r): 0 occurrence(s) patched',
 ]
 missing = [line for line in required_skips if line not in logged]
 if missing:
@@ -447,7 +509,7 @@ grep -qF '文件存在，但补丁未完成' "$ROOT/Resources/codex/setup/steps/
 # 然后 open 旧副本 → **假成功**，副本还停在旧版本。
 grep -qF 'version mismatch (patched=$marker_ver, source=$current) → rebuilding' "$PATCH_SH" \
   && ok "install() 版本感知（marker≠源码版本必须重建）" || bad "install() 又变回「只看 is_patched」的假成功"
-grep -qF 'PATCH_REVISION="20261126.1"' "$PATCH_SH" \
+grep -qF 'PATCH_REVISION="20261126.2"' "$PATCH_SH" \
   && grep -qF 'patch revision mismatch' "$PATCH_SH" \
   && grep -qF '[ "$marker_rev" = "$PATCH_REVISION" ] && copy_healthy' "$PATCH_SH" \
   && grep -qF '"patchRevision":"%s"' "$PATCH_SH" \

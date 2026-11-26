@@ -2,6 +2,23 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.96 — 补齐 API Key 副本 fork 的第二条配置路径
+
+**现象**：1.1.11.95 已经替换了 `usePermissionSelection` 的
+`execution-config-loading` 抛错，但重启后分支仍相同失败，且日志中没有发出
+`thread/fork` RPC。
+
+**根因**：fork 在发 RPC 前还会调用 `readPlacement()`。API Key 会话尚未评估
+`sidebarCustomSectionsEnabled` 与 `useAppServerCustomSections` 时，它直接返回
+`{status:"not-ready",reason:"execution-config-loading"}`，父级把该结果包装成
+`AppServerForkNotReadyError`。因此 1.1.11.95 修的是另一条普通消息队列路径。
+
+**修法**：在 app-server-host、early-bootstrap 和 renderer 的三份压缩副本中，
+把“侧栏偏好未加载”回退为 `{status:"ready",placement:null}`，即不使用自定义分区。
+三处均为等长替换，随后统一重算 per-file/header/framework integrity 并重签。
+
+版本 **1.1.11.96**。
+
 ### v1.1.11.95 — 修复 API Key 副本无法分支会话
 
 **现象**：在 `ChatGPT-Patched.app` 中点击「Branch conversation」或

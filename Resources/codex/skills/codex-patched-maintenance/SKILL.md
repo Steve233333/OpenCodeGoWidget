@@ -771,6 +771,26 @@ if(null==E)E=!1;
 注意正在运行的 Electron 进程可能使用旧 inode；asar 写入使用临时文件 + `os.replace`，
 避免原地覆盖正在运行的映射。
 
+补充（同日第二次，1.1.11.96）：1.1.11.95 只修了普通消息预检的一条路径。真实 worktree
+fork 还会先调用 `readPlacement()`；API Key 会话中
+`sidebarCustomSectionsEnabled` / `useAppServerCustomSections` 仍未评估，函数直接返回
+`not-ready`，因此日志里**没有 `thread/fork` RPC**。三份压缩源码分别位于
+app-server-host、early-bootstrap 和 webview renderer，需要把：
+
+```text
+if(void 0===r||void 0===n)return{status:"not-ready",reason:"execution-config-loading"};
+if(void 0===n||void 0===r)return{status:"not-ready",reason:"execution-config-loading"};
+```
+
+回退为：
+
+```text
+return{status:"ready",placement:null}
+```
+
+本轮实测三份数量为 `2 + 1`，全部等长替换，尺寸不变；排障时以“worktree 已 ready 但
+无 `thread/fork` 请求”作为 readPlacement 分支的判据。
+
 
 
 
