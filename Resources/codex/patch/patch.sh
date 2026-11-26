@@ -11,7 +11,7 @@ AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
 CODEX_HOME_DIR="$HOME/.codex-deepseek"
 # 兼容补丁代际号。官方版本号相同不代表现有副本已经包含本轮修法，安装器/--install
 # 用它强制重建一次。以后修改 asar 补丁语义时必须同步递增。
-PATCH_REVISION="20261124.1"
+PATCH_REVISION="20261126.1"
 
 # Self-signed code signing identity (Plan B): stable TCC authorization across
 # rebuilds. Keychain lives at ~/Library/Keychains/codex-signing.keychain-db.
@@ -431,6 +431,23 @@ else:
         browser_new + b' ' * (len(browser_old) - len(browser_new)))
     print('browser-complete phase gate removed (parses regardless of phase)')
 
+# 3c. fork execution-config fallback. Forking a patched/API-key conversation can leave Statsig
+#     execution assignments unavailable. The desktop then throws a not-ready
+#     error before the fork starts, although ordinary turns already run with the
+#     app-server permission defaults. Fall back to `false` (legacy/default
+#     permission selection) instead of aborting the fork. Same-length replacement.
+FORK_CONFIG_OLD = (
+    b'if(null==E)throw new nW.uZ('
+    b'{status:"not-ready",reason:"execution-config-loading"});'
+)
+FORK_CONFIG_NEW = b'if(null==E)E=!1;'
+swap(
+    FORK_CONFIG_OLD,
+    FORK_CONFIG_NEW + b' ' * (len(FORK_CONFIG_OLD) - len(FORK_CONFIG_NEW)),
+    expect=(0, 1),
+    name='fork execution-config fallback',
+)
+
 # 4. recompute per-file integrity for every archived file.
 #    Electron's C++ layer FATALs when a file node lacks integrity, so entries
 #    cannot be removed -- but same-size content edits keep block layout stable,
@@ -516,8 +533,10 @@ for fw in glob.glob(root + '/Contents/Frameworks/*.framework/Versions/Current/*'
 if not slots:
     print('framework integrity digest slot not found (older build) - skipped')
 assert len(buf) == len(raw), 'file size changed!'
-with open(asar, 'wb') as f:
+tmp_asar = asar + '.integrity.tmp'
+with open(tmp_asar, 'wb') as f:
     f.write(bytes(buf))
+os.replace(tmp_asar, asar)
 print('asar rewritten, size unchanged: %d' % len(buf))
 PYEOF
   then

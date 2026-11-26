@@ -723,6 +723,54 @@ tail -100 ~/.codex/picker-patch/patch.log
 教训：兼容补丁要区分“核心必修”和“版本专属”。版本专属源码不存在是正常分支，
 不能和“源码存在但重复/作用域漂移”共用同一个 `assert == 1`。
 
+### 40. API Key 副本无法分支会话：`execution-config-loading`（2026-11-26，1.1.11.95）
+
+症状：在 `ChatGPT-Patched.app` 的任意会话（包括全新短会话）点击
+`Branch conversation` 或 `Branch in new worktree`，工作树 path-allocation 和
+checkout 正常，但启动会话 fork 时立即报：
+
+```text
+App-server fork is not ready: execution-config-loading
+```
+
+与旧会话、上下文满和 Git 仓库是否有 HEAD 都无关。相关问题会同时表现为
+`readSettings()` 返回 `{status:"not-ready",reason:"execution-config-loading"}`。
+
+根因：26.1117 桌面 fork 流程要求
+`statsigEvaluations.readExecutionAssignments(appServerVersion)` 返回
+`defaultEnableFeatures`，并读取默认模式/详情设置。API Key、自定义 provider 的副本没有
+官方账号完整的 Statsig execution assignments；普通聊天走宽松路径，fork 却在
+`usePermissionSelection` 为 `null` 时直接抛错。
+
+修法（`patch.sh` 第 3c 段）：
+
+```text
+if(null==E)throw new nW.uZ({status:"not-ready",reason:"execution-config-loading"});
+→
+if(null==E)E=!1;
+```
+
+`E=false` 表示 fork 使用 app-server 默认权限，不强制发送权限覆盖。替换保持 83 字节
+长度，随后统一重算 per-file/header/framework integrity 并重签。该片段：
+
+- 新版恰好 1 处：应用；
+- 旧版 0 处：跳过；
+- 2 处及以上：拒绝，避免误改其他状态机。
+
+`PATCH_REVISION` 升至 `20261126.1`，已有同版本副本会被强制重建一次。
+
+验证链：
+
+1. `test-patch-guards.sh` 的新版命中、旧版跳过、重复命中拒绝全绿；
+2. 当前副本 asar 中旧 83 字节片段为 0、新 fallback 为 1，文件总大小不变；
+3. 独立复算 header SHA256 与 framework `__asar_integrity` digest 一致；
+4. `codesign --verify --deep --strict` 通过；
+5. 重启副本后在短会话尝试 Branch，确认不再出现 `execution-config-loading`。
+
+回滚：把 `backup/fork-fallback-<timestamp>/app.asar` 和 `Info.plist` 还原后重新签名。
+注意正在运行的 Electron 进程可能使用旧 inode；asar 写入使用临时文件 + `os.replace`，
+避免原地覆盖正在运行的映射。
+
 
 
 

@@ -121,7 +121,7 @@ if python3 - "$PATCH_SH" <<'PY'
 import contextlib, io, re, sys
 text = open(sys.argv[1], encoding='utf-8').read()
 try:
-    block = text[text.index('# 3b. browser-complete'):text.index('# 4. recompute per-file')]
+    block = text[text.index('# 3b. browser-complete'):text.index('# 3c. fork execution-config fallback')]
 except ValueError:
     print('FAIL 找不到 browser-complete 补丁段标记')
     raise SystemExit(1)
@@ -175,6 +175,74 @@ then
 else
   bad "app.asar 浏览器完成标记门禁补丁回归"
 fi
+
+# Fork 分支在 API Key 副本中拿不到 Statsig execution assignments 时，
+# 不能阻止整个 worktree/会话分支流程。新版存在固定抛错片段时回退为默认权限选择；
+# 旧版没有该片段时跳过，重复命中必须拒绝。
+if python3 - "$PATCH_SH" <<'PY'
+import contextlib, io, sys
+
+text = open(sys.argv[1], encoding='utf-8').read()
+try:
+    block = text[text.index('# 3c. fork execution-config fallback'):text.index('# 4. recompute per-file')]
+except ValueError:
+    print('FAIL 找不到 fork execution-config 补丁段标记')
+    raise SystemExit(1)
+
+PRELUDE = '''
+def swap(old, new, expect=(1,), name='?'):
+    global buf
+    n = buf.count(old)
+    assert n in expect, '%s: found %d, expected %s' % (name, n, expect)
+    if n:
+        assert len(old) == len(new)
+        buf = buf.replace(old, new)
+    print('%s: %d occurrence(s) patched' % (name, n))
+'''
+
+OLD = b'if(null==E)throw new nW.uZ({status:"not-ready",reason:"execution-config-loading"});'
+
+def run(name, sample, expect_err=None, expect_patch=True):
+    ns = {'buf': bytearray(sample)}
+    err = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(PRELUDE + block, '<fork-block>', 'exec'), ns)
+    except Exception as exc:
+        err = '%s: %s' % (type(exc).__name__, exc)
+    if expect_err:
+        if not err or expect_err not in err:
+            print('FAIL %s: 期望报错含 %r，实际 %r' % (name, expect_err, err))
+            return False
+        print('ok   %s（已拒绝）' % name)
+        return True
+    if err:
+        print('FAIL %s: %s' % (name, err))
+        return False
+    out = bytes(ns['buf'])
+    if len(out) != len(sample):
+        print('FAIL %s: 长度 %d -> %d' % (name, len(sample), len(out)))
+        return False
+    changed = b'if(null==E)E=!1;' in out and OLD not in out
+    if expect_patch != changed:
+        print('FAIL %s: expect_patch=%s changed=%s' % (name, expect_patch, changed))
+        return False
+    print('ok   %s%s' % (name, '' if expect_patch else '（已跳过）'))
+    return True
+
+cases = [
+    ('新版 execution-config 抛错', OLD, None, True),
+    ('旧版没有 fork 配置片段', b'nothing here', None, False),
+    ('重复命中', OLD + OLD, 'found 2', True),
+]
+raise SystemExit(0 if all(run(*c) for c in cases) else 1)
+PY
+then
+  ok "fork 分支配置未就绪时回退默认权限；旧版跳过、重复命中拒绝"
+else
+  bad "fork execution-config 回退补丁回归"
+fi
+
 if printf 'wrapper-ok\n' | node "$PATCH_SCRIPTS/cua-node-wrapper.cjs" /bin/cat >"$WORK/cua-wrapper.out" 2>"$WORK/cua-wrapper.err" \
    && grep -qx 'wrapper-ok' "$WORK/cua-wrapper.out"; then
   ok "CJS wrapper 能启动目标并透传 stdio"
@@ -278,7 +346,7 @@ else
 fi
 
 # 端到端复现“旧版 26.1013”：核心模型/Sparkle 补丁已经命中，但 CUA、phase
-# gate、enable_i18n 这三处新版源码全都不存在。旧脚本会在第一个 assert 直接
+# gate、enable_i18n、fork 兼容这四处新版源码全都不存在。旧脚本会在第一个 assert 直接
 # ABORTED:integrity；新脚本必须逐项打印 skip 并继续完成完整性刷新。
 if python3 - "$PATCH_SH" "$WORK/old-build" <<'PY'
 import contextlib
@@ -339,6 +407,7 @@ required_skips = [
     'cua signed-node wrapper: source pattern not present (older build) - skipped',
     'offline i18n default: source pattern not present (older build) - skipped',
     'browser-complete phase gate: source pattern not present (older build) - skipped',
+    'fork execution-config fallback: 0 occurrence(s) patched',
 ]
 missing = [line for line in required_skips if line not in logged]
 if missing:
@@ -355,9 +424,9 @@ if pl['ElectronAsarIntegrity']['Resources/app.asar']['hash'] == '0' * 64:
 print('ok   旧版 26.1013：三处新版补丁缺失时全部 skip，integrity 正常完成')
 PY
 then
-  ok "26.1013 旧版端到端：可选补丁缺失不再误伤完整性刷新"
+  ok "26.1013 旧版端到端：四处可选补丁缺失不再误伤完整性刷新"
 else
-  bad "26.1013 旧版端到端回归（可选补丁缺失仍会 ABORTED:integrity）"
+  bad "26.1013 旧版端到端回归（四处可选补丁缺失仍会 ABORTED:integrity）"
 fi
 
 grep -qF '"$RES_DIR"/patch/scripts/*' "$ROOT/Resources/codex/setup/steps/100-patched-app.sh" \
@@ -378,7 +447,7 @@ grep -qF '文件存在，但补丁未完成' "$ROOT/Resources/codex/setup/steps/
 # 然后 open 旧副本 → **假成功**，副本还停在旧版本。
 grep -qF 'version mismatch (patched=$marker_ver, source=$current) → rebuilding' "$PATCH_SH" \
   && ok "install() 版本感知（marker≠源码版本必须重建）" || bad "install() 又变回「只看 is_patched」的假成功"
-grep -qF 'PATCH_REVISION="20261124.1"' "$PATCH_SH" \
+grep -qF 'PATCH_REVISION="20261126.1"' "$PATCH_SH" \
   && grep -qF 'patch revision mismatch' "$PATCH_SH" \
   && grep -qF '[ "$marker_rev" = "$PATCH_REVISION" ] && copy_healthy' "$PATCH_SH" \
   && grep -qF '"patchRevision":"%s"' "$PATCH_SH" \

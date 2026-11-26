@@ -2,6 +2,29 @@
 
 > 每个版本都写了：改了什么、为什么改、实测数据。最新的在最上面。
 
+### v1.1.11.95 — 修复 API Key 副本无法分支会话
+
+**现象**：在 `ChatGPT-Patched.app` 中点击「Branch conversation」或
+「Branch in new worktree」时，工作树创建成功，但随后报
+`App-server fork is not ready: execution-config-loading`。短会话和长会话都会复现，
+因此与聊天历史、上下文大小或 Git 仓库内容无关。
+
+**根因**：26.1117 桌面的 fork 流程要求 app-server 先取得 Statsig
+`execution assignments` 和权限刷新设置。API Key/自定义 provider 副本拿不到这些官方
+账号配置时，该值为 `null`，客户端在真正复制会话之前直接抛 `not-ready`。普通聊天不经过
+这条严格分支，所以主界面仍能正常使用。
+
+**修法**：在 `app.asar` 中加入等长兼容补丁：fork 配置尚未就绪时回退到
+`usePermissionSelection=false`，即使用 app-server 默认权限，不中止工作树分支。
+补丁只在固定片段恰好存在一处时应用，旧版不存在则跳过，重复命中则拒绝。
+随后照常重算 per-file/header/framework integrity 并重签。
+
+**门禁**：`test-patch-guards.sh` 新增 fork 片段的新版命中、旧版跳过、重复命中拒绝用例；
+26.1013 端到端样本同时覆盖这处可选补丁缺失。版本补丁代际升至 `20261126.1`，
+同官方版本也会强制升级副本一次。
+
+版本 **1.1.11.95**。
+
 ### v1.1.11.94 — 旧版 Codex 重建不再被“新补丁不存在”误杀
 
 **现象**：另一台 macOS 27 机器上，官方 Codex 仍是 `26.1013.40934`。点「配置」后模型
